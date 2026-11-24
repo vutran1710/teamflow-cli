@@ -5,9 +5,8 @@ and the agents' hooks. It records what your agents decide and do into a Teamflow
 agent session what changed since its last step.
 
 **Status: early.** This repo holds the wire protocol (Go types generated from the schema the Teamflow server
-exports, checked against golden messages), the local store and sync, and the command line. The
-agent adapters (Claude Code, Cursor CLI, Antigravity CLI, Copilot CLI), the background sync and self-update land
-here as they are built. The first release is tagged once the client passes the server's
+exports, checked against golden messages), the local store and sync, the background sync, the command line and
+the agent adapters (Claude Code, Cursor CLI, Antigravity CLI, Copilot CLI). Self-update lands here as it is built. The first release is tagged once the client passes the server's
 end-to-end suite.
 
 ## Install
@@ -114,7 +113,7 @@ shaped file before writing anything, and never fails your agent's step.
   `skills/teamf/SKILL.md` (`/teamf`, `allowed-tools: shell(teamflow:*)`). Copilot keeps no allow or deny rules in
   your config, so the preToolUse hook answers, without opening the Teamflow home: it refuses tool calls that name
   the home; allows one plain `teamflow <work command>` with no prompt; and answers "ask" for any other teamflow
-  command (setup: install, uninstall, login, logout, self-update, hook, sync until the background sync is built; or anything chained, piped,
+  command (setup: install, uninstall, login, logout, self-update, hook, sync, outbox; or anything chained, piped,
   redirected, substituted or expanded: `; & | < > $ ` ( ) \ * ? [ ] { } ~`). Copilot's prompt hook cannot add
   context, so news arrives at session start, after each tool, and at the turn's end.
 - **Cursor CLI** (`~/.cursor`): `hooks.json` (sessionStart, beforeSubmitPrompt, beforeShellExecution, postToolUse,
@@ -149,13 +148,42 @@ What goes to that server:
 - **What you and your agents record:** signals (decisions, key points, comments, results), topics, artifacts
   (only the files an agent or you choose to publish), deliverables and their updates, and your approvals or
   rejections (marked when given through your agent). Each carries the agent session id it came from.
-- **Keeping up to date:** your position (cursor) in each project's event log, to fetch what changed.
+- **Keeping up to date:** your position (cursor) in each project's event log, to fetch what changed. The background
+  sync asks for a short-lived live ticket (`live.ticket`, with the project key in the `Authorization` header), opens
+  `wss://<server>/live?org=<id>&project=<id>` (ids only: no key or ticket in the URL; the socket carries no
+  `Authorization`), sends the ticket and its cursor as its first message, then `ping` every 30 seconds.
 
 What stays on your machine:
 
 - Your prompts and code.
 - Your keys and the local copy of your projects, in `~/.teamflow` (or `$TEAMFLOW_HOME`): the folder is mode 0700
   and its files 0600 (`config.json` holds the server, your email and the auth key; `store.db` the rest). Keys never appear in command lines, logs or URLs.
+
+## The background sync
+
+`teamflow sync` keeps the local copy live, so hooks and commands answer from it without waiting on the network.
+One copy runs per machine (`sync.lock`, an `flock` in the Teamflow home): install starts it, and so does each
+session start and prompt hook when it is not running (after a reboot, a restart or its quiet exit). It exits after
+10 minutes with no active agent session (none seen, and no agent process of a recent session alive), and at once
+when you sign out. `teamflow sync --status` says whether it runs and which projects are live; `teamflow sync
+--stop` stops it; `teamflow sync --background` starts it detached, its output appended to `sync.log` (0600) in the
+Teamflow home. `sync` is a setup command: an agent never runs it without your say.
+
+- **One socket per project** you hold a key for (the protocol in the server's `tf_models/live.py`): each event is
+  written into the local copy as it commits, with its cursor, in one transaction, and turned into notices: an
+  approval request reaches your session at its next step within seconds. An event already applied (a command's
+  pull brought it first, or it is sent again) is not applied twice; gaps in the event numbers are normal.
+- **Freshness.** While a project's socket is live (heard within 15 seconds), hooks and commands do not pull it over
+  the network; when it is not, they pull as before (`HOOK_TIMEOUT`, 4 s).
+- **Reconnecting.** Once live it pings every 30 seconds; nothing heard within 10 seconds of a ping means the socket
+  is dead, and a new one opens at once with a fresh ticket from the cursor. A failed connect waits 1, 2, 3, 5, 8,
+  13 seconds; after 3 in a row (WebSockets blocked) it polls `sync.poll` (wait 25 s) and tries the socket again
+  every 60 seconds. The server closing with `TOO_SLOW` reconnects at once; `REPLACED` (a newer socket of yours on
+  the project) stops that project's socket for good; `NOT_A_MEMBER` drops the project's key and its socket stays
+  closed; a reset (a restored server) drops the project's local copy and fetches it again from the start.
+- **The outbox.** It sends what waits in the outbox through the same sync, under the same sender lock as commands
+  and hooks, so it never sends beside them; a stuck outbox is tried again after a growing wait.
+- **Its log** names projects and reasons, never a ticket or a key (a server's message naming one is masked).
 
 ## How signals are sent
 
@@ -166,7 +194,7 @@ per project and sign-in, one sender at a time.
 sequenceDiagram
     autonumber
     participant A as Agent (or you)
-    participant T as teamflow command / hook
+    participant T as teamflow command / hook / background sync
     participant O as Outbox (spool table in store.db)
     participant L as Sender lock (send-<outbox ref>.lock)
     participant S as Teamflow server
@@ -198,7 +226,7 @@ flowchart TD
     Q -- "artifact write/archive, Deliverables, topic, plan,<br/>members, a link outside a session" --> G{outbox empty<br/>after a flush?}
     G -- yes --> SEND[sent at once]
     G -- no --> NS[not sent: 'N earlier signals are still queued']
-    OB --> F[flush: under the sender lock]
+    OB --> F[flush: under the sender lock<br/>a command, a hook or the background sync]
     F --> B[routine items: JSON-RPC arrays<br/>≤ 50 calls, ≤ 8 MiB]
     F --> H[human act: alone, after everything before it]
     B --> R{each call's result}
@@ -215,7 +243,7 @@ Plain text, for viewers without Mermaid:
 agent / you ──> teamflow <cmd> ──> outbox (store.db, per sign-in and project, in order)
                                      │
                flush points: the command that queued it; human acts and other writes;
-                             later commands and agent hooks (a sync flushes before it pulls)
+                             later commands, agent hooks, the background sync (a sync flushes before it pulls)
                                      │  one sender at a time: send-<outbox ref>.lock (flock) in the Teamflow home
                                      ▼
              routine items ──> [call, call, …] ≤ 50 calls, ≤ 8 MiB ──> server ──> one result per call
@@ -239,7 +267,8 @@ In detail:
   this machine never sends your items: they stay, and `teamflow status` and `teamflow outbox` show them.
 - **Flush points.** The command that queued an item flushes at once; so do human acts and writes that are not
   queued. Later commands and the agent hooks sync the project (inside an agent's turn at most once every 10 s, and
-  not for 30 s after the server was unreachable), and a sync flushes the outbox before it pulls, within the sync's
+  not for 30 s after the server was unreachable), the background sync sends what waits, and a sync flushes the
+  outbox before it pulls, within the sync's
   own time limit (a hook's few seconds): what does not fit waits for the next one. A sync also fetches a new key
   for a project whose items wait but whose key was dropped; when the server refuses the membership, it asks again
   only after 10 minutes, not on every command and hook.
@@ -260,7 +289,7 @@ In detail:
   are not sent: `not sent: N earlier signals are still queued …; try again once they are sent`. When another
   `teamflow` holds the sender lock past the wait and nothing is queued, they are sent (nothing to overtake).
 - **One sender at a time.** A flush holds a lock file in the Teamflow home (`send-<outbox ref>.lock`, `flock`), so
-  commands and hooks in different processes never interleave. A sync waits 250 ms for it, a command sending its
+  commands, hooks and the background sync in different processes never interleave. A sync waits 250 ms for it, a command sending its
   own items 3 s; past that it leaves its items queued for the holder (which reads the outbox again before it
   lets go) or the next flush. The kernel drops the lock when its holder exits, even when killed, so a crashed
   holder never blocks the outbox.
@@ -312,6 +341,7 @@ In detail:
   and media type, and pulling a stored version back.
 - `internal/sendlock`: the outbox's sender lock (one sender per outbox across processes).
 - `internal/syncer`: the outbox flush (in order, batches, human acts alone), and pulling events into the replica.
+- `internal/live`: the background sync (`teamflow sync`): live sockets, the `sync.poll` fallback, the one-copy lock.
 - `protocol/`: the protocol exported from the Teamflow server: `schema.json`, `methods.json`, golden messages,
   Deliverables test vectors, hook fixtures and agent texts (instructions, `/teamf`, the commands). `VERSION` names the server commit and
   protocol version it came from.
