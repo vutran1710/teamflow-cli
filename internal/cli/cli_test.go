@@ -831,3 +831,21 @@ func TestHiddenAndLaterCommands(t *testing.T) {
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, `"sessions"`)
 }
+
+// A corrupt config.json: every command that needs the sign-in refuses (exit 1) without showing the file, and
+// nothing is sent.
+func TestCorruptConfigRefusesCleanly(t *testing.T) {
+	m := newMachine(t, false)
+	if err := os.WriteFile(filepath.Join(m.dir, config.FileName), []byte(`{"server": "`+m.srv.URL()+`", "auth_key": "tfa_secret",`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"projects"}, {"artifact", "list", "--project", P}, {"approve", S1}, {"status"}} {
+		r := m.run("", args...)
+		wantCode(t, r, 1)
+		contains(t, "stderr", r.err, "config.json is not valid JSON")
+		lacks(t, "output", r.out+r.err, "tfa_secret")
+	}
+	if len(m.srv.methods()) != 0 {
+		t.Fatalf("sent %v", m.srv.methods())
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -486,13 +487,36 @@ func (o ops) SharedSessions() ([]Session, error) {
 // a process still holding the old config writes one after a new sign-in.
 type KeyBinding struct{ Server, Account string }
 
-// Binding is the binding of a sign-in: the server without a trailing slash, the email lower-cased.
-func Binding(server, email string) KeyBinding {
-	return KeyBinding{Server: strings.TrimRight(strings.TrimSpace(server), "/"), Account: strings.ToLower(strings.TrimSpace(email))}
+// ErrNoBinding is a project-key read or write with no sign-in (no server or no account): nothing is ever found
+// or written that way, not even keys from before bindings (which carry none).
+var ErrNoBinding = errors.New("not signed in")
+
+// NormalizeServer is a server URL in one form: scheme and host lower-cased, the path as it is, no trailing slash,
+// and no userinfo, query or fragment (none of them names the server; a key pasted as userinfo is never kept). A
+// string that is not a URL with a scheme and host is only trimmed: it never matches a real server, and the API
+// client refuses it.
+func NormalizeServer(server string) string {
+	s := strings.TrimSpace(server)
+	if u, err := url.Parse(s); err == nil && u.Scheme != "" && u.Host != "" {
+		u.Scheme, u.Host = strings.ToLower(u.Scheme), strings.ToLower(u.Host)
+		u.User, u.RawQuery, u.Fragment, u.ForceQuery = nil, "", "", false
+		s = u.String()
+	}
+	return strings.TrimRight(s, "/")
 }
+
+// Binding is the binding of a sign-in: the server normalised (NormalizeServer), the email lower-cased.
+func Binding(server, email string) KeyBinding {
+	return KeyBinding{Server: NormalizeServer(server), Account: strings.ToLower(strings.TrimSpace(email))}
+}
+
+func (b KeyBinding) valid() bool { return b.Server != "" && b.Account != "" }
 
 // PutProjectKey records the key this machine fetched for a project under b (replacing an earlier one there).
 func (o ops) PutProjectKey(b KeyBinding, project, key, member, org, name string, now time.Time) error {
+	if !b.valid() {
+		return ErrNoBinding
+	}
 	_, err := o.exec("INSERT INTO project_keys (server, account, project, key, member, org, name, fetched_at) "+
 		"VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(server, account, project) DO UPDATE SET key = excluded.key, "+
 		"member = excluded.member, org = excluded.org, name = excluded.name, fetched_at = excluded.fetched_at",
@@ -503,6 +527,9 @@ func (o ops) PutProjectKey(b KeyBinding, project, key, member, org, name string,
 // ProjectKey is the project's key under b and who it acts as; ok is false when there is none (or the store
 // can't say).
 func (o ops) ProjectKey(b KeyBinding, project string) (key, member, org, name string, ok bool) {
+	if !b.valid() {
+		return "", "", "", "", false
+	}
 	ok, err := o.one("SELECT key, member, org, name FROM project_keys WHERE server = ? AND account = ? AND project = ?",
 		[]any{b.Server, b.Account, project}, &key, &member, &org, &name)
 	if err != nil || !ok {
@@ -513,6 +540,9 @@ func (o ops) ProjectKey(b KeyBinding, project string) (key, member, org, name st
 
 // KeyProjects are the projects with a key under b, in the order they were fetched.
 func (o ops) KeyProjects(b KeyBinding) ([]string, error) {
+	if !b.valid() {
+		return nil, ErrNoBinding
+	}
 	var out []string
 	err := o.each("SELECT project FROM project_keys WHERE server = ? AND account = ? ORDER BY fetched_at, project",
 		[]any{b.Server, b.Account}, func(r *sql.Rows) error {
@@ -528,6 +558,9 @@ func (o ops) KeyProjects(b KeyBinding) ([]string, error) {
 
 // DropProjectKey forgets a project's key under b.
 func (o ops) DropProjectKey(b KeyBinding, project string) error {
+	if !b.valid() {
+		return ErrNoBinding
+	}
 	_, err := o.exec("DELETE FROM project_keys WHERE server = ? AND account = ? AND project = ?", b.Server, b.Account, project)
 	return err
 }

@@ -73,16 +73,27 @@ func (c *Core) client(key string, timeout time.Duration) *api.Client {
 	return api.New(c.Cfg.Server, key, timeout).WithRecorder(c.St)
 }
 
-// binding is the sign-in project keys are read and written under: the config's server and account.
-func (c *Core) binding() store.KeyBinding {
+// binding is the sign-in project keys are read and written under: the config's server and account. Without both
+// there is none, and no key is read or written (ErrNotSignedIn).
+func (c *Core) binding() (store.KeyBinding, error) {
 	if c.Cfg == nil {
-		return store.KeyBinding{}
+		return store.KeyBinding{}, ErrNotSignedIn
 	}
-	return store.Binding(c.Cfg.Server, c.Cfg.Email)
+	b := store.Binding(c.Cfg.Server, c.Cfg.Email)
+	if b.Server == "" || b.Account == "" {
+		return store.KeyBinding{}, ErrNotSignedIn
+	}
+	return b, nil
 }
 
 // KeyProjects are the projects this sign-in has a key for on this machine.
-func (c *Core) KeyProjects() ([]string, error) { return c.St.KeyProjects(c.binding()) }
+func (c *Core) KeyProjects() ([]string, error) {
+	b, err := c.binding()
+	if err != nil {
+		return nil, err
+	}
+	return c.St.KeyProjects(b)
+}
 
 // AuthAPI is the server with the auth key: account things (your projects, fetching project keys).
 func (c *Core) AuthAPI(timeout time.Duration) (*api.Client, error) {
@@ -94,7 +105,11 @@ func (c *Core) AuthAPI(timeout time.Duration) (*api.Client, error) {
 
 // ProjectKey is this machine's key for the project, fetched with the auth key the first time.
 func (c *Core) ProjectKey(ctx context.Context, project string) (string, error) {
-	if key, _, _, _, ok := c.St.ProjectKey(c.binding(), project); ok {
+	b, err := c.binding()
+	if err != nil {
+		return "", err
+	}
+	if key, _, _, _, ok := c.St.ProjectKey(b, project); ok {
 		return key, nil
 	}
 	a, err := c.AuthAPI(DefaultTimeout)
@@ -105,7 +120,7 @@ func (c *Core) ProjectKey(ctx context.Context, project string) (string, error) {
 	if err := a.Call(ctx, "key.fetch", protocol.KeyFetch{Project: project}, &got); err != nil {
 		return "", err
 	}
-	if err := c.St.PutProjectKey(c.binding(), got.Project, got.Key, got.Member, got.Org, got.Name, c.Now()); err != nil {
+	if err := c.St.PutProjectKey(b, got.Project, got.Key, got.Member, got.Org, got.Name, c.Now()); err != nil {
 		return "", err
 	}
 	return got.Key, nil
@@ -127,18 +142,18 @@ func (c *Core) API(ctx context.Context, project string, timeout time.Duration) (
 // fetches the names of members the replica has none for. False when offline. A key the server no longer takes
 // (NOT_ALLOWED, NOT_A_MEMBER) is dropped.
 func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) bool {
+	b, err := c.binding()
+	if err != nil { // not signed in: no key to sync with
+		return true
+	}
 	projects := []string{only}
 	if only == "" {
-		var err error
-		if projects, err = c.KeyProjects(); err != nil {
+		if projects, err = c.St.KeyProjects(b); err != nil {
 			return true
 		}
 	}
-	if c.Cfg == nil || c.Cfg.Server == "" {
-		return true
-	}
 	for _, pid := range projects {
-		key, _, _, _, ok := c.St.ProjectKey(c.binding(), pid)
+		key, _, _, _, ok := c.St.ProjectKey(b, pid)
 		if !ok {
 			continue
 		}
@@ -150,7 +165,7 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 		var ae *api.APIError
 		if errors.As(err, &ae) && (ae.Reason == string(protocol.RejectReasonNotAllowed) ||
 			ae.Reason == string(protocol.RejectReasonNotAMember)) {
-			_ = c.St.DropProjectKey(c.binding(), pid)
+			_ = c.St.DropProjectKey(b, pid)
 		}
 	}
 	return true
@@ -203,11 +218,12 @@ func (c *Core) refreshPeople(ctx context.Context, a *api.Client) error {
 // Login trades email and password for an auth key, kept in config.json (0600). The password is not kept.
 func (c *Core) Login(ctx context.Context, server, email, password string) (protocol.LoginResult, error) {
 	var out protocol.LoginResult
+	server = store.NormalizeServer(server) // saved in one form, so comparisons and key bindings agree
 	a := api.New(server, "", DefaultTimeout).WithRecorder(c.St)
 	if err := a.Call(ctx, "auth.login", protocol.Login{Email: email, Password: password}, &out); err != nil {
 		return out, err
 	}
-	if c.Cfg != nil && (c.Cfg.Server != server || !strings.EqualFold(c.Cfg.Email, out.Account.Email)) {
+	if c.Cfg != nil && (store.NormalizeServer(c.Cfg.Server) != server || !strings.EqualFold(c.Cfg.Email, out.Account.Email)) {
 		// Another server or another account: the old sign-in's project keys must never reach the new one.
 		if err := c.forgetProjects(); err != nil {
 			return out, err

@@ -13,6 +13,7 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/home"
+	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
 var (
@@ -314,7 +315,7 @@ func runInstall(r *inv, a *parsed) int {
 	if err != nil {
 		return r.failErr(err)
 	}
-	if !c.SignedIn() || !strings.EqualFold(c.Cfg.Email, email) || (a.get("server") != "" && a.get("server") != c.Cfg.Server) {
+	if !c.SignedIn() || !strings.EqualFold(c.Cfg.Email, email) || (a.get("server") != "" && store.NormalizeServer(a.get("server")) != store.NormalizeServer(c.Cfg.Server)) {
 		if code := r.signIn(serverFor(a.get("server"), c.Cfg), email, a.has("password-stdin")); code != 0 {
 			return code
 		}

@@ -167,7 +167,7 @@ func TestHookReadsWhileExclusiveWriterHolds(t *testing.T) {
 	start := time.Now()
 	hook := open(t, dir)
 	got := hook.Cursors()
-	_, _, _, _, _ = hook.ProjectKey(KeyBinding{}, "pj_a")
+	_, _, _, _, _ = hook.ProjectKey(bnd, "pj_a")
 	_ = hook.LiveAt("pj_a")
 	el := time.Since(start)
 	_, err = conn.ExecContext(ctx, "COMMIT")
@@ -253,6 +253,148 @@ func TestCursorsNeverGoBack(t *testing.T) {
 	}
 }
 
+// bnd is a sign-in for the tests that don't care which.
+var bnd = Binding("https://tf.example", "lan@acme.test")
+
+// Binding lower-cases the URL's scheme and host (not its path) and the email, and drops a trailing slash.
+func TestBindingNormalises(t *testing.T) {
+	want := KeyBinding{Server: "https://a.example", Account: "lan@acme.test"}
+	for _, s := range []string{"https://A.example", "https://a.example/", "HTTPS://A.EXAMPLE/", " https://a.example "} {
+		if got := Binding(s, "LAN@acme.test"); got != want {
+			t.Errorf("Binding(%q) = %+v", s, got)
+		}
+	}
+	if got := NormalizeServer("https://A.example/Team/"); got != "https://a.example/Team" {
+		t.Errorf("the path keeps its case: %q", got)
+	}
+	if got := NormalizeServer("http://LOCALHOST:8080"); got != "http://localhost:8080" {
+		t.Errorf("port: %q", got)
+	}
+	for in, want := range map[string]string{
+		"":                                 "",
+		"   ":                              "",
+		"teamflow.example":                 "teamflow.example",   // no scheme: kept as written (api refuses it)
+		"Teamflow.Example/":                "Teamflow.Example",   // no scheme: not a URL to lower-case
+		"::not a url::":                    "::not a url::",      // garbage: kept, never matches a real server
+		"https://":                         "https:",             // no host
+		"https://user:pw@A.example/":       "https://a.example",  // userinfo is never part of the binding
+		"https://tfa_secret@a.example":     "https://a.example",  // nor a key pasted as userinfo
+		"https://[::1]:8443/":              "https://[::1]:8443", // IPv6 with a port
+		"https://[FE80::1]/":               "https://[fe80::1]",  // IPv6 lower-cased
+		"https://A.example:443/":           "https://a.example:443",
+		"HTTPS://A.Example/":               "https://a.example", // mixed case and a trailing slash
+		"https://a.example///":             "https://a.example",
+		"https://a.example/?x=1#f":         "https://a.example",
+		"https://A.example/Team/?q=Upper/": "https://a.example/Team",
+	} {
+		if got := NormalizeServer(in); got != want {
+			t.Errorf("NormalizeServer(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if b := Binding("https://user:pw@A.example/", "lan@acme.test"); strings.Contains(b.Server, "pw") {
+		t.Fatalf("userinfo in a binding: %+v", b)
+	}
+}
+
+// An empty binding (no sign-in) reaches no key, not even rows migrated from before bindings.
+func TestEmptyBindingIsRefused(t *testing.T) {
+	st := open(t, t.TempDir())
+	for _, b := range []KeyBinding{{}, {Server: "https://a.example"}, {Account: "lan@acme.test"}} {
+		if err := st.PutProjectKey(b, "pj_a", "tfk", "mb", "og", "n", t0); !errors.Is(err, ErrNoBinding) {
+			t.Fatalf("PutProjectKey(%+v): %v", b, err)
+		}
+		if _, _, _, _, ok := st.ProjectKey(b, "pj_a"); ok {
+			t.Fatalf("ProjectKey(%+v)", b)
+		}
+		if _, err := st.KeyProjects(b); !errors.Is(err, ErrNoBinding) {
+			t.Fatalf("KeyProjects(%+v): %v", b, err)
+		}
+		if err := st.DropProjectKey(b, "pj_a"); !errors.Is(err, ErrNoBinding) {
+			t.Fatalf("DropProjectKey(%+v): %v", b, err)
+		}
+	}
+	// A real key is untouched by an empty binding's drop, and an empty binding inside a transaction is refused too.
+	must(t, st.PutProjectKey(bnd, "pj_a", "tfk", "mb", "og", "n", t0))
+	_ = st.DropProjectKey(KeyBinding{}, "pj_a")
+	if _, _, _, _, ok := st.ProjectKey(bnd, "pj_a"); !ok {
+		t.Fatal("an empty binding's drop removed a real key")
+	}
+	err := st.Tx(func(tx *Tx) error { return tx.PutProjectKey(KeyBinding{}, "pj_b", "k", "m", "o", "n", t0) })
+	if !errors.Is(err, ErrNoBinding) {
+		t.Fatalf("Tx PutProjectKey with no binding: %v", err)
+	}
+}
+
+// A store from before bindings (0001 only) holding project keys, odd ones included (a damaged or hand-made table
+// without the constraints: NULL columns, the same project twice, an empty key): it migrates, the old rows are
+// dropped (no binding could ever reach them), and nothing is returned under a real sign-in or an empty one.
+func TestPreBindingKeysAreNeverReturned(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		table string // the 0001-era project_keys, as found
+		rows  []string
+	}{
+		{"as 0001 made it", "", []string{
+			"('pj_old', 'tfk_old', 'mb_1', 'og_1', 'Old', '2026-11-01T00:00:00Z')",
+			"('pj_two', 'tfk_two', 'mb_1', 'og_1', 'Two', '2026-11-02T00:00:00Z')"}},
+		{"without constraints: NULLs, duplicates, empty values",
+			"CREATE TABLE project_keys (project TEXT, key TEXT, member TEXT, org TEXT, name TEXT, fetched_at TEXT)",
+			[]string{
+				"('pj_old', 'tfk_old', 'mb_1', 'og_1', 'Old', '2026-11-01T00:00:00Z')",
+				"('pj_old', 'tfk_dup', 'mb_2', 'og_1', 'Old again', '2026-11-03T00:00:00Z')",
+				"(NULL, 'tfk_null_project', 'mb_1', 'og_1', 'x', '2026-11-01T00:00:00Z')",
+				"('pj_nulls', NULL, NULL, NULL, NULL, NULL)",
+				"('', '', '', '', '', '')"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, FileName))
+			must(t, err)
+			initSQL, err := os.ReadFile(filepath.Join("migrations", "0001_init.sql"))
+			must(t, err)
+			_, err = db.Exec(string(initSQL))
+			must(t, err)
+			stmts := []string{
+				"CREATE TABLE " + migrationsTable + " (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
+				"INSERT INTO " + migrationsTable + " VALUES ('0001_init.sql', '2026-11-01T00:00:00Z')",
+			}
+			if tc.table != "" {
+				stmts = append(stmts, "DROP TABLE project_keys", tc.table)
+			}
+			for _, r := range tc.rows {
+				stmts = append(stmts, "INSERT INTO project_keys VALUES "+r)
+			}
+			for _, q := range stmts {
+				_, err = db.Exec(q)
+				must(t, err)
+			}
+			must(t, db.Close())
+
+			st := open(t, dir) // migrates; must not fail on what it finds
+			var n int
+			must(t, st.db.QueryRow("SELECT count(*) FROM project_keys").Scan(&n))
+			if n != 0 {
+				t.Fatalf("%d pre-binding rows kept", n)
+			}
+			for _, b := range []KeyBinding{bnd, Binding("https://other.example", "x@y"), {}, {Server: "", Account: ""}} {
+				for _, p := range []string{"pj_old", "pj_two", "pj_nulls", ""} {
+					if k, _, _, _, ok := st.ProjectKey(b, p); ok {
+						t.Fatalf("old key %q for %q under %+v", k, p, b)
+					}
+				}
+				if ps, _ := st.KeyProjects(b); len(ps) != 0 {
+					t.Fatalf("old keys under %+v: %v", b, ps)
+				}
+			}
+			// The migrated table works: a key under a real binding round-trips.
+			must(t, st.PutProjectKey(bnd, "pj_old", "tfk_new", "mb_1", "og_1", "Old", t0))
+			if k, _, _, _, ok := st.ProjectKey(bnd, "pj_old"); !ok || k != "tfk_new" {
+				t.Fatalf("after migrating: %q %v", k, ok)
+			}
+		})
+	}
+}
+
 // A project key belongs to the server and account that fetched it: under another config it is invisible, and a
 // stale process writing one for its old sign-in never makes it usable under the new one.
 func TestProjectKeysAreBoundToServerAndAccount(t *testing.T) {
@@ -260,7 +402,7 @@ func TestProjectKeysAreBoundToServerAndAccount(t *testing.T) {
 	st := open(t, dir)
 	a := Binding("https://a.example/", "Lan@Acme.test")
 	b := Binding("https://b.example", "lan@acme.test")
-	if a != Binding("https://a.example", "lan@acme.test") {
+	if a != Binding("https://A.example", "lan@acme.test") {
 		t.Fatalf("Binding normalises: %+v", a)
 	}
 	must(t, st.PutProjectKey(a, "pj_a", "tfk_a", "mb_1", "org_1", "Alpha", t0))
@@ -292,21 +434,17 @@ func TestProjectKeysAreBoundToServerAndAccount(t *testing.T) {
 	if _, _, _, _, ok := st.ProjectKey(b, "pj_a"); ok {
 		t.Fatal("dropped")
 	}
-	// A row from before bindings (empty) is never used under a real config.
-	if _, _, _, _, ok := st.ProjectKey(Binding("https://c.example", "x@y"), "pj_a"); ok {
-		t.Fatal("unbound")
-	}
 }
 
 func TestReadsOnAClosedStoreAnswerEmpty(t *testing.T) {
 	st := open(t, t.TempDir())
 	must(t, st.SetCursor("pj_a", 1))
-	must(t, st.PutProjectKey(KeyBinding{}, "pj_a", "tfk_secret", "mb_1", "org_1", "Alpha", t0))
+	must(t, st.PutProjectKey(bnd, "pj_a", "tfk_secret", "mb_1", "org_1", "Alpha", t0))
 	st.Close()
 	if got := st.Cursors(); len(got) != 0 {
 		t.Fatalf("closed store cursors %v", got)
 	}
-	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_a"); ok {
+	if _, _, _, _, ok := st.ProjectKey(bnd, "pj_a"); ok {
 		t.Fatal("closed store gave a key")
 	}
 	if !st.LiveAt("pj_a").IsZero() {
@@ -319,28 +457,28 @@ func TestReadsOnAClosedStoreAnswerEmpty(t *testing.T) {
 
 func TestProjectKeys(t *testing.T) {
 	st := open(t, t.TempDir())
-	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_a"); ok {
+	if _, _, _, _, ok := st.ProjectKey(bnd, "pj_a"); ok {
 		t.Fatal("a key before any was put")
 	}
-	must(t, st.PutProjectKey(KeyBinding{}, "pj_b", "tfk_b", "mb_1", "org_1", "Beta", t0))
-	must(t, st.PutProjectKey(KeyBinding{}, "pj_a", "tfk_a", "mb_1", "org_1", "Alpha", t0.Add(time.Minute)))
-	must(t, st.PutProjectKey(KeyBinding{}, "pj_a", "tfk_a2", "mb_2", "org_1", "Alpha 2", t0.Add(2*time.Minute)))
-	key, member, org, name, ok := st.ProjectKey(KeyBinding{}, "pj_a")
+	must(t, st.PutProjectKey(bnd, "pj_b", "tfk_b", "mb_1", "org_1", "Beta", t0))
+	must(t, st.PutProjectKey(bnd, "pj_a", "tfk_a", "mb_1", "org_1", "Alpha", t0.Add(time.Minute)))
+	must(t, st.PutProjectKey(bnd, "pj_a", "tfk_a2", "mb_2", "org_1", "Alpha 2", t0.Add(2*time.Minute)))
+	key, member, org, name, ok := st.ProjectKey(bnd, "pj_a")
 	if !ok || key != "tfk_a2" || member != "mb_2" || org != "org_1" || name != "Alpha 2" {
 		t.Fatalf("ProjectKey = %q %q %q %q %v", key, member, org, name, ok)
 	}
-	ps, err := st.KeyProjects(KeyBinding{})
+	ps, err := st.KeyProjects(bnd)
 	must(t, err)
 	if !reflect.DeepEqual(ps, []string{"pj_b", "pj_a"}) {
 		t.Fatalf("KeyProjects %v, want in fetch order", ps)
 	}
-	must(t, st.DropProjectKey(KeyBinding{}, "pj_a"))
-	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_a"); ok {
+	must(t, st.DropProjectKey(bnd, "pj_a"))
+	if _, _, _, _, ok := st.ProjectKey(bnd, "pj_a"); ok {
 		t.Fatal("dropped key still there")
 	}
-	must(t, st.DropProjectKey(KeyBinding{}, "pj_zzz")) // dropping a missing key is fine
+	must(t, st.DropProjectKey(bnd, "pj_zzz")) // dropping a missing key is fine
 	must(t, st.DropProjectKeys())
-	if ps, _ := st.KeyProjects(KeyBinding{}); len(ps) != 0 {
+	if ps, _ := st.KeyProjects(bnd); len(ps) != 0 {
 		t.Fatalf("keys left %v", ps)
 	}
 }
@@ -366,7 +504,7 @@ func fillProject(t *testing.T, st *Store, p string, seq int64) {
 	must(t, st.PutDeliverables(dl, seq))
 	must(t, st.SetCursor(p, seq))
 	must(t, st.SetLiveAt(p, t0))
-	must(t, st.PutProjectKey(KeyBinding{}, p, "tfk_"+p, "mb_1", "org_1", p, t0))
+	must(t, st.PutProjectKey(bnd, p, "tfk_"+p, "mb_1", "org_1", p, t0))
 	_, err := st.UpsertSession("ss_"+p, "agent", 100, "/w", t0)
 	must(t, err)
 	must(t, st.Share("ss_"+p, p, "mb_1", "ref", nil))
@@ -409,7 +547,7 @@ func TestResetProjectDropsOnlyThatProject(t *testing.T) {
 		t.Fatal("pj_a still counts as live")
 	}
 	// the key and the sessions stay; a session's place is clamped to the server's head
-	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_a"); !ok {
+	if _, _, _, _, ok := st.ProjectKey(bnd, "pj_a"); !ok {
 		t.Fatal("reset dropped the project key")
 	}
 	sa, ok, err := st.Session("ss_pj_a")
@@ -793,7 +931,7 @@ func TestPythonEraStoreIsLeftAlone(t *testing.T) {
 	if c := st.Cursors(); len(c) != 0 {
 		t.Fatalf("the Go store read the Python-era cursors: %v", c)
 	}
-	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_old"); ok {
+	if _, _, _, _, ok := st.ProjectKey(bnd, "pj_old"); ok {
 		t.Fatal("the Go store read a Python-era key")
 	}
 	// the Go schema is in place: the columns and tables the Python store lacks work
