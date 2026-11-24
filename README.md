@@ -157,6 +157,111 @@ What stays on your machine:
 - Your keys and the local copy of your projects, in `~/.teamflow` (or `$TEAMFLOW_HOME`): the folder is mode 0700
   and its files 0600 (`config.json` holds the server, your email and the auth key; `store.db` the rest). Keys never appear in command lines, logs or URLs.
 
+## How signals are sent
+
+Everything this machine records on a project's shared record leaves in the order it was made: one ordered outbox
+per project, one sender at a time.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Agent (or you)
+    participant T as teamflow command / hook
+    participant O as Outbox (spool table in store.db)
+    participant L as Sender lock (send-<key ref>.lock)
+    participant S as Teamflow server
+
+    A->>T: teamflow signal emit --file s.json
+    T->>L: take the lock (a command waits up to 3 s, a sync 250 ms)
+    T->>O: queue the signals at the end
+    T->>O: read everything waiting, in order
+    T->>S: POST /rpc [signal.emit, …] (≤ 50 calls, ≤ 8 MiB per array)
+    S-->>T: one result per call
+    T->>O: accepted or refused: leave the outbox (recorded before the next request)
+    T->>L: release
+    T-->>A: each signal's answer (or "queued")
+
+    A->>T: teamflow approve sg_…  (a human act)
+    T->>L: take the lock
+    T->>O: queue the verdict at the end
+    T->>S: flush everything before it, in arrays as above
+    T->>S: POST /rpc {signal.emit APPROVE}  (alone: one object, never an array)
+    S-->>T: its result
+    T->>L: release
+    Note over T,S: offline or stuck before the act: it stays queued in its place,<br/>and the command says "queued: will be sent after N earlier signals"
+```
+
+```mermaid
+flowchart TD
+    W[a write] --> Q{queued kind?}
+    Q -- "signal, artifact link in a session,<br/>action result/revoke, verdict, drift resolve/dismiss" --> OB[(outbox in store.db)]
+    Q -- "artifact write/archive, Deliverables, topic, plan,<br/>members, a link outside a session" --> G{outbox empty<br/>after a flush?}
+    G -- yes --> SEND[sent at once]
+    G -- no --> NS[not sent: 'N earlier signals are still queued']
+    OB --> F[flush: under the sender lock]
+    F --> B[routine items: JSON-RPC arrays<br/>≤ 50 calls, ≤ 8 MiB]
+    F --> H[human act: alone, after everything before it]
+    B --> R{each call's result}
+    H --> R
+    R -- accepted --> D[leaves the outbox; its session is told it reached the team]
+    R -- "refused for good (invalid, a reasoned refusal, too large)" --> X[leaves the outbox; its session is told why]
+    R -- "transient (offline, 5xx, 429, no or unreadable answer,<br/>update needed, key no longer a member's)" --> STOP[stays; the flush stops; later items wait]
+```
+
+Plain text, for viewers without Mermaid:
+
+```
+agent / you ──> teamflow <cmd> ──> outbox (store.db, per project key, in order)
+                                     │
+               flush points: the command that queued it; human acts and other writes;
+                             later commands and agent hooks (a sync flushes before it pulls)
+                                     │  one sender at a time: send-<key ref>.lock (flock) in the Teamflow home
+                                     ▼
+             routine items ──> [call, call, …] ≤ 50 calls, ≤ 8 MiB ──> server ──> one result per call
+             human act     ──> flush everything before it, then {one call}, alone
+                                     │
+               accepted ─────────> leaves; its session hears "reached the team"
+               refused for good ─> leaves; its session hears why
+               transient ────────> stays; the flush stops; everything after it waits
+```
+
+In detail:
+
+- **The outbox.** Signals an agent records (`signal emit`, `action result`, `action revoke`, `artifact link` inside
+  its session) and human acts (`approve`, `reject`, `drift resolve`, `drift dismiss`) are queued in the `spool`
+  table of `store.db`, under the project's key, and sent from there in order. A queued item survives a restart, a
+  reboot or a killed process.
+- **Flush points.** The command that queued an item flushes at once; so do human acts and writes that are not
+  queued. Later commands and the agent hooks sync the project (inside an agent's turn at most once every 10 s, and
+  not for 30 s after the server was unreachable), and a sync flushes the outbox before it pulls.
+- **Batches.** Routine items go as one JSON-RPC array per request, packed by count (at most 50) and size (at most
+  8 MiB). Each request's results are recorded before the next request goes out, so a crash between requests
+  resends nothing already answered.
+- **Human acts go alone.** A verdict or drift act is queued at the end, then the flush sends everything before it
+  (in arrays), then the act as a single call, never inside an array. If the flush stops before the act (offline,
+  a stuck item, another sender busy), the act waits in its place and is never sent ahead: the command exits 0 and
+  says `queued: will be sent after N earlier signals` (`--json`: `"queued": true, "ahead": N`). It is sent alone,
+  in order, by a later flush. When the stop needs you (`update teamflow`, a key no longer a member's), the command
+  fails with that reason, and the act still waits in the outbox.
+- **Writes that are not queued** (artifact write and archive, Deliverables, topic, plan and member changes, a link
+  published outside an agent session) flush the outbox first and are sent only when it is empty. Otherwise they
+  are not sent: `not sent: N earlier signals are still queued …; try again once they are sent`.
+- **One sender at a time.** A flush holds a lock file in the Teamflow home (`send-<key ref>.lock`, `flock`), so
+  commands and hooks in different processes never interleave. A sync waits 250 ms for it, a command sending its
+  own items 3 s; past that it leaves its items queued for the holder (which reads the outbox again before it
+  lets go) or the next flush. The kernel drops the lock when its holder exits, even when killed, so a crashed
+  holder never blocks the outbox.
+- **Errors keep the order.** A transient error (the server unreachable, a 5xx, a 429, a call with no answer or an
+  answer this client can't read, `UPGRADE_REQUIRED`, a key that is no longer a member's) stops the flush there:
+  that item and everything after it wait. A permanent refusal (invalid params, a refusal with a reason such as a
+  stale version, a call over 8 MiB, an item that can't be read) drops only that item, tells the session that made
+  it why, and the flush goes on. Within one array the server has already handled the calls after a transient
+  one; their results are kept.
+- **Retries are idempotent.** A resend carries the same signal ids, and the server answers a signal id it has
+  seen with its first result, so nothing is recorded twice. A drift act has no id the server keeps: resent after
+  a lost answer, it may come back refused as already settled.
+- **Offline.** Hooks work from the local replica; signals and human acts wait in the outbox; nothing is lost.
+
 ## Repository layout
 
 - `cmd/teamflow`: the binary.
@@ -171,6 +276,8 @@ What stays on your machine:
   against the shared vectors in `protocol/deliverables/vectors.json`.
 - `internal/artifacts`: reading a file to publish (at most 5 MB; larger ones are published as links), its kind
   and media type, and pulling a stored version back.
+- `internal/sendlock`: the outbox's sender lock (one sender per project key across processes).
+- `internal/syncer`: the outbox flush (in order, batches, human acts alone), and pulling events into the replica.
 - `protocol/`: the protocol exported from the Teamflow server: `schema.json`, `methods.json`, golden messages,
   Deliverables test vectors, hook fixtures and agent texts (instructions, `/teamf`, the commands). `VERSION` names the server commit and
   protocol version it came from.
@@ -192,7 +299,10 @@ does not follow fails the build.
 - **A human act is never sent in an array body**, not even a one-element array: the server counts any array as a
   batch and refuses a human act inside one. Human acts are listed in the schema's `x-constants.HUMAN_ACTS`
   (generated as `protocol.HumanActsMethods` and `protocol.HumanActsVerdictSignalKinds`): verdicts (`APPROVE`,
-  `REJECT` signals) and drift resolve and dismiss. Send each with `api.Client.Call`, never `Batch`.
+  `REJECT` signals) and drift resolve and dismiss. The outbox (`syncer.Flush`) sends each with a single call,
+  never `Batch`; queue new ones through `core` (see "How signals are sent"), never call them directly.
+- **A new server method must be classified** in `core.SharedWrites` or `core.NotSharedWrites`
+  (`internal/core/outbox.go`); a test fails until it is.
 - List constants in `x-constants` (lists of strings only) are generated as `var`s of `[]string`; never change
   them.
 - After changing `protocol/`, run `go run ./tools/gen`; CI fails if the generated code is stale.
