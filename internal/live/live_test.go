@@ -687,7 +687,9 @@ func TestTwoStartsOneRuns(t *testing.T) {
 	}
 	defer c2.Close()
 	began := time.Now()
-	if err := Run(context.Background(), c2, fast(nil, nil)); !errors.Is(err, ErrRunning) {
+	second, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	if err := Run(second, c2, fast(nil, nil)); !errors.Is(err, ErrRunning) {
 		t.Fatalf("the second copy: %v", err)
 	}
 	if time.Since(began) > time.Second {
@@ -705,7 +707,11 @@ func TestTwoStartsOneRuns(t *testing.T) {
 	if line, _ := r.ReadString('\n'); !strings.HasPrefix(line, "running") {
 		t.Fatalf("helper: %q", line)
 	}
-	if err := Run(context.Background(), c2, fast(nil, nil)); !errors.Is(err, ErrRunning) {
+	// "running" is printed before its Run takes the lock: wait until the lock names it.
+	eventually(t, "the other process holds the lock", func() bool { pid, ok := Status(c.Dir); return ok && pid == cmd.Process.Pid })
+	bounded, cancel := context.WithTimeout(context.Background(), 5*time.Second) // a wrong answer never hangs the test
+	defer cancel()
+	if err := Run(bounded, c2, fast(nil, nil)); !errors.Is(err, ErrRunning) {
 		t.Fatalf("beside another process: %v", err)
 	}
 	if pid, ok := Status(c.Dir); !ok || pid != cmd.Process.Pid {
