@@ -583,3 +583,49 @@ func TestBatchOfflineMidwayReturnsResultsSoFar(t *testing.T) {
 		t.Fatalf("got %d results, %v; want the first chunk's %d and ErrOffline", len(res), err, protocol.MaxBatch)
 	}
 }
+
+// A 3xx is never an answer, even with a valid JSON-RPC body (a portal, proxy or forger), and says nothing about
+// the protocol.
+func TestRedirectWithJSONRPCBodyIsAnError(t *testing.T) {
+	rec := &recorder{}
+	for _, code := range []int{301, 302, 303, 307, 308, 304, 300} {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(protocol.ProtocolHeader, "99")
+			w.Header().Set("Location", "https://elsewhere.example.com/rpc")
+			w.WriteHeader(code)
+			if code != 304 {
+				fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"id":"forged"}}`)
+			}
+		}))
+		c := New(srv.URL, testKey, time.Second).WithRecorder(rec)
+		c.http.Transport = srv.Client().Transport
+		var out struct{ ID string }
+		err := c.Call(context.Background(), "member.me", nil, &out)
+		res, berr := c.Batch(context.Background(), []Call{{Method: "member.me"}})
+		srv.Close()
+		var ae *APIError
+		if !errors.As(err, &ae) || ae.Code != code || out.ID != "" {
+			t.Fatalf("%d: want an APIError with the status and no result, got %v (out %+v)", code, err, out)
+		}
+		if berr == nil || len(res) != 0 {
+			t.Fatalf("%d: batch gave %v, %v", code, res, berr)
+		}
+	}
+	if rec.recorded != 0 {
+		t.Fatalf("a redirect's protocol header was recorded (%d times, server %d)", rec.recorded, rec.server)
+	}
+}
+
+// 4xx answers carrying JSON-RPC errors are still read.
+func TestClientErrorWithJSONRPCBodyIsRead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"bad request","data":{"reason":"INVALID"}}}`)
+	}))
+	defer srv.Close()
+	err := New(srv.URL, testKey, time.Second).Call(context.Background(), "member.me", nil, nil)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != protocol.CodeInvalidRequest || ae.Reason != "INVALID" {
+		t.Fatalf("got %v", err)
+	}
+}

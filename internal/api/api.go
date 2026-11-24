@@ -269,6 +269,7 @@ func (c *Client) Batch(ctx context.Context, calls []Call) ([]Result, error) {
 		}
 		if len(chunk) > 0 {
 			if err := c.batchChunk(ctx, calls, chunk, out); err != nil {
+				// partial: the results of every call before this request (answered or refused as too large)
 				return out[:start], err
 			}
 		}
@@ -349,6 +350,10 @@ func (c *Client) post(ctx context.Context, body []byte) ([]byte, int, error) {
 		return nil, 0, fmt.Errorf("%w: %s", ErrOffline, c.redactText(err.Error()))
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// The server never redirects: a 3xx is a portal, a proxy or a forger. Its body and headers are not read.
+		return nil, 0, &APIError{Code: resp.StatusCode, Message: "unexpected redirect"}
+	}
 	server, _ := strconv.Atoi(strings.TrimSpace(resp.Header.Get(protocol.ProtocolHeader)))
 	if resp.StatusCode >= 500 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
