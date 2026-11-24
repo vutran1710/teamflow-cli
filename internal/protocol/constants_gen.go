@@ -21,8 +21,8 @@ const (
 	LiveCloseCode      = 1008                            // LIVE_CLOSE_CODE
 	LivePing           = "ping"                          // LIVE_PING
 	LivePong           = "pong"                          // LIVE_PONG
-	LivePingSeconds    = 30                              // LIVE_PING_SECONDS
-	LivePongSeconds    = 10                              // LIVE_PONG_SECONDS
+	LivePingSeconds    = 10                              // LIVE_PING_SECONDS
+	LivePongSeconds    = 5                               // LIVE_PONG_SECONDS
 	LiveSilenceSeconds = LivePongSeconds                 // seconds of silence after a ping that mean the socket is dead
 	HookTimeout        = 4.0                             // HOOK_TIMEOUT
 	RPCPath            = "/rpc"                          // RPC_PATH
