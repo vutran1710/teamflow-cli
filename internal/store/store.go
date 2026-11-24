@@ -974,6 +974,28 @@ func (o ops) SetLiveAt(project string, t time.Time) error {
 	return err
 }
 
+// ClaimHookSync takes a hook's turn to sync the project over the network: true at most once per every (racing
+// hooks: one wins), and never while the project is marked offline (SetHookOffline).
+func (o ops) ClaimHookSync(project string, now time.Time, every time.Duration) (bool, error) {
+	if until := o.meta("hook_offline_until:" + project); until != "" && parseTS(until).After(now) {
+		return false, nil
+	}
+	res, err := o.exec("INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value "+
+		"WHERE meta.value <= ?", "hook_sync_at:"+project, ts(now), ts(now.Add(-every)))
+	if err != nil {
+		return false, wrap(err)
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetHookOffline keeps hooks off the network for the project until then (a sync just failed).
+func (o ops) SetHookOffline(project string, until time.Time) error {
+	_, err := o.exec("INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+		"hook_offline_until:"+project, ts(until))
+	return wrap(err)
+}
+
 func (o ops) meta(name string) string {
 	var v string
 	if ok, err := o.one("SELECT value FROM meta WHERE name = ?", []any{name}, &v); !ok || err != nil {
@@ -1167,17 +1189,6 @@ func (o ops) ClaimNotices(session string, approvals bool) ([]Notice, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].N < out[j].N })
 	return out, nil
-}
-
-// UnclaimNotices gives claimed notices back (shown again 0): a caller that claimed them and then failed before
-// telling the session leaves them for the next turn, so nothing claimed is ever lost.
-func (o ops) UnclaimNotices(ns []Notice) error {
-	for _, n := range ns {
-		if _, err := o.exec("UPDATE notices SET shown = 0 WHERE n = ?", n.N); err != nil {
-			return wrap(err)
-		}
-	}
-	return nil
 }
 
 // NoticesShown marks notices as shown.

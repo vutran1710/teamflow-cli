@@ -321,37 +321,50 @@ func (c *Core) Inbox(sid string) ([]string, error) {
 }
 
 // AfterTurn is the approval requests that reached the session since it last heard of them (its project only),
-// synced first, as the approval queue's text; each is raised once (claimed atomically: a hook that raises approval
-// requests must claim them the same way, with store.ClaimNotices). "" when there are none.
+// synced first, as the approval queue's text; each is raised once. "" when there are none.
 func (c *Core) AfterTurn(ctx context.Context, sid string) string {
 	sess, ok, err := c.St.Session(sid)
 	if err != nil || !ok || sess.Project == "" || !c.SignedIn() {
 		return ""
 	}
 	c.Sync(ctx, HookTimeout, sess.Project)
-	ns, err := c.St.ClaimNotices(sid, true) // taken once, even by calls racing
-	if err != nil || len(ns) == 0 {
-		return ""
-	}
-	asked := map[string]bool{}
-	for _, n := range ns {
-		asked[n.About] = true
-	}
-	waiting, err := c.Approvals(sid, false)
-	if err != nil { // claimed but not told: give them back, so the next turn raises them
-		_ = c.St.UnclaimNotices(ns)
-		return ""
-	}
-	var items []protocol.StoredSignal
-	for _, st := range waiting {
-		if asked[st.Signal.ID] {
-			items = append(items, st)
+	return c.raiseNew(sid)
+}
+
+// raiseNew claims the session's new approval requests and lists the ones still waiting. The claim and the read
+// are one transaction: when the read fails, the claim is rolled back and the next turn raises them (claimed atomically,
+// so a hook and a tool call racing never both raise one).
+func (c *Core) raiseNew(sid string) string {
+	var out string
+	err := c.St.Tx(func(tx *store.Tx) error {
+		ns, err := tx.ClaimNotices(sid, true)
+		if err != nil || len(ns) == 0 {
+			return err
 		}
-	}
-	if len(items) == 0 {
+		asked := map[string]bool{}
+		for _, n := range ns {
+			asked[n.About] = true
+		}
+		waiting, err := c.Approvals(sid, false)
+		if err != nil {
+			return err
+		}
+		var items []protocol.StoredSignal
+		for _, st := range waiting {
+			if asked[st.Signal.ID] {
+				items = append(items, st)
+			}
+		}
+		if len(items) > 0 {
+			out = c.ApprovalsText(items, "a new approval request arrived for the person you work with.")
+		}
+		return nil
+	})
+	if err != nil {
+		c.logHook("raising approval requests", err)
 		return ""
 	}
-	return c.ApprovalsText(items, "a new approval request arrived for the person you work with.")
+	return out
 }
 
 // NewNotices are the session's other notices not shown yet (stale citations, drifts, rejections after a queue,

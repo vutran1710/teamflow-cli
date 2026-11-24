@@ -138,6 +138,51 @@ func (c *Core) End(ctx context.Context, sid string) error {
 	return nil
 }
 
+// ------------------------------------------------------------------ mid-turn
+
+// The hook before each tool runs at every step of the agent's turn, so it must stay off the network almost always.
+const (
+	// HookSyncEvery: a project is synced from that hook at most once per this.
+	HookSyncEvery = 10 * time.Second
+	// MidTurnTimeout bounds that sync.
+	MidTurnTimeout = 1 * time.Second
+	// HookOfflineFor: after that sync failed, the hook stays off the network this long.
+	HookOfflineFor = 30 * time.Second
+	// LiveFresh: a background sync heard from the project's live socket this recently keeps the replica fresh.
+	LiveFresh = 15 * time.Second
+)
+
+// MidTurn is the hook before a tool: new approval requests for the session, raised once, from the replica. It
+// syncs the project first only when the background sync is not live, at most once per HookSyncEvery, with a short
+// timeout, and not at all for HookOfflineFor after that failed.
+func (c *Core) MidTurn(ctx context.Context, sid string) string {
+	sess, ok, err := c.St.Session(sid)
+	if err != nil || !ok || sess.Project == "" || !c.SignedIn() {
+		return ""
+	}
+	now := c.Now()
+	if live := c.St.LiveAt(sess.Project); live.IsZero() || now.Sub(live) > LiveFresh {
+		if mine, err := c.St.ClaimHookSync(sess.Project, now, HookSyncEvery); err == nil && mine {
+			if !c.Sync(ctx, MidTurnTimeout, sess.Project) {
+				if err := c.St.SetHookOffline(sess.Project, now.Add(HookOfflineFor)); err != nil {
+					c.logHook("marking the project offline", err)
+				}
+			}
+		}
+	}
+	return c.raiseNew(sid)
+}
+
+// logHook notes a trouble the agent is not told about in hook.log (0600) in the Teamflow home; never fails.
+func (c *Core) logHook(what string, err error) {
+	f, ferr := os.OpenFile(filepath.Join(c.Dir, "hook.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if ferr != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s core %s: %v\n", time.Now().UTC().Format(time.RFC3339), what, err)
+}
+
 // ------------------------------------------------------------------ the full context
 
 // Full is a shared session's whole context, synced first: the project, plan and instruction, Deliverables,
@@ -159,24 +204,26 @@ func (c *Core) Full(ctx context.Context, sid string) (string, error) {
 		}
 		return "Teamflow: this project has not synced yet; the next prompt will bring it in.", nil
 	}
-	told, err := c.St.ClaimNotices(sid, false)
+	// The claims, the reads and the bookmark are one transaction: on any failure nothing is claimed or moved.
+	var text string
+	err = c.St.Tx(func(tx *store.Tx) error {
+		told, err := tx.ClaimNotices(sid, false)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ClaimNotices(sid, true); err != nil {
+			return err
+		}
+		text, err = c.fullText(tx, sess, told, online)
+		return err
+	})
 	if err != nil {
-		return "", err
-	}
-	asked, err := c.St.ClaimNotices(sid, true)
-	if err != nil {
-		_ = c.St.UnclaimNotices(told)
-		return "", err
-	}
-	text, err := c.fullText(sess, told, online)
-	if err != nil {
-		_ = c.St.UnclaimNotices(append(told, asked...))
 		return "", err
 	}
 	return text, nil
 }
 
-func (c *Core) fullText(sess store.Session, told []store.Notice, online bool) (string, error) {
+func (c *Core) fullText(tx *store.Tx, sess store.Session, told []store.Notice, online bool) (string, error) {
 	extra := ""
 	if len(told) > 0 {
 		lines := make([]string, len(told))
@@ -199,7 +246,7 @@ func (c *Core) fullText(sess store.Session, told []store.Notice, online bool) (s
 	if err != nil {
 		return "", err
 	}
-	if err := c.St.Seen(sess.ID, seq, version); err != nil {
+	if err := tx.Seen(sess.ID, seq, version); err != nil {
 		return "", err
 	}
 	return text + extra, nil
@@ -379,76 +426,79 @@ func (c *Core) Delta(sid string) (string, error) {
 		return "", err
 	}
 
-	// Claimed last, once everything that can fail on reading has been read.
-	told, err := c.St.ClaimNotices(sid, false)
-	if err != nil {
-		return "", err
-	}
-	asked, err := c.St.ClaimNotices(sid, true)
-	if err != nil {
-		_ = c.St.UnclaimNotices(told)
-		return "", err
-	}
-	giveBack := func(err error) (string, error) {
-		_ = c.St.UnclaimNotices(append(told, asked...))
-		return "", err
-	}
-	var head []string
-	if len(told) > 0 {
-		lines := make([]string, len(told))
-		for i, n := range told {
-			lines[i] = "- " + n.Text
-		}
-		head = append(head, "Notices:\n"+strings.Join(lines, "\n"))
-	}
-	if len(asked) > 0 {
-		want := map[string]bool{}
-		for _, n := range asked {
-			want[n.About] = true
-		}
-		waiting, err := c.Approvals(sid, false)
+	// The claims, the approval queue's read and the bookmark are one transaction: on any failure nothing is
+	// claimed or moved, and the next prompt tells it all.
+	var text string
+	err = c.St.Tx(func(tx *store.Tx) error {
+		told, err := tx.ClaimNotices(sid, false)
 		if err != nil {
-			return giveBack(err)
+			return err
 		}
-		var items []protocol.StoredSignal
-		for _, st := range waiting {
-			if want[st.Signal.ID] {
-				items = append(items, st)
+		asked, err := tx.ClaimNotices(sid, true)
+		if err != nil {
+			return err
+		}
+		var head []string
+		if len(told) > 0 {
+			lines := make([]string, len(told))
+			for i, n := range told {
+				lines[i] = "- " + n.Text
+			}
+			head = append(head, "Notices:\n"+strings.Join(lines, "\n"))
+		}
+		if len(asked) > 0 {
+			want := map[string]bool{}
+			for _, n := range asked {
+				want[n.About] = true
+			}
+			waiting, err := c.Approvals(sid, false)
+			if err != nil {
+				return err
+			}
+			var items []protocol.StoredSignal
+			for _, st := range waiting {
+				if want[st.Signal.ID] {
+					items = append(items, st)
+				}
+			}
+			if len(items) > 0 {
+				head = append(head, c.ApprovalsText(items, "a new approval request arrived for the person you work with."))
 			}
 		}
-		if len(items) > 0 {
-			head = append(head, c.ApprovalsText(items, "a new approval request arrived for the person you work with."))
+		newly := map[string]bool{}
+		for _, n := range told {
+			if n.Type == protocol.NoticeTypeCitedSuperseded {
+				newly[n.About] = true
+			}
 		}
-	}
-	newly := map[string]bool{}
-	for _, n := range told {
-		if n.Type == protocol.NoticeTypeCitedSuperseded {
-			newly[n.About] = true
+		var staleLines []string
+		for _, s := range stale {
+			if !newly[s.old] { // told once, with its notice
+				continue
+			}
+			if s.current == nil {
+				staleLines = append(staleLines, fmt.Sprintf("You cite %s; nothing in its chain is in force now.", s.old))
+			} else {
+				staleLines = append(staleLines, fmt.Sprintf("You cite %s; in force now:\n%s", s.old, SignalBlock(*s.current, topics, "", names)))
+			}
 		}
-	}
-	var staleLines []string
-	for _, s := range stale {
-		if !newly[s.old] { // told once, with its notice
-			continue
+		all := parts
+		if len(staleLines) > 0 {
+			all = append(all, "Stale citations (you cite an older version):\n\n"+strings.Join(staleLines, "\n\n"))
 		}
-		if s.current == nil {
-			staleLines = append(staleLines, fmt.Sprintf("You cite %s; nothing in its chain is in force now.", s.old))
-		} else {
-			staleLines = append(staleLines, fmt.Sprintf("You cite %s; in force now:\n%s", s.old, SignalBlock(*s.current, topics, "", names)))
+		all = append(head, all...)
+		if err := tx.Seen(sid, max(sess.LastSeq, c.St.Cursors()[sess.Project]), state.Version); err != nil {
+			return err
 		}
+		if len(all) > 0 {
+			text = "## Teamflow update\n\n" + strings.Join(all, "\n\n")
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
-	if len(staleLines) > 0 {
-		parts = append(parts, "Stale citations (you cite an older version):\n\n"+strings.Join(staleLines, "\n\n"))
-	}
-	parts = append(head, parts...)
-	seq := max(sess.LastSeq, c.St.Cursors()[sess.Project])
-	if err := c.St.Seen(sid, seq, state.Version); err != nil {
-		return giveBack(err)
-	}
-	if len(parts) == 0 {
-		return "", nil
-	}
-	return "## Teamflow update\n\n" + strings.Join(parts, "\n\n"), nil
+	return text, nil
 }
 
 // overdue queues the session's overdue notices: approvals asked of its member past their due time, and its
