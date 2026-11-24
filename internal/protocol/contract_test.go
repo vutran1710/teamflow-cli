@@ -873,16 +873,8 @@ func TestMethodsMatchExport(t *testing.T) {
 }
 
 func TestGeneratedCodeIsUpToDate(t *testing.T) {
-	schema, err := os.ReadFile(filepath.Join(exportDir, "schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	methods, err := os.ReadFile(filepath.Join(exportDir, "methods.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	tmp := t.TempDir()
-	if err := protocolgen.WriteFiles(tmp, schema, methods); err != nil {
+	if err := protocolgen.WriteAll(exportDir, tmp); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
 	fresh, _ := filepath.Glob(filepath.Join(tmp, "*_gen.go"))

@@ -1,4 +1,4 @@
-// Command gen regenerates package protocol's types and constants from the exported protocol.
+// Command gen regenerates package protocol's types, constants and agent texts from the exported protocol.
 //
 //	go run ./tools/gen                      # from the repo root
 //	go run ./tools/gen -protocol P -out D   # elsewhere
@@ -24,13 +24,5 @@ func main() {
 }
 
 func run(protocolDir, out string) error {
-	schema, err := os.ReadFile(filepath.Join(protocolDir, "schema.json"))
-	if err != nil {
-		return err
-	}
-	methods, err := os.ReadFile(filepath.Join(protocolDir, "methods.json"))
-	if err != nil {
-		return err
-	}
-	return protocolgen.WriteFiles(out, schema, methods)
+	return protocolgen.WriteAll(protocolDir, out)
 }
