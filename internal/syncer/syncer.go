@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -598,45 +599,111 @@ func Pull(ctx context.Context, st *store.Store, c *api.Client, timeout time.Dura
 		if err != nil { // never pull from 0 because the store could not say where we are
 			return total, fmt.Errorf("read the cursors: %w", err)
 		}
-		poll := protocol.NewSyncPoll()
-		poll.Cursors, poll.Wait = cursors, 0
-		var batch protocol.SyncBatch
-		if err := call(ctx, c, timeout, "sync.poll", poll, &batch); err != nil {
+		n, more, err := poll(ctx, st, c, timeout, cursors, 0)
+		total += n
+		if err != nil || !more {
 			return total, err
-		}
-		reset := map[string]bool{}
-		err = st.Tx(func(tx *store.Tx) error {
-			for _, p := range batch.Reset {
-				reset[p] = true
-				if err := tx.ResetProject(p, batch.Cursors[p]); err != nil {
-					return err
-				}
-			}
-			t := now()
-			for _, ev := range batch.Events {
-				if err := Apply(tx, ev, t); err != nil {
-					return fmt.Errorf("apply %s: %w", ev.EventType(), err)
-				}
-			}
-			for p, seq := range batch.Cursors {
-				if reset[p] {
-					continue
-				}
-				if err := tx.SetCursor(p, seq); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return total, err
-		}
-		total += len(batch.Events)
-		if len(batch.Events) == 0 && len(batch.Reset) == 0 {
-			break
 		}
 	}
 	return total, nil
+}
+
+// Poll is one sync.poll of project from its cursor, held by the server up to wait for something new (the live
+// sync's fallback), applied as Pull applies a page. timeout bounds the call (it must be longer than wait). It
+// returns how many events it read.
+func Poll(ctx context.Context, st *store.Store, c *api.Client, project string, wait, timeout time.Duration) (int, error) {
+	cursors, err := st.CursorsErr()
+	if err != nil {
+		return 0, fmt.Errorf("read the cursors: %w", err)
+	}
+	n, _, err := poll(ctx, st, c, timeout, map[string]int64{project: cursors[project]}, wait)
+	return n, err
+}
+
+// poll is one sync.poll applied in one transaction; more says a page came back (events or a reset).
+func poll(ctx context.Context, st *store.Store, c *api.Client, timeout time.Duration, cursors map[string]int64,
+	wait time.Duration) (n int, more bool, err error) {
+	p := protocol.NewSyncPoll()
+	p.Cursors, p.Wait = cursors, wait.Seconds()
+	var batch protocol.SyncBatch
+	if err := call(ctx, c, timeout, "sync.poll", p, &batch); err != nil {
+		return 0, false, err
+	}
+	err = st.Tx(func(tx *store.Tx) error {
+		reset := map[string]bool{}
+		for _, p := range batch.Reset {
+			reset[p] = true
+			if err := tx.ResetProject(p, batch.Cursors[p]); err != nil {
+				return err
+			}
+		}
+		if _, err := ApplyEvents(tx, batch.Events, now(), nil); err != nil {
+			return err
+		}
+		for p, seq := range batch.Cursors {
+			if reset[p] {
+				continue
+			}
+			if err := tx.SetCursor(p, seq); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return len(batch.Events), len(batch.Events) > 0 || len(batch.Reset) > 0, nil
+}
+
+// ApplyEvents applies events in tx, each once: an event at or below its project's cursor in the replica is
+// already applied (another sync brought it in first, or a server sent it again) and is skipped. Seqs may have
+// holes. It moves no cursor (the caller sets it with the page's cursor) and returns the events applied; done, when
+// given, hears each.
+func ApplyEvents(tx *store.Tx, events []protocol.SyncEvent, t time.Time, done func(project string, seq int64)) (int, error) {
+	cursors, err := tx.CursorsErr()
+	if err != nil {
+		return 0, fmt.Errorf("read the cursors: %w", err)
+	}
+	n := 0
+	for _, ev := range events {
+		project, seq := Position(ev)
+		if seq <= cursors[project] {
+			continue
+		}
+		if err := Apply(tx, ev, t); err != nil {
+			return n, fmt.Errorf("apply %s: %w", ev.EventType(), err)
+		}
+		cursors[project] = seq
+		n++
+		if done != nil {
+			done(project, seq)
+		}
+	}
+	return n, nil
+}
+
+// Position is an event's project and seq (every variant has both; an unknown one's are read from its JSON).
+func Position(ev protocol.SyncEvent) (project string, seq int64) {
+	if u, ok := ev.(protocol.UnknownEvent); ok {
+		var pos struct {
+			Project string `json:"project"`
+			Seq     int64  `json:"seq"`
+		}
+		_ = json.Unmarshal(u.Raw, &pos)
+		return pos.Project, pos.Seq
+	}
+	v := reflect.Indirect(reflect.ValueOf(ev))
+	if v.Kind() != reflect.Struct {
+		return "", 0
+	}
+	if f := v.FieldByName("Project"); f.IsValid() && f.Kind() == reflect.String {
+		project = f.String()
+	}
+	if f := v.FieldByName("Seq"); f.IsValid() && f.CanInt() {
+		seq = f.Int()
+	}
+	return project, seq
 }
 
 func call(ctx context.Context, c *api.Client, timeout time.Duration, method string, params, out any) error {

@@ -139,9 +139,20 @@ func mask(key string) string {
 }
 
 func rpcURL(server string) (string, error) {
+	u, err := serverURL(server)
+	if err != nil {
+		return "", err
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + protocol.RPCPath
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+// serverURL is the server's URL checked (https, or http on loopback), with no userinfo, query or fragment.
+func serverURL(server string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(server))
 	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("%w: the server is not a URL like https://teamflow.example.com", ErrInsecure)
+		return nil, fmt.Errorf("%w: the server is not a URL like https://teamflow.example.com", ErrInsecure)
 	}
 	u.User = nil // a key pasted as userinfo is never sent nor shown
 	u.RawQuery, u.Fragment = "", ""
@@ -149,15 +160,32 @@ func rpcURL(server string) (string, error) {
 	case "https":
 	case "http":
 		if !loopback(u.Hostname()) {
-			return "", fmt.Errorf("%w: refusing %s", ErrInsecure, u.String())
+			return nil, fmt.Errorf("%w: refusing %s", ErrInsecure, u.String())
 		}
 	default:
-		return "", fmt.Errorf("%w: refusing %s", ErrInsecure, u.String())
+		return nil, fmt.Errorf("%w: refusing %s", ErrInsecure, u.String())
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
-	u.Path = strings.TrimRight(u.Path, "/") + protocol.RPCPath
+	return u, nil
+}
+
+// LiveURL is the server's live socket for a project: wss://<server>/live?org=&project= (ws:// only on loopback,
+// as plain http is). Ids only: a key or a ticket never goes in it.
+func LiveURL(server, org, project string) (string, error) {
+	u, err := serverURL(server)
+	if err != nil {
+		return "", err
+	}
+	u.Scheme = map[string]string{"https": "wss", "http": "ws"}[u.Scheme]
+	u.Path = strings.TrimRight(u.Path, "/") + protocol.LivePath
 	u.RawPath = ""
+	u.RawQuery = url.Values{"org": {org}, "project": {project}}.Encode()
 	return u.String(), nil
+}
+
+// ClientName is the Teamflow-Client header's value: this build and its protocol.
+func ClientName() string {
+	return fmt.Sprintf("teamflow-go/%s (protocol %d)", Version, protocol.ProtocolVersion)
 }
 
 func loopback(host string) bool {
@@ -391,7 +419,7 @@ func (c *Client) post(ctx context.Context, body []byte) ([]byte, int, error) {
 		return nil, 0, fmt.Errorf("%w: %v", ErrOffline, c.redactText(err.Error()))
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(protocol.ClientHeader, fmt.Sprintf("teamflow-go/%s (protocol %d)", Version, protocol.ProtocolVersion))
+	req.Header.Set(protocol.ClientHeader, ClientName())
 	if c.key != "" { // signing in carries no key
 		req.Header.Set("Authorization", "Bearer "+c.key)
 	}

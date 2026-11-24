@@ -799,3 +799,28 @@ func TestServerFaultIsMarked(t *testing.T) {
 		}
 	}
 }
+
+// The live socket's URL: wss for https, ws only on loopback, the server's own path kept, ids only in the query;
+// anything else refused before a connection is made.
+func TestLiveURL(t *testing.T) {
+	for _, tc := range []struct{ server, want string }{
+		{"https://teamflow.example.com", "wss://teamflow.example.com/live?org=og_1&project=pj_1"},
+		{"HTTPS://teamflow.example.com/base/", "wss://teamflow.example.com/base/live?org=og_1&project=pj_1"},
+		{"http://127.0.0.1:8080", "ws://127.0.0.1:8080/live?org=og_1&project=pj_1"},
+		{"http://localhost:1", "ws://localhost:1/live?org=og_1&project=pj_1"},
+		{"https://tfk_secret@teamflow.example.com/?key=tfk_x#frag", "wss://teamflow.example.com/live?org=og_1&project=pj_1"},
+	} {
+		got, err := LiveURL(tc.server, "og_1", "pj_1")
+		if err != nil || got != tc.want {
+			t.Fatalf("%s: %q %v, want %q", tc.server, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"http://teamflow.example.com", "ws://teamflow.example.com", "ftp://x", "", "not a url", "https://"} {
+		if got, err := LiveURL(bad, "og_1", "pj_1"); !errors.Is(err, ErrInsecure) {
+			t.Fatalf("%q: %q %v", bad, got, err)
+		}
+	}
+	if got, _ := LiveURL("https://x.test", "og 1&project=evil", "pj_1"); !strings.Contains(got, "org=og+1%26project%3Devil&project=pj_1") {
+		t.Fatalf("ids not escaped: %s", got)
+	}
+}
