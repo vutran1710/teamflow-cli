@@ -206,7 +206,7 @@ flowchart TD
     R -- accepted --> D[leaves the outbox; its session is told it reached the team]
     R -- "refused for good (invalid, a reasoned refusal, too large)" --> X[leaves the outbox; its session is told why]
     R -- "transient (offline, 5xx, 429, no or unreadable answer,<br/>update needed, key no longer a member's)" --> STOP[stays; the flush stops; later items wait]
-    STOP -- "the server failed on it 10 times<br/>over 24 hours or more" --> GU[dropped; its session is told]
+    STOP -- "a signal the server failed on itself<br/>10 times over 24 hours or more" --> GU[dropped; its session is told]
 ```
 
 Plain text, for viewers without Mermaid:
@@ -224,7 +224,7 @@ agent / you ──> teamflow <cmd> ──> outbox (store.db, per sign-in and pro
                accepted ─────────> leaves; its session hears "reached the team"
                refused for good ─> leaves; its session hears why
                transient ────────> stays; the flush stops; everything after it waits
-                                   (the server failing on it 10 times over ≥ 24 h: dropped, session told)
+                                   (a signal the server failed on itself 10 times over ≥ 24 h: dropped, told)
 ```
 
 In detail:
@@ -234,13 +234,14 @@ In detail:
   table of `store.db`, in the outbox of the project under your sign-in (server and account), and sent from there
   in order, under whatever key that sign-in holds for the project when they go. A queued item survives a restart,
   a reboot, a killed process, a logout and login as the same account, and a project key dropped and fetched
-  again. Another account signing in on this machine never sends your items: they stay, and `teamflow status` and
-  `teamflow outbox` show them.
+  again; an act made offline with no key for the project is queued all the same. Another account signing in on
+  this machine never sends your items: they stay, and `teamflow status` and `teamflow outbox` show them.
 - **Flush points.** The command that queued an item flushes at once; so do human acts and writes that are not
   queued. Later commands and the agent hooks sync the project (inside an agent's turn at most once every 10 s, and
   not for 30 s after the server was unreachable), and a sync flushes the outbox before it pulls, within the sync's
   own time limit (a hook's few seconds): what does not fit waits for the next one. A sync also fetches a new key
-  for a project whose items wait but whose key was dropped.
+  for a project whose items wait but whose key was dropped; when the server refuses the membership, it asks again
+  only after 10 minutes, not on every command and hook.
 - **Batches.** Routine items go as one JSON-RPC array per request, packed by count (at most 50) and size (at most
   8 MiB). Each request's results are recorded before the next request goes out, so a crash between requests
   resends nothing already answered.
@@ -268,19 +269,24 @@ In detail:
   stale version, a call over 8 MiB, an item that can't be read) drops only that item, tells the session that made
   it why, and the flush goes on. Within one array the server has already handled the calls after a transient
   one; their results are kept.
-- **A stuck item is given up on.** An item the server keeps failing on (no answer for it, an answer this client
-  can't read, an internal error, an HTTP 500) would hold everything after it back. After 10 such failures
-  spanning at least 24 hours it is dropped and its session is told (record it again if it still matters). An
-  unreachable server (no connection, a timeout, 502, 503, 504, 429), `UPGRADE_REQUIRED` and a key that is no
-  longer a member's never count, however long they last.
+- **A stuck signal is given up on.** A signal the server keeps failing on (no answer for it, an answer this
+  client can't read, an internal error, an HTTP 500) would hold everything after it back. A failure counts only
+  when it is the item's own: other calls in its request were answered, or it went alone and the server then
+  answers another call (`member.me`). When a whole request fails, or every call in it, nothing counts and the
+  head goes alone next time, so a bad head is isolated before it is counted. After 10 own failures spanning at
+  least 24 hours the signal is dropped and its session is told (record it again if it still matters). An outage
+  (no connection, a timeout, 502, 503, 504, 429, the server failing on everything), `UPGRADE_REQUIRED` and a key
+  that is no longer a member's never count, however long they last. A human act (a verdict, a drift act) is
+  never dropped this way: only you drop it, with `teamflow outbox drop`.
 - **`teamflow outbox`** lists everything waiting (every sign-in's): id, method, project, sign-in, age, tries and
   failures. `teamflow outbox drop <id>` takes one out after a confirmation (or `--yes`): it is never sent. It is a
   setup command, never allowed to an agent without asking you.
 - **Retries are idempotent.** A resend carries the same signal ids, and the server answers a signal id it has
   seen with its first result, so nothing is recorded twice. A drift act has no id the server keeps: resent after
-  a lost answer, it comes back refused as `DRIFT_CLOSED`. The client then pulls and looks: if the drift is closed
-  with this act's status and note (and, for a resolve, the people it named), the first send took and the session
-  hears it reached the team; otherwise the refusal stands.
+  a lost answer, the server refuses it as it refuses any act on a closed drift (`DRIFT_CLOSED` for a resolve,
+  `NOT_ALLOWED` for a dismiss). The client then pulls and looks: if the drift is closed with this act's status and
+  note (and, when a resolve named signals in `--resolved-by`, those signals; the server fills in the drift's own
+  otherwise), the first send took and the session hears it reached the team; otherwise the refusal stands.
 - **Offline.** Hooks work from the local replica; signals and human acts wait in the outbox; nothing is lost.
 
 ## Repository layout
