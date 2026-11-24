@@ -458,26 +458,31 @@ func runAvatar(r *inv, a *parsed) int {
 // ------------------------------------------------------------------ tasks
 
 var tasksCmd = &command{name: "tasks", help: "The project's tasks (plan updates): kind, state and attempts.",
-	flags: []flagSpec{projectFlag, {name: "kind", help: "Only tasks of this kind (ROLLING_UPDATE_PROJECT)"},
-		{name: "state", help: "Only tasks in this state: QUEUED, RUNNING, DONE or FAILED"}}, nargs: exactly(0), run: runTasks}
+	flags: []flagSpec{projectFlag, {name: "kind", help: "Only tasks of this kind: " + oneOf(protocol.TaskKindValues)},
+		{name: "state", help: "Only tasks in this state: " + oneOf(protocol.TaskStateValues)}}, nargs: exactly(0), run: runTasks}
+
+// oneOf lists an enum's values for a flag's help.
+func oneOf[T ~string](xs []T) string {
+	var out []string
+	for _, x := range xs {
+		out = append(out, string(x))
+	}
+	return strings.Join(out, ", ")
+}
 
 func runTasks(r *inv, a *parsed) int {
 	params := protocol.TaskList{}
-	if k := strings.ToUpper(a.get("kind")); k != "" {
-		if k != string(protocol.TaskKindRollingUpdateProject) {
+	if k := protocol.TaskKind(strings.ToUpper(a.get("kind"))); k != "" {
+		if !slices.Contains(protocol.TaskKindValues, k) {
 			return usageFail(r, "tasks", "Invalid value for '--kind': "+a.get("kind"))
 		}
-		kind := protocol.TaskKind(k)
-		params.Kind = &kind
+		params.Kind = &k
 	}
-	if s := strings.ToUpper(a.get("state")); s != "" {
-		states := []string{string(protocol.TaskStateQueued), string(protocol.TaskStateRunning),
-			string(protocol.TaskStateDone), string(protocol.TaskStateFailed)}
-		if !slices.Contains(states, s) {
+	if s := protocol.TaskState(strings.ToUpper(a.get("state"))); s != "" {
+		if !slices.Contains(protocol.TaskStateValues, s) {
 			return usageFail(r, "tasks", "Invalid value for '--state': "+a.get("state"))
 		}
-		state := protocol.TaskState(s)
-		params.State = &state
+		params.State = &s
 	}
 	_, pid, cl, ok := r.projectAPI(a)
 	if !ok {

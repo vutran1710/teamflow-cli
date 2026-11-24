@@ -16,6 +16,9 @@ const (
 	ActionOutcomeBlocked ActionOutcome = "BLOCKED"
 )
 
+// ActionOutcomeValues are the values of ActionOutcome, in the schema's order.
+var ActionOutcomeValues = []ActionOutcome{ActionOutcomeDone, ActionOutcomePartial, ActionOutcomeBlocked}
+
 // ActionStatus: Inferred from an action's results; never stored.
 type ActionStatus string
 
@@ -26,12 +29,18 @@ const (
 	ActionStatusDone       ActionStatus = "DONE"
 )
 
+// ActionStatusValues are the values of ActionStatus, in the schema's order.
+var ActionStatusValues = []ActionStatus{ActionStatusNotStarted, ActionStatusInProgress, ActionStatusBlocked, ActionStatusDone}
+
 type Actor string
 
 const (
 	ActorMember Actor = "MEMBER"
 	ActorAgent  Actor = "AGENT"
 )
+
+// ActorValues are the values of Actor, in the schema's order.
+var ActorValues = []Actor{ActorMember, ActorAgent}
 
 type ArtifactKind string
 
@@ -47,6 +56,9 @@ const (
 	ArtifactKindLink         ArtifactKind = "LINK"
 )
 
+// ArtifactKindValues are the values of ArtifactKind, in the schema's order.
+var ArtifactKindValues = []ArtifactKind{ArtifactKindText, ArtifactKindData, ArtifactKindCode, ArtifactKindDocument, ArtifactKindPresentation, ArtifactKindImage, ArtifactKindAudio, ArtifactKindVideo, ArtifactKindLink}
+
 // AttemptState: One try of a task on the LLM server.
 type AttemptState string
 
@@ -59,6 +71,9 @@ const (
 	AttemptStateTimedOut AttemptState = "TIMED_OUT"
 )
 
+// AttemptStateValues are the values of AttemptState, in the schema's order.
+var AttemptStateValues = []AttemptState{AttemptStateQueued, AttemptStateAccepted, AttemptStateRunning, AttemptStateDone, AttemptStateFailed, AttemptStateTimedOut}
+
 type DriftKind string
 
 const (
@@ -68,6 +83,9 @@ const (
 	DriftKindUnanswered          DriftKind = "UNANSWERED"
 )
 
+// DriftKindValues are the values of DriftKind, in the schema's order.
+var DriftKindValues = []DriftKind{DriftKindSignalConflict, DriftKindPlanConflict, DriftKindInstructionConflict, DriftKindUnanswered}
+
 type DriftStatus string
 
 const (
@@ -75,6 +93,9 @@ const (
 	DriftStatusResolved  DriftStatus = "RESOLVED"
 	DriftStatusDismissed DriftStatus = "DISMISSED"
 )
+
+// DriftStatusValues are the values of DriftStatus, in the schema's order.
+var DriftStatusValues = []DriftStatus{DriftStatusOpen, DriftStatusResolved, DriftStatusDismissed}
 
 // EventType: Sync event types (doc: Server API, Sync events).
 type EventType string
@@ -94,6 +115,9 @@ const (
 	EventTypeDeliverablesDeleted   EventType = "deliverables.deleted"
 )
 
+// EventTypeValues are the values of EventType, in the schema's order.
+var EventTypeValues = []EventType{EventTypeSignalAccepted, EventTypeSignalStateChanged, EventTypeProjectUpdated, EventTypeTopicUpdated, EventTypeTopicDeleted, EventTypeDriftFound, EventTypeDriftResolved, EventTypeTaskUpdated, EventTypeArtifactArchived, EventTypeDeliverablesPublished, EventTypeDeliverablesArchived, EventTypeDeliverablesDeleted}
+
 // NoticeType: Built on the client from synced events; the server stores no notices.
 type NoticeType string
 
@@ -112,6 +136,9 @@ const (
 	NoticeTypeActionRevoked      NoticeType = "ACTION_REVOKED"
 )
 
+// NoticeTypeValues are the values of NoticeType, in the schema's order.
+var NoticeTypeValues = []NoticeType{NoticeTypeApprovalRequested, NoticeTypeApprovalDue, NoticeTypeCitedSuperseded, NoticeTypeCitedPendingChange, NoticeTypeProjectUpdated, NoticeTypeDriftFound, NoticeTypeDriftResolved, NoticeTypeSignalRejected, NoticeTypeSignalSent, NoticeTypeTopicDeleted, NoticeTypeActionDue, NoticeTypeActionRevoked}
+
 type ProjectChange string
 
 const (
@@ -119,6 +146,9 @@ const (
 	ProjectChangeRollingUpdate ProjectChange = "ROLLING_UPDATE"
 	ProjectChangeManual        ProjectChange = "MANUAL"
 )
+
+// ProjectChangeValues are the values of ProjectChange, in the schema's order.
+var ProjectChangeValues = []ProjectChange{ProjectChangeCreated, ProjectChangeRollingUpdate, ProjectChangeManual}
 
 type RejectReason string
 
@@ -159,6 +189,9 @@ const (
 	RejectReasonUpgradeRequired          RejectReason = "UPGRADE_REQUIRED"
 )
 
+// RejectReasonValues are the values of RejectReason, in the schema's order.
+var RejectReasonValues = []RejectReason{RejectReasonSchemaViolation, RejectReasonNotAMember, RejectReasonUnknownProject, RejectReasonUnknownTopic, RejectReasonTopicClosed, RejectReasonOffTopic, RejectReasonStaleProjectVersion, RejectReasonStaleStateVersion, RejectReasonUnknownRef, RejectReasonCrossProjectRef, RejectReasonSupersedesNotLatest, RejectReasonSupersedesOtherTopic, RejectReasonOutOfOrder, RejectReasonClockSkew, RejectReasonNotAnApprover, RejectReasonUnknownApprover, RejectReasonTargetNotPending, RejectReasonAlreadyDecided, RejectReasonDriftClosed, RejectReasonIDConflict, RejectReasonNotAllowed, RejectReasonTaskInProgress, RejectReasonInvalidTaskOutput, RejectReasonArtifactTooLarge, RejectReasonContentMismatch, RejectReasonUnknownAction, RejectReasonNotActionOwner, RejectReasonDeliverablesInvalid, RejectReasonStaleDeliverablesVersion, RejectReasonDeliverablesArchived, RejectReasonTopicHasActions, RejectReasonTooSlow, RejectReasonReplaced, RejectReasonUpgradeRequired}
+
 type SignalKind string
 
 const (
@@ -176,6 +209,9 @@ const (
 	SignalKindActionRevoke SignalKind = "ACTION_REVOKE"
 )
 
+// SignalKindValues are the values of SignalKind, in the schema's order.
+var SignalKindValues = []SignalKind{SignalKindDecision, SignalKindConstraint, SignalKindRequirement, SignalKindQuestion, SignalKindAnswer, SignalKindStatus, SignalKindNote, SignalKindApprove, SignalKindReject, SignalKindArtifact, SignalKindActionResult, SignalKindActionRevoke}
+
 type SignalState string
 
 const (
@@ -185,6 +221,9 @@ const (
 	SignalStateSuperseded SignalState = "SUPERSEDED"
 )
 
+// SignalStateValues are the values of SignalState, in the schema's order.
+var SignalStateValues = []SignalState{SignalStateInForce, SignalStatePending, SignalStateRejected, SignalStateSuperseded}
+
 // TaskKind: Asynchronous jobs the context server hands to the LLM server. More kinds come later
 // (e.g. create-action-list, draw-work-graph).
 type TaskKind string
@@ -192,6 +231,9 @@ type TaskKind string
 const (
 	TaskKindRollingUpdateProject TaskKind = "ROLLING_UPDATE_PROJECT"
 )
+
+// TaskKindValues are the values of TaskKind, in the schema's order.
+var TaskKindValues = []TaskKind{TaskKindRollingUpdateProject}
 
 // TaskState: The job as a whole.
 type TaskState string
@@ -202,6 +244,9 @@ const (
 	TaskStateDone    TaskState = "DONE"
 	TaskStateFailed  TaskState = "FAILED"
 )
+
+// TaskStateValues are the values of TaskState, in the schema's order.
+var TaskStateValues = []TaskState{TaskStateQueued, TaskStateRunning, TaskStateDone, TaskStateFailed}
 
 // LiveMessage: one of LiveEvents, LiveClosed.
 type LiveMessage interface {

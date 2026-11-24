@@ -103,3 +103,17 @@ func TestWriteAllReadsTheExportFolder(t *testing.T) {
 		t.Fatalf("a missing tools.json: %v", err)
 	}
 }
+
+// Each enum gets the list of its values, in the schema's order, for the places that offer them (tool schemas,
+// command flags), so none retypes them.
+func TestEnumsListTheirValues(t *testing.T) {
+	files, err := Generate([]byte(schemaWith(`"TaskState": {"type": "string", "enum": ["QUEUED", "DONE"]}, "Empty": {"type": "object", "properties": {}}`,
+		`"MAX_BATCH": 50`)), []byte(okMethods))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := strings.Join(strings.Fields(string(files["types_gen.go"])), " ")
+	if !strings.Contains(out, "var TaskStateValues = []TaskState{TaskStateQueued, TaskStateDone}") {
+		t.Errorf("no value list:\n%s", out)
+	}
+}

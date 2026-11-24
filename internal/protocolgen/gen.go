@@ -399,6 +399,7 @@ func (g *gen) emitEnum(b *strings.Builder, name string, d *object) error {
 	b.WriteString(comment(name, d.get("description")))
 	fmt.Fprintf(b, "type %s string\n\nconst (\n", name)
 	seen := map[string]bool{}
+	var names []string
 	for _, v := range values {
 		s, ok := v.(string)
 		if !ok {
@@ -409,9 +410,12 @@ func (g *gen) emitEnum(b *strings.Builder, name string, d *object) error {
 			return fmt.Errorf("enum values collide as %s", c)
 		}
 		seen[c] = true
+		names = append(names, c)
 		fmt.Fprintf(b, "\t%s %s = %q\n", c, name, s)
 	}
 	b.WriteString(")\n\n")
+	fmt.Fprintf(b, "// %sValues are the values of %s, in the schema's order.\nvar %sValues = []%s{%s}\n\n", name, name, name,
+		name, strings.Join(names, ", "))
 	return nil
 }
 
