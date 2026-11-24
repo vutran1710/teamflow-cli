@@ -279,6 +279,31 @@ func (c *Core) DraftFor(ctx context.Context, pid, clientSession string, d map[st
 		}
 	}
 	sig["emitted_at"] = c.Now().UTC().Format(time.RFC3339Nano)
+	if rfa, ok := sig["request_for_approval"].(map[string]any); ok { // approvers by name or id
+		var ids []string
+		names, _ := rfa["approvers"].([]any)
+		if list, ok := rfa["approvers"].([]string); ok {
+			for _, n := range list {
+				names = append(names, n)
+			}
+		}
+		for _, n := range names {
+			id, err := c.ResolveMember(fmt.Sprint(n))
+			if err != nil {
+				return out, err
+			}
+			ids = append(ids, id)
+		}
+		copied := map[string]any{}
+		for k, v := range rfa {
+			copied[k] = v
+		}
+		copied["approvers"] = ids
+		if _, ok := copied["required"]; !ok {
+			copied["required"] = len(ids)
+		}
+		sig["request_for_approval"] = copied
+	}
 	raw, err := json.Marshal(sig)
 	if err != nil {
 		return out, err
