@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
+	"github.com/vutran1710/teamflow-cli/internal/adapters/claudecode"
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
@@ -898,9 +899,10 @@ func (f *fakeAdapter) SessionID([]byte) (string, error)                { return 
 
 func TestInstallWithNoAdapterYet(t *testing.T) {
 	m := newMachine(t, false)
-	r := m.run("pw\n", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL(), "--password-stdin")
+	t.Setenv("PATH", t.TempDir()) // no agent found on this machine
+	r := m.run("pw\n", "install", "-a", "cursor", "-e", "lan@acme.test", "-s", m.srv.URL(), "--password-stdin")
 	wantCode(t, r, 1)
-	contains(t, "stderr", r.err, "claude-code is not available in this build yet")
+	contains(t, "stderr", r.err, "cursor is not available in this build yet")
 	noCall(t, m.srv, "auth.login") // nothing is done before every agent named can be set up
 
 	r = m.run("pw\n", "install", "-a", "codex", "-e", "lan@acme.test", "--password-stdin")
@@ -919,7 +921,7 @@ func TestInstallSignsInThenSetsUpEachAgent(t *testing.T) {
 	adapters.Register(cc)
 	adapters.Register(cu)
 	adapters.Register(ag)
-	t.Cleanup(adapters.Reset)
+	t.Cleanup(resetAdapters)
 
 	m := newMachine(t, false)
 	m.srv.on("auth.login", "auth.login")
@@ -989,7 +991,7 @@ func TestInstallSignsInThenSetsUpEachAgent(t *testing.T) {
 func TestInstallSignInRefused(t *testing.T) {
 	cc := &fakeAdapter{name: "claude-code", detected: true}
 	adapters.Register(cc)
-	t.Cleanup(adapters.Reset)
+	t.Cleanup(resetAdapters)
 	m := newMachine(t, false)
 	m.srv.on("auth.login", "auth.login!NOT_ALLOWED")
 	r := m.run("bad\n", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL(), "--password-stdin")
@@ -1043,4 +1045,84 @@ func TestSyncDropsARefusedKey(t *testing.T) {
 	if _, _, _, _, ok := m.store().ProjectKey(m.binding(), P); ok {
 		t.Fatal("the refused key is kept")
 	}
+}
+
+// ------------------------------------------------------------------ hooks and the Claude Code adapter
+
+// `teamflow hook claude-code <event>`: a shared session's first prompt gets its context as Claude Code's JSON; an
+// unknown agent or event, malformed input, missing arguments or a terminal: exit 0 and nothing (never failing the
+// agent's step).
+func TestHookCommand(t *testing.T) {
+	m := newMachine(t, true)
+	m.key()
+	m.inSession("s1", P, nil)
+	st := m.store()
+	pj := protocol.NewProject()
+	pj.ID, pj.Name, pj.Initiator, pj.Members, pj.Version = P, "Pricing", M1, []string{M1}, 1
+	s := protocol.NewProjectState()
+	s.Project, s.Version, s.Plan = P, 1, "Ship it"
+	if err := st.PutProject(pj); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutState(s); err != nil {
+		t.Fatal(err)
+	}
+	r := m.run(`{"session_id": "s1", "prompt": "hi"}`, "hook", "claude-code", "UserPromptSubmit")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, `"hookEventName":"UserPromptSubmit"`, "Ship it")
+	for _, args := range [][]string{{"hook", "nope", "Stop"}, {"hook", "claude-code", "Nope"}, {"hook"},
+		{"hook", "claude-code"}, {"hook", "cursor", "Stop"}} {
+		r := m.run(`{"session_id": "s1"}`, args...)
+		wantCode(t, r, 0)
+		if r.out != "" || r.err != "" {
+			t.Fatalf("%v said something: %s", args, r)
+		}
+	}
+	r = m.run(`not json`, "hook", "claude-code", "UserPromptSubmit")
+	wantCode(t, r, 0)
+	if r.out != "" || r.err != "" {
+		t.Fatalf("malformed input: %s", r)
+	}
+	terminal(t, true, "")
+	r = m.run("", "hook", "claude-code", "UserPromptSubmit")
+	wantCode(t, r, 0)
+	if r.out != "" {
+		t.Fatalf("a terminal: %s", r)
+	}
+}
+
+// `teamflow install -a claude-code` and `uninstall -a claude-code` with the real adapter, in a temp HOME and
+// CLAUDE_CONFIG_DIR: what was written where is said with ~ paths, and uninstall takes it out again.
+func TestInstallClaudeCode(t *testing.T) {
+	m := newMachine(t, true)
+	m.srv.on("account.me", lanMe)
+	r := m.run("", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL())
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "claude-code:\n", "hooks SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd",
+		"MCP server 'teamflow' in ~/.claude/.claude.json", "/teamf command at ~/.claude/commands/teamf.md")
+	cfg := os.Getenv("CLAUDE_CONFIG_DIR")
+	if b, err := os.ReadFile(filepath.Join(cfg, "settings.json")); err != nil || !strings.Contains(string(b), " hook claude-code SessionStart") {
+		t.Fatalf("settings: %v", err)
+	}
+	r = m.run("", "status")
+	contains(t, "stdout", r.out, "claude-code: installed\n")
+	r = m.run("", "uninstall", "-a", "claude-code")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "removed MCP server 'teamflow'")
+	// A malformed settings.json refuses the install: exit 1 with the reason; the file is left as it was.
+	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte("{oops"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r = m.run("", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL())
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "claude-code: not set up", "not valid JSON")
+	if b, _ := os.ReadFile(filepath.Join(cfg, "settings.json")); string(b) != "{oops" {
+		t.Fatal("a malformed settings.json was changed")
+	}
+}
+
+// resetAdapters puts back this build's adapters after a test registered fakes.
+func resetAdapters() {
+	adapters.Reset()
+	adapters.Register(claudecode.New())
 }

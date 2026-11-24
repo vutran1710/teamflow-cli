@@ -13,32 +13,20 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/artifacts"
 	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/mcpserver"
-	"github.com/vutran1710/teamflow-cli/internal/procs"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
-	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
 // ------------------------------------------------------------------ mcp
 
-// ancestry finds the agent session a process runs under by its ancestors (the session recorded against the
-// nearest of them), never a dead agent's session whose pid was reused.
-type ancestry struct{}
-
-func (ancestry) Current(st *store.Store) (store.Session, bool, error) {
-	return st.SessionOfPIDs(procs.Ancestors(os.Getpid(), 12), func(s store.Session) bool {
-		started, ok := procs.StartTime(s.AgentPID)
-		return ok && !started.After(s.UpdatedAt.Add(pidReuseSlack))
-	})
-}
-
 // runMCP serves the MCP tools over stdin and stdout, for the agent that started it.
 func runMCP(r *inv, _ *parsed) int {
-	if err := mcpserver.Run(r.ctx, core.Open, ancestry{}, api.Version, r.in, r.out); err != nil {
+	if err := mcpserver.Run(r.ctx, core.Open, adapters.Ancestry{}, api.Version, r.in, r.out); err != nil {
 		fmt.Fprintln(r.errw, "teamflow mcp:", err)
 		return 1
 	}

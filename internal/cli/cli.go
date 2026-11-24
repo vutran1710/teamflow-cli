@@ -10,13 +10,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"golang.org/x/term"
 
+	"github.com/vutran1710/teamflow-cli/internal/adapters"
+	_ "github.com/vutran1710/teamflow-cli/internal/adapters/claudecode" // the Claude Code adapter
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/core"
-	"github.com/vutran1710/teamflow-cli/internal/procs"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
@@ -34,18 +34,11 @@ var (
 	sessionLogOnce sync.Once
 )
 
-// pidReuseSlack is how much later than its session was last seen an agent process may seem to have started (clock
-// granularity) before its pid is taken as reused by another process.
-const pidReuseSlack = 2 * time.Second
-
 // findSession is the agent session this process runs under: the session recorded against the nearest of its
-// ancestors (an agent's adapter records its sessions against the agent's process). A session whose pid now belongs
-// to a process that started after the session was last seen is a dead agent's, its pid reused: never this one.
+// ancestors (an agent's adapter records its sessions against the agent's process), never a dead agent's session
+// whose pid was reused.
 func findSession(st *store.Store) (store.Session, bool) {
-	s, ok, err := st.SessionOfPIDs(procs.Ancestors(os.Getpid(), 12), func(s store.Session) bool {
-		started, ok := procs.StartTime(s.AgentPID)
-		return ok && !started.After(s.UpdatedAt.Add(pidReuseSlack))
-	})
+	s, ok, err := adapters.Ancestry{}.Current(st)
 	if err != nil {
 		sessionLogOnce.Do(func() {
 			fmt.Fprintf(sessionLog, "teamflow: could not look up the agent session: %v\n", err)

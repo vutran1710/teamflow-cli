@@ -201,6 +201,9 @@ func newMachine(t *testing.T, signedIn bool) *machine {
 		t.Fatal(err)
 	}
 	t.Setenv("TEAMFLOW_HOME", dir)
+	// Never the person's own agent configs: every agent's config lives under a temp HOME.
+	t.Setenv("HOME", filepath.Join(filepath.Dir(dir), "user"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(filepath.Dir(dir), "user", ".claude"))
 	m := &machine{t: t, dir: dir, srv: newServer(t)}
 	if signedIn {
 		if err := config.Save(dir, config.Config{Server: m.srv.URL(), AuthKey: auth, Email: "lan@acme.test"}); err != nil {
@@ -854,7 +857,7 @@ func TestStatus(t *testing.T) {
 		"spool: 0 signal(s) waiting\n",
 		"this session: s1 (shared with "+P+")\n",
 		"shared session s1 -> "+P+"\n",
-		"agents: no agent adapter is available in this build yet\n")
+		"claude-code: not installed\n")
 	lacks(t, "stdout", r.out, "client.sqlite", "tfa_", "tfk_")
 
 	// A Python-era store is mentioned (it is no longer used), once.

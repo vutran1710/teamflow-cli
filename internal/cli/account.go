@@ -217,9 +217,6 @@ var installCmd = &command{
 	flags: []flagSpec{agentFlag, emailFlag, serverFlag, passwordStdinFlag}, nargs: exactly(0), run: runInstall,
 }
 
-// startSync starts the background sync after an install (set by the build that has it).
-var startSync func() error
-
 // chooseAgents is the agents named with -a (checked: supported, and in this build), or, with none named, the
 // ones the person picks from those found on this machine. It never guesses.
 func (r *inv) chooseAgents(named []string, verb string) ([]adapters.Adapter, int) {
@@ -333,8 +330,8 @@ func runInstall(r *inv, a *parsed) int {
 			return r.fail(fmt.Sprintf("%s: not set up: %v", ad.Name(), err))
 		}
 	}
-	if startSync != nil {
-		if err := startSync(); err != nil {
+	if adapters.StartSync != nil {
+		if err := adapters.StartSync(); err != nil {
 			fmt.Fprintf(r.errw, "the background sync did not start: %v\n", err)
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/artifacts"
 	"github.com/vutran1710/teamflow-cli/internal/core"
@@ -659,11 +660,26 @@ func orEmpty(v any) any {
 
 // ------------------------------------------------------------------ hook
 
-// runHook is called by an agent's hooks. It never fails the agent: until the adapters arrive it answers with no
-// added context.
-func runHook(r *inv, _ *parsed) int {
-	if !isTerminal() { // the agent pipes the hook's JSON; a person at a terminal is never waited on
-		_, _ = io.Copy(io.Discard, r.in)
+// runHook is called by an agent's hooks: `teamflow hook <agent> <event>` with the agent's JSON on stdin. It never
+// fails the agent's step: on any trouble (an unknown agent, a busy store, offline, signed out) it exits 0 and adds
+// nothing; troubles go to hook.log in the Teamflow home.
+func runHook(r *inv, a *parsed) int {
+	if isTerminal() { // a person at a terminal is never waited on
+		return 0
+	}
+	stdin, _ := io.ReadAll(io.LimitReader(r.in, maxHookInput))
+	if len(a.pos) != 2 {
+		return 0
+	}
+	ad, ok := adapters.Get(a.pos[0])
+	if !ok {
+		return 0
+	}
+	if out := adapters.RunHook(ad, a.pos[1], stdin, core.Open); len(out) > 0 {
+		_, _ = r.out.Write(out)
 	}
 	return 0
 }
+
+// maxHookInput bounds what a hook reads from its agent (a prompt can be long; a transcript is never sent inline).
+const maxHookInput = 8 << 20
