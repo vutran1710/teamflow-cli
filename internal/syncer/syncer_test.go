@@ -126,11 +126,13 @@ type fake struct {
 	callErr   func(sig string) *protocol.RpcError                              // a per-call error
 	poll      func(protocol.SyncPoll) any                                      // sync.poll's answer
 	polls     []protocol.SyncPoll
-	fail      func(n int) int                 // HTTP status to answer request n (1-based) with, 0: answer as usual
-	lose      func(n int) bool                // handle request n, then drop the connection (the answer is lost)
-	onReq     func(n int)                     // runs before request n is handled (outside the lock)
-	rawAnswer func(id string) json.RawMessage // a raw result for a signal (nil: as usual)
-	order     []string                        // every call's signal or drift id, in the order the server read them (retries too)
+	fail      func(n int) int                                                // HTTP status to answer request n (1-based) with, 0: answer as usual
+	lose      func(n int) bool                                               // handle request n, then drop the connection (the answer is lost)
+	onReq     func(n int)                                                    // runs before request n is handled (outside the lock)
+	rawAnswer func(id string) json.RawMessage                                // a raw result for a signal (nil: as usual)
+	driftAct  func(method string, params json.RawMessage) *protocol.RpcError // a drift act's answer (nil: done)
+	broken    *protocol.RpcError                                             // every call fails so (an outage)
+	order     []string                                                       // every call's signal or drift id, in the order the server read them (retries too)
 	requests  int
 }
 
@@ -162,7 +164,22 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	one := func(req protocol.Request) protocol.Response {
 		out := protocol.Response{JSONRPC: "2.0", ID: req.ID}
+		if f.broken != nil {
+			if req.Method == "signal.emit" {
+				var raw struct {
+					Signal struct {
+						ID string `json:"id"`
+					} `json:"signal"`
+				}
+				_ = json.Unmarshal(req.Params, &raw)
+				f.order = append(f.order, raw.Signal.ID)
+			}
+			out.Error = f.broken
+			return out
+		}
 		switch req.Method {
+		case "member.me":
+			out.Result = json.RawMessage(`{"id": "` + M1 + `"}`)
 		case "signal.emit":
 			var raw struct {
 				Signal struct {
@@ -208,6 +225,12 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 				f.t.Errorf("drift params: %v", err)
 			}
 			f.order = append(f.order, req.Method+" "+d.Drift)
+			if f.driftAct != nil {
+				if e := f.driftAct(req.Method, req.Params); e != nil {
+					out.Error = e
+					return out
+				}
+			}
 			if f.callErr != nil {
 				if e := f.callErr(d.Drift); e != nil {
 					out.Error = e

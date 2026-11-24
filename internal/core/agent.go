@@ -203,9 +203,9 @@ func (c *Core) Emit(ctx context.Context, sid string, drafts []map[string]any) ([
 	if len(ready) == 0 {
 		return answers, nil
 	}
-	key, err := c.ProjectKey(ctx, pid)
-	if err != nil {
-		return nil, err
+	key, kerr := c.ProjectKey(ctx, pid) // offline with no key: queued all the same, sent once a key is fetched
+	if kerr != nil && !errors.Is(kerr, api.ErrOffline) {
+		return nil, kerr
 	}
 	ob, err := c.outbox(pid)
 	if err != nil {
@@ -217,7 +217,7 @@ func (c *Core) Emit(ctx context.Context, sid string, drafts []map[string]any) ([
 		mine[e.Signal.ID] = true
 	}
 	// Queued at the end of the outbox and flushed under the sender lock: earlier items first, then these.
-	f, ferr, err := c.sendMine(ctx, ob, key, HookTimeout, mine, func() error {
+	f, ferr, err := c.sendMine(ctx, ob, key, kerr, HookTimeout, mine, func() error {
 		return c.St.Tx(func(tx *store.Tx) error {
 			for _, e := range ready {
 				raw, err := json.Marshal(e)

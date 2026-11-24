@@ -1274,3 +1274,67 @@ func TestSpoolFromBeforeMigrates(t *testing.T) {
 		t.Fatalf("after reopening %+v", items)
 	}
 }
+
+// An item marked to go alone keeps the mark until it leaves; unmarking clears it. Sad path: an id not queued.
+func TestOutboxAloneMark(t *testing.T) {
+	st := open(t, t.TempDir())
+	must(t, st.SpoolAdd("sg_1", "ss_1", obA, `{}`, t0))
+	must(t, st.SpoolAdd("sg_2", "ss_1", obA, `{}`, t0))
+	must(t, st.SetAlone("sg_1", true))
+	must(t, st.SetAlone("sg_missing", true))
+	items, _ := st.Spooled(obA)
+	if !items[0].Alone || items[1].Alone {
+		t.Fatalf("items %+v", items)
+	}
+	must(t, st.SetAlone("sg_1", false))
+	if items, _ := st.Spooled(obA); items[0].Alone {
+		t.Fatal("still marked")
+	}
+}
+
+// Fetching a key for an outbox whose membership was refused waits a while before it is tried again. Sad paths:
+// never refused (no wait), a wait over (try again), a clock set back far (no wait longer than the window).
+func TestKeyFetchBackoff(t *testing.T) {
+	st := open(t, t.TempDir())
+	if st.KeyFetchWaiting(obA, t0, time.Hour) {
+		t.Fatal("waiting with no refusal")
+	}
+	must(t, st.SetKeyFetchRefused(obA, t0.Add(10*time.Minute)))
+	if !st.KeyFetchWaiting(obA, t0, time.Hour) || st.KeyFetchWaiting(obB, t0, time.Hour) || st.KeyFetchWaiting(obOther, t0, time.Hour) {
+		t.Fatal("the wait is per outbox")
+	}
+	if st.KeyFetchWaiting(obA, t0.Add(11*time.Minute), time.Hour) {
+		t.Fatal("still waiting after the wait")
+	}
+	if st.KeyFetchWaiting(obA, t0.Add(-2*time.Hour), time.Hour) {
+		t.Fatal("a clock set back waits past the window")
+	}
+}
+
+// Drift acts queued before outboxes were bound, whose key is gone, get their project from the replica's drift.
+func TestLegacyDriftActsGetTheirProject(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, FileName))
+	must(t, err)
+	stmts := []string{"CREATE TABLE " + migrationsTable + " (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"}
+	for _, n := range []string{"0001_init.sql", "0002_project_key_binding.sql", "0003_outbox_method.sql"} {
+		body, err := os.ReadFile(filepath.Join("migrations", n))
+		must(t, err)
+		stmts = append(stmts, string(body), "INSERT INTO "+migrationsTable+" VALUES ('"+n+"', '2026-11-01T00:00:00Z')")
+	}
+	stmts = append(stmts,
+		`INSERT INTO drifts VALUES ('dr_1', 'pj_d', 'OPEN', 3, '{}')`,
+		`INSERT INTO spool (signal, method, session, key_ref, params, created_at) VALUES ('da_1', 'drift.resolve', 's', 'ffffffffffffffff', '{"drift":"dr_1","note":"x"}', '2026-11-01T00:00:00Z')`,
+		`INSERT INTO spool (signal, method, session, key_ref, params, created_at) VALUES ('da_2', 'drift.dismiss', 's', 'ffffffffffffffff', '{"drift":"dr_unknown","note":"x"}', '2026-11-01T00:00:00Z')`)
+	for _, q := range stmts {
+		_, err = db.Exec(q)
+		must(t, err)
+	}
+	must(t, db.Close())
+	st := open(t, dir)
+	all, err := st.OutboxAll()
+	must(t, err)
+	if len(all) != 2 || all[0].Project != "pj_d" || all[1].Project != "" {
+		t.Fatalf("drift acts %+v", all)
+	}
+}

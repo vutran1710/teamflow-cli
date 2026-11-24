@@ -167,7 +167,8 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 	for _, pid := range projects {
 		key, _, _, _, ok := c.St.ProjectKey(b, pid)
 		if !ok {
-			if n, _ := c.St.Waiting(store.OutboxOf(b, pid)); n == 0 {
+			ob := store.OutboxOf(b, pid)
+			if n, _ := c.St.Waiting(ob); n == 0 || c.St.KeyFetchWaiting(ob, c.Now(), KeyRetryAfter) {
 				continue
 			}
 			var err error
@@ -175,6 +176,7 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 				if errors.Is(err, api.ErrOffline) {
 					return false
 				}
+				_ = c.St.SetKeyFetchRefused(ob, c.Now().Add(KeyRetryAfter)) // not asked again on every command or hook
 				continue
 			}
 		}

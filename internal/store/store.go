@@ -1102,6 +1102,7 @@ type SpoolItem struct {
 	Fails     int       // failures counting towards giving up on it
 	FirstFail time.Time // the first of them (zero: none)
 	LastError string
+	Alone     bool // goes in a request of its own next time
 }
 
 // OutboxRow is an item with the outbox it waits in.
@@ -1110,13 +1111,13 @@ type OutboxRow struct {
 	SpoolItem
 }
 
-const itemCols = "n, signal, method, session, params, created_at, tries, fails, COALESCE(first_fail_at, ''), last_error"
+const itemCols = "n, signal, method, session, params, created_at, tries, fails, COALESCE(first_fail_at, ''), last_error, alone"
 
 func scanItem(r interface{ Scan(...any) error }, extra ...any) (SpoolItem, error) {
 	var it SpoolItem
 	var created, first string
 	err := r.Scan(append([]any{&it.N, &it.Signal, &it.Method, &it.Session, &it.Params, &created, &it.Tries, &it.Fails,
-		&first, &it.LastError}, extra...)...)
+		&first, &it.LastError, &it.Alone}, extra...)...)
 	it.CreatedAt = parseTS(created)
 	if first != "" {
 		it.FirstFail = parseTS(first)
@@ -1217,6 +1218,30 @@ func (o ops) Failed(id, why string, now time.Time) (SpoolItem, error) {
 		return it, fmt.Errorf("no queued item %s", id)
 	}
 	return it, err
+}
+
+// SetAlone marks the item id to go in a request of its own next time (or clears the mark).
+func (o ops) SetAlone(id string, on bool) error {
+	_, err := o.exec("UPDATE spool SET alone = ? WHERE signal = ?", on, id)
+	return err
+}
+
+// KeyFetchWaiting says whether fetching a key for the outbox ob waits after a refusal of the membership (until a
+// time at most window ahead of now: a clock set back never waits longer).
+func (o ops) KeyFetchWaiting(ob Outbox, now time.Time, window time.Duration) bool {
+	until := o.meta("key_fetch_refused:" + ob.Ref())
+	if until == "" {
+		return false
+	}
+	u := parseTS(until)
+	return u.After(now) && !u.After(now.Add(window))
+}
+
+// SetKeyFetchRefused keeps key fetches for the outbox ob off until then (the server refused the membership).
+func (o ops) SetKeyFetchRefused(ob Outbox, until time.Time) error {
+	_, err := o.exec("INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+		"key_fetch_refused:"+ob.Ref(), ts(until))
+	return wrap(err)
 }
 
 // adoptLegacy binds rows queued before outboxes were bound (no sign-in) to the sign-in and project of the key

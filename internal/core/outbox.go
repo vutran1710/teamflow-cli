@@ -33,6 +33,10 @@ import (
 // SyncLockWait is how long a sync waits for the sender lock before leaving the outbox to its holder.
 var SyncLockWait = 250 * time.Millisecond
 
+// KeyRetryAfter is how long a sync waits before asking again for the key of an outbox whose membership the server
+// refused (items wait for it; asking on every command and hook would only be refused again).
+const KeyRetryAfter = 10 * time.Minute
+
 // SendLockWait is how long a command sending its own items (a signal, a human act, a write) waits for the lock.
 var SendLockWait = 3 * time.Second
 
@@ -180,9 +184,9 @@ func (c *Core) pushOutbox(ctx context.Context, a *api.Client, ob store.Outbox, t
 // sendMine queues the caller's own items (add) and flushes the outbox ob with key, holding the sender lock across
 // both (waiting SendLockWait for it), so no other sender takes them and answers them elsewhere. It returns the
 // answers to mine that came back and why the flush stopped (sendlock.ErrBusy: another sender holds the lock and
-// sends them). err is a failure to queue them: nothing was queued.
-func (c *Core) sendMine(ctx context.Context, ob store.Outbox, key string, timeout time.Duration, mine map[string]bool,
-	add func() error) (f syncer.Flushed, stopped, err error) {
+// sends them; keyErr: there is no key to send with, offline). err is a failure to queue them: nothing was queued.
+func (c *Core) sendMine(ctx context.Context, ob store.Outbox, key string, keyErr error, timeout time.Duration,
+	mine map[string]bool, add func() error) (f syncer.Flushed, stopped, err error) {
 	f = syncer.Flushed{Answers: map[string]syncer.Answer{}}
 	release, lerr := c.lockOutbox(ctx, ob, SendLockWait)
 	if lerr != nil && !errors.Is(lerr, sendlock.ErrBusy) {
@@ -196,6 +200,9 @@ func (c *Core) sendMine(ctx context.Context, ob store.Outbox, key string, timeou
 	}
 	if lerr != nil {
 		return f, lerr, nil
+	}
+	if keyErr != nil { // no key to send with (offline): queued for the next sync
+		return f, keyErr, nil
 	}
 	f, stopped = syncer.Flush(ctx, c.St, c.client(key, timeout), ob, mine)
 	return f, stopped, nil
@@ -239,15 +246,15 @@ func (c *Core) humanAct(ctx context.Context, pid, sid, id, method string, params
 	if err != nil {
 		return nil, err
 	}
-	key, err := c.ProjectKey(ctx, pid)
-	if err != nil {
-		return nil, err
+	key, kerr := c.ProjectKey(ctx, pid) // offline with no key: queued all the same, sent once a key is fetched
+	if kerr != nil && !errors.Is(kerr, api.ErrOffline) {
+		return nil, kerr
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
-	f, stopped, err := c.sendMine(ctx, ob, key, DefaultTimeout, map[string]bool{id: true}, func() error {
+	f, stopped, err := c.sendMine(ctx, ob, key, kerr, DefaultTimeout, map[string]bool{id: true}, func() error {
 		return c.St.OutboxAdd(id, method, sid, ob, string(raw), c.Now())
 	})
 	if err != nil {

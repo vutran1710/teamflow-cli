@@ -383,9 +383,10 @@ func ofTypeAbout(ns []store.Notice, typ protocol.NoticeType) []string {
 	return out
 }
 
-// Only the server failing on the item counts: an unreachable server, 502/503/504, 429, UPGRADE_REQUIRED and a key
-// no longer a member's never do, however long they last (nothing is lost offline). An HTTP 500 and an answer
-// this client can't read do, for every item of the request.
+// Only the server failing on the item counts: an unreachable server, 502/503/504, 429, UPGRADE_REQUIRED, a key no
+// longer a member's, and a 500 for everything never do, however long they last (nothing is lost offline). An
+// internal error and an answer this client can't read for the head alone, while the server answers other calls,
+// do.
 func TestFlushCountsOnlyTheServerFailingOnTheItem(t *testing.T) {
 	st := openStore(t)
 	f, srv := newFake(t)
@@ -422,16 +423,27 @@ func TestFlushCountsOnlyTheServerFailingOnTheItem(t *testing.T) {
 	if it := item(t, st, S1); it.Fails != 0 || len(spooled(t, st)) != 2 {
 		t.Fatalf("an outage counted: %+v", it)
 	}
-	f.set(func() {
-		f.fail = func(int) int { return 500 }
-	})
+	// 500 for every request, member.me too: an outage, never counted.
+	f.set(func() { f.fail = func(int) int { return 500 } })
 	_, _ = Push(context.Background(), st, client(srv), ob)
-	if a, b := item(t, st, S1), item(t, st, S2); a.Fails != 1 || b.Fails != 1 || !strings.Contains(a.LastError, "500") {
-		t.Fatalf("a 500: %+v %+v", a, b)
+	if a := item(t, st, S1); a.Fails != 0 || !a.Alone {
+		t.Fatalf("a 500 outage: %+v", a)
 	}
+	// The head alone fails while the server answers member.me: its own failure.
 	f.set(func() {
 		f.fail = nil
+		f.callErr = func(id string) *protocol.RpcError {
+			if id == S1 {
+				return &protocol.RpcError{Code: protocol.CodeInternalError, Message: "boom"}
+			}
+			return nil
+		}
 	})
+	_, _ = Push(context.Background(), st, client(srv), ob)
+	if a, b := item(t, st, S1), item(t, st, S2); a.Fails != 1 || b.Fails != 0 {
+		t.Fatalf("its own failure: %+v %+v", a, b)
+	}
+	f.set(func() { f.callErr = nil })
 	f.set(func() {
 		f.answer = func(e protocol.SignalEmit, _ json.RawMessage) protocol.SignalResult { return protocol.SignalResult{} }
 	})
@@ -453,63 +465,114 @@ func TestFlushCountsOnlyTheServerFailingOnTheItem(t *testing.T) {
 	}
 }
 
-// drift.resolved for D1 as the server would send it after the act.
-func resolvedPage(status protocol.DriftStatus, resolution string) page {
-	d := protocol.NewDrift()
-	d.ID, d.Project, d.Kind, d.Summary, d.Signals, d.Status = D1, P, protocol.DriftKindUnanswered, "x", []string{S1}, status
-	d.Resolution, d.ResolvedBy, d.CreatedAt = resolution, []string{}, "2026-11-24T10:00:00Z"
-	ev := protocol.NewDriftResolved()
-	ev.Project, ev.Seq, ev.At, ev.Drift = P, 7, "2026-11-24T10:00:00Z", d
-	b, _ := json.Marshal(ev)
-	return page{Events: []json.RawMessage{b}, Cursors: map[string]int64{P: 7}, Reset: []string{}}
+// driftServer makes the fake answer drift acts as the real server does (server/tf_server/drifts.py): an open drift
+// is closed by the act (resolved_by: the signals named, or the drift's own signals when none); on a closed drift
+// resolve is refused DRIFT_CLOSED and dismiss NOT_ALLOWED. sync.poll then carries drift.resolved.
+func driftServer(t *testing.T, f *fake) (closeBy func(status protocol.DriftStatus, note string, by []string)) {
+	t.Helper()
+	var drift *protocol.Drift
+	closeBy = func(status protocol.DriftStatus, note string, by []string) {
+		d := protocol.NewDrift()
+		d.ID, d.Project, d.Kind, d.Summary, d.Signals, d.Status = D1, P, protocol.DriftKindUnanswered, "x", []string{S1, S2}, status
+		d.Resolution, d.ResolvedBy, d.CreatedAt = note, by, "2026-11-24T10:00:00Z"
+		if len(by) == 0 {
+			d.ResolvedBy = d.Signals
+		}
+		drift = &d
+	}
+	f.set(func() {
+		f.driftAct = func(method string, params json.RawMessage) *protocol.RpcError {
+			var in struct {
+				Note       string   `json:"note"`
+				ResolvedBy []string `json:"resolved_by"`
+			}
+			_ = json.Unmarshal(params, &in)
+			if drift != nil {
+				if method == "drift.dismiss" {
+					return &protocol.RpcError{Code: protocol.CodeRuleFailed, Message: "only the initiator dismisses an open drift",
+						Data: map[string]any{"reason": "NOT_ALLOWED"}}
+				}
+				return &protocol.RpcError{Code: protocol.CodeRuleFailed, Message: "the drift is closed",
+					Data: map[string]any{"reason": "DRIFT_CLOSED"}}
+			}
+			status := protocol.DriftStatusResolved
+			if method == "drift.dismiss" {
+				status = protocol.DriftStatusDismissed
+			}
+			closeBy(status, in.Note, in.ResolvedBy)
+			return nil
+		}
+		f.poll = func(p protocol.SyncPoll) any {
+			if drift == nil || p.Cursors[P] >= 7 {
+				return page{Events: []json.RawMessage{}, Cursors: map[string]int64{P: p.Cursors[P]}, Reset: []string{}}
+			}
+			ev := protocol.NewDriftResolved()
+			ev.Project, ev.Seq, ev.At, ev.Drift = P, 7, "2026-11-24T10:00:00Z", *drift
+			b, _ := json.Marshal(ev)
+			return page{Events: []json.RawMessage{b}, Cursors: map[string]int64{P: 7}, Reset: []string{}}
+		}
+	})
+	return closeBy
 }
 
-// A drift act whose answer was lost is sent again and refused as DRIFT_CLOSED. The replica is brought up to date:
-// the drift closed with this act's status and note means the first send took, and the session hears it reached
-// the team. Sad paths: closed otherwise (another status or note: the refusal stands), and DRIFT_CLOSED on the
-// first send (no lookup; the refusal stands).
+func queueDriftAct(t *testing.T, st *store.Store, method string, resolvedBy []string) {
+	t.Helper()
+	in := map[string]any{"drift": D1, "note": "settled"}
+	if method == "drift.resolve" {
+		in["resolved_by"] = resolvedBy
+		if resolvedBy == nil {
+			in["resolved_by"] = []string{}
+		}
+	}
+	b, _ := json.Marshal(in)
+	must(t, st.OutboxAdd("da_1", method, "s1", ob, string(b), t0))
+}
+
+// A drift act whose answer was lost is sent again; the server, as it really does, refuses it (DRIFT_CLOSED for a
+// resolve, NOT_ALLOWED for a dismiss). The replica is brought up to date: the drift closed with this act's status
+// and note (and the signals it named, when it named some) means the first send took, and the session hears it
+// reached the team. Sad paths: a resolve naming no signals (the server fills them in), a dismiss refused
+// NOT_ALLOWED, the first send never applied and someone else closing it meanwhile (the refusal stands), refused
+// on the first send (no lookup: the refusal stands).
 func TestDriftActResentAfterALostAnswer(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		lose    bool
-		status  protocol.DriftStatus
-		note    string
+		method  string
+		named   []string
+		first   string // "lost": applied, answer lost; "down": never applied; "closed": someone closed it before
 		reached bool
 		polled  bool
+		reason  string
 	}{
-		{"closed by this act", true, protocol.DriftStatusResolved, "settled", true, true},
-		{"closed by someone else", true, protocol.DriftStatusResolved, "another note", false, true},
-		{"dismissed instead", true, protocol.DriftStatusDismissed, "settled", false, true},
-		{"refused on the first send", false, protocol.DriftStatusResolved, "settled", false, false},
+		{"resolve naming no signals", "drift.resolve", nil, "lost", true, true, ""},
+		{"resolve naming signals", "drift.resolve", []string{S2}, "lost", true, true, ""},
+		{"dismiss (NOT_ALLOWED on the resend)", "drift.dismiss", nil, "lost", true, true, ""},
+		{"never applied, closed by someone else", "drift.resolve", nil, "down", false, true, "DRIFT_CLOSED"},
+		{"dismiss never applied, closed by someone else", "drift.dismiss", nil, "down", false, true, "NOT_ALLOWED"},
+		{"resolve refused on the first send", "drift.resolve", nil, "closed", false, false, "DRIFT_CLOSED"},
+		{"dismiss refused on the first send", "drift.dismiss", nil, "closed", false, false, "NOT_ALLOWED"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := openStore(t)
 			f, srv := newFake(t)
-			driftAct(t, st, "da_1", "drift.resolve", D1, "s1")
-			f.set(func() {
-				f.poll = func(p protocol.SyncPoll) any {
-					if p.Cursors[P] >= 7 {
-						return page{Events: []json.RawMessage{}, Cursors: map[string]int64{P: 7}, Reset: []string{}}
-					}
-					return resolvedPage(tc.status, tc.note)
-				}
-			})
-			closed := &protocol.RpcError{Code: protocol.CodeRuleFailed, Message: "the drift is closed",
-				Data: map[string]any{"reason": "DRIFT_CLOSED"}}
-			if tc.lose {
-				f.set(func() {
-					f.lose = func(n int) bool { return n == 1 }
-				})
+			closeBy := driftServer(t, f)
+			queueDriftAct(t, st, tc.method, tc.named)
+			switch tc.first {
+			case "lost":
+				f.set(func() { f.lose = func(n int) bool { return n == 1 } })
 				if _, err := Push(context.Background(), st, client(srv), ob); !errors.Is(err, api.ErrOffline) {
 					t.Fatalf("lost answer: %v", err)
 				}
-				f.set(func() {
-					f.lose = nil
-				})
+				f.set(func() { f.lose = nil })
+			case "down":
+				f.set(func() { f.fail = func(n int) int { return 503 } })
+				if _, err := Push(context.Background(), st, client(srv), ob); !errors.Is(err, api.ErrOffline) {
+					t.Fatalf("down: %v", err)
+				}
+				f.set(func() { f.fail = nil; closeBy(protocol.DriftStatusResolved, "someone else's note", nil) })
+			case "closed":
+				f.set(func() { closeBy(protocol.DriftStatusResolved, "someone else's note", nil) })
 			}
-			f.set(func() {
-				f.callErr = func(string) *protocol.RpcError { return closed }
-			})
 			_, err := Push(context.Background(), st, client(srv), ob)
 			must(t, err)
 			if len(spooled(t, st)) != 0 {
@@ -517,12 +580,121 @@ func TestDriftActResentAfterALostAnswer(t *testing.T) {
 			}
 			ns := notices(t, st, "s1")
 			sent, rej := ofTypeAbout(ns, protocol.NoticeTypeSignalSent), ofType(ns, protocol.NoticeTypeSignalRejected)
-			if tc.reached != (len(sent) == 1 && len(rej) == 0) || !tc.reached && (len(rej) != 1 || !strings.Contains(rej[0].Text, "DRIFT_CLOSED")) {
+			if tc.reached != (len(sent) == 1 && len(rej) == 0) || !tc.reached && (len(rej) != 1 || !strings.Contains(rej[0].Text, tc.reason)) {
 				t.Fatalf("sent %v rejected %+v", sent, rej)
 			}
-			if tc.polled != (len(f.polls) > 0) {
-				t.Fatalf("polled %d times", len(f.polls))
+			f.mu.Lock()
+			polled := len(f.polls) > 0
+			f.mu.Unlock()
+			if tc.polled != polled {
+				t.Fatalf("polled: %v", polled)
 			}
 		})
+	}
+}
+
+// A server failing on everything for more than a day (every call INTERNAL_ERROR, then whole requests 500) drops
+// nothing: a request whose every call fails says nothing about any one item, and the head failing alone while the
+// server answers nothing else is an outage too. Sad paths: per-call errors on every item of a batch, the head
+// alone failing with member.me failing too, whole-request 500s.
+func TestLongOutageDropsNothing(t *testing.T) {
+	st := openStore(t)
+	f, srv := newFake(t)
+	notes(t, st, 0, 3)
+	spool(t, st, "sg_v", protocol.SignalKindApprove, "ok")
+	f.set(func() { f.broken = &protocol.RpcError{Code: protocol.CodeInternalError, Message: "down"} })
+	for i := range 30 {
+		at(t, t0.Add(time.Duration(i)*time.Hour))
+		if i == 15 {
+			f.set(func() { f.broken = nil; f.fail = func(int) int { return 500 } })
+		}
+		_, _ = Push(context.Background(), st, client(srv), ob)
+	}
+	if got := spooled(t, st); len(got) != 4 {
+		t.Fatalf("an outage dropped items: left %v", got)
+	}
+	if len(ofType(notices(t, st, "s1"), protocol.NoticeTypeSignalRejected)) != 0 {
+		t.Fatal("told of a drop")
+	}
+	shapes := f.shapes()
+	if shapes[0] != "3" || shapes[1] != "1" {
+		t.Fatalf("shapes %v: after a request where every call failed, the head goes alone", shapes)
+	}
+	// Back: everything goes, in order.
+	f.set(func() { f.fail = nil })
+	at(t, t0.Add(31*time.Hour))
+	n, err := Push(context.Background(), st, client(srv), ob)
+	must(t, err)
+	if n != 4 {
+		t.Fatalf("sent %d", n)
+	}
+}
+
+// One bad item among good ones: it fails while others in its request succeed (its own failure), so it is counted
+// and, past the limit, given up; the items after it go in order. When every call of its first request fails, it
+// is sent alone next, and counted there.
+func TestOneBadItemIsIsolatedAndGivenUp(t *testing.T) {
+	st := openStore(t)
+	f, srv := newFake(t)
+	ids := notes(t, st, 0, 2) // sg_000 good, sg_001 bad
+	spool(t, st, "sg_v", protocol.SignalKindApprove, "ok")
+	notes(t, st, 2, 1)
+	bad := ids[1]
+	all := true
+	f.set(func() {
+		f.callErr = func(id string) *protocol.RpcError {
+			if id == bad || all {
+				return &protocol.RpcError{Code: protocol.CodeInternalError, Message: "boom"}
+			}
+			return nil
+		}
+	})
+	at(t, t0)
+	_, _ = Push(context.Background(), st, client(srv), ob) // both fail: nothing counted, the head marked alone
+	if it := item(t, st, ids[0]); it.Fails != 0 || !it.Alone {
+		t.Fatalf("after a request where every call failed: %+v", it)
+	}
+	f.set(func() { all = false })
+	for i := range GiveUpFails + 1 {
+		at(t, t0.Add(time.Duration(i+1)*3*time.Hour))
+		_, _ = Push(context.Background(), st, client(srv), ob)
+	}
+	shapes := f.shapes()
+	if shapes[1] != "1" {
+		t.Fatalf("shapes %v: the head went alone after the all-failed request", shapes)
+	}
+	if got := spooled(t, st); len(got) != 0 {
+		t.Fatalf("left %v", got)
+	}
+	rej := ofType(notices(t, st, "s1"), protocol.NoticeTypeSignalRejected)
+	if len(rej) != 1 || rej[0].About != bad {
+		t.Fatalf("rejections %+v", rej)
+	}
+	order := strings.Join(f.got(), ",")
+	if !strings.HasSuffix(order, bad+",sg_v,sg_002") {
+		t.Fatalf("order %s", order)
+	}
+}
+
+// A human act is never given up by the client, however long the server fails on it alone: only the person drops it
+// (`teamflow outbox drop`). Its failures are still counted, for the person to see.
+func TestHumanActIsNeverGivenUp(t *testing.T) {
+	st := openStore(t)
+	f, srv := newFake(t)
+	spool(t, st, "sg_v", protocol.SignalKindApprove, "ok")
+	f.set(func() {
+		f.callErr = func(string) *protocol.RpcError {
+			return &protocol.RpcError{Code: protocol.CodeInternalError, Message: "boom"}
+		}
+	})
+	for i := range 3 * GiveUpFails {
+		at(t, t0.Add(time.Duration(i)*4*time.Hour))
+		_, _ = Push(context.Background(), st, client(srv), ob)
+	}
+	if it := item(t, st, "sg_v"); it.Fails != 3*GiveUpFails {
+		t.Fatalf("the verdict: %+v", it)
+	}
+	if len(notices(t, st, "s1")) != 0 {
+		t.Fatal("told of a drop")
 	}
 }

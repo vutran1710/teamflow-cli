@@ -33,19 +33,21 @@ import (
 // drift acts and plain writes answer, sync.poll answers nothing new. It records every outbox call in the order it
 // read them, each request's shape, and the most requests it ever had in flight at once.
 type outboxServer struct {
-	t        *testing.T
-	mu       sync.Mutex
-	down     bool          // answer 503
-	delay    time.Duration // per request
-	callErr  func(id string) *protocol.RpcError
-	block    func(n int)     // runs before outbox request n (1-based) is answered, outside the lock
-	order    []string        // ids (signal, "drift.x dr_", or a write's method) in arrival order
-	shapes   []string        // per outbox request: the batch length, or "alone"
-	results  map[string]bool // signal ids with a stored result
-	auths    []string        // the Authorization of each outbox request
-	inFlight atomic.Int32
-	maxIn    atomic.Int32
-	outboxN  int
+	t          *testing.T
+	mu         sync.Mutex
+	down       bool          // answer 503
+	delay      time.Duration // per request
+	callErr    func(id string) *protocol.RpcError
+	block      func(n int)     // runs before outbox request n (1-based) is answered, outside the lock
+	order      []string        // ids (signal, "drift.x dr_", or a write's method) in arrival order
+	shapes     []string        // per outbox request: the batch length, or "alone"
+	results    map[string]bool // signal ids with a stored result
+	auths      []string        // the Authorization of each outbox request
+	inFlight   atomic.Int32
+	keyRefused bool // key.fetch answers NOT_A_MEMBER
+	keyFetchN  int
+	maxIn      atomic.Int32
+	outboxN    int
 }
 
 func newOutboxServer(t *testing.T) (*outboxServer, *httptest.Server) {
@@ -136,6 +138,11 @@ func (s *outboxServer) serve(w http.ResponseWriter, r *http.Request) {
 		case "sync.poll":
 			out.Result = json.RawMessage(`{"events": [], "cursors": {}, "reset": []}`)
 		case "key.fetch":
+			s.keyFetchN++
+			if s.keyRefused {
+				out.Error = &protocol.RpcError{Code: protocol.CodeRuleFailed, Message: "not a member", Data: map[string]any{"reason": "NOT_A_MEMBER"}}
+				return out
+			}
 			out.Result = json.RawMessage(`{"project": "` + P + `", "key": "tfk_minted", "member": "` + tM1 + `", "org": "og_x", "name": "Pricing"}`)
 		case "member.list":
 			out.Result = json.RawMessage(`{"members": []}`)
@@ -164,6 +171,12 @@ func (s *outboxServer) set(fn func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fn()
+}
+
+func (s *outboxServer) fetches() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.keyFetchN
 }
 
 func (s *outboxServer) got() (order, shapes []string) {
@@ -281,7 +294,8 @@ func TestOfflineVerdictWaitsBehindQueuedSignals(t *testing.T) {
 		t.Fatal("offline")
 	}
 	order, shapes := s.got()
-	if len(order) != 4 || order[3] != q.Item || strings.Join(shapes, ",") != "3,alone" {
+	// The head goes alone first (the offline requests failed whole), then the rest in a batch, then the verdict.
+	if len(order) != 4 || order[3] != q.Item || strings.Join(shapes, ",") != "1,2,alone" {
 		t.Fatalf("order %v shapes %v", order, shapes)
 	}
 	if len(outbox(t, c)) != 0 {
@@ -711,7 +725,7 @@ func TestQueuedVerdictSurvivesLogoutAndLogin(t *testing.T) {
 		t.Fatal("offline")
 	}
 	order, shapes := s.got()
-	if len(order) != 3 || order[2] != q.Item || strings.Join(shapes, ",") != "2,alone" {
+	if len(order) != 3 || order[2] != q.Item || strings.Join(shapes, ",") != "1,1,alone" { // the head alone first
 		t.Fatalf("order %v shapes %v", order, shapes)
 	}
 	s.mu.Lock()
@@ -746,7 +760,7 @@ func TestQueueGoesUnderAReMintedKey(t *testing.T) {
 	s.set(func() { s.down = false })
 	c.Sync(ctx, DefaultTimeout, "")
 	order, shapes := s.got()
-	if strings.Join(order, ",") != strings.Join(append(ids, "drift.dismiss dr_1"), ",") || strings.Join(shapes, ",") != "2,alone" {
+	if strings.Join(order, ",") != strings.Join(append(ids, "drift.dismiss dr_1"), ",") || strings.Join(shapes, ",") != "1,1,alone" {
 		t.Fatalf("order %v shapes %v", order, shapes)
 	}
 }
@@ -860,5 +874,69 @@ func TestOutboxDrop(t *testing.T) {
 	c.Sync(ctx, DefaultTimeout, "")
 	if order, _ := s.got(); strings.Join(order, ",") != ids[0]+","+ids[2] {
 		t.Fatalf("order %v", order)
+	}
+}
+
+// Offline with no key for the project (logged out and in again, a key dropped): a human act and an agent's
+// signals are still recorded (queued), not refused; back online the sync fetches the key and sends them in order.
+// Sad paths: no key and no server, a verdict with no stored member.
+func TestOfflineActWithNoKeyIsQueued(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	if err := c.St.DropProjectKey(mustBinding(t, c), P); err != nil {
+		t.Fatal(err)
+	}
+	s.set(func() { s.down = true })
+	answers, err := c.Emit(ctx, "s1", []map[string]any{note(0)})
+	if err != nil {
+		t.Fatalf("emit with no key, offline: %v", err)
+	}
+	if q, _ := answers[0].Get("queued"); q != true {
+		t.Fatalf("emit answer %v", answers[0])
+	}
+	_, err = c.Verdict(ctx, "s1", tS1, protocol.SignalKindApprove, "")
+	var q *Queued
+	if !errors.As(err, &q) || q.Ahead != 1 || q.Hard() {
+		t.Fatalf("verdict with no key, offline: %v", err)
+	}
+	_, err = c.DriftAct(ctx, P, "s1", "drift.dismiss", "dr_1", "not a drift", nil)
+	if !errors.As(err, &q) || q.Ahead != 2 {
+		t.Fatalf("drift act with no key, offline: %v", err)
+	}
+	s.set(func() { s.down = false })
+	c.Sync(ctx, DefaultTimeout, "")
+	order, shapes := s.got()
+	if len(order) != 3 || order[2] != "drift.dismiss dr_1" || strings.Join(shapes, ",") != "1,alone,alone" {
+		t.Fatalf("order %v shapes %v", order, shapes)
+	}
+}
+
+// Items wait for a project whose membership the server refuses (key.fetch: NOT_A_MEMBER): the key is not asked for
+// again on every command or hook, only once the wait (KeyRetryAfter) is over.
+func TestKeyFetchForARefusedMembershipBacksOff(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	queueNotes(t, c, 0, 1)
+	if err := c.St.DropProjectKey(mustBinding(t, c), P); err != nil {
+		t.Fatal(err)
+	}
+	s.set(func() { s.keyRefused = true })
+	now := time.Now()
+	c.Now = func() time.Time { return now }
+	for range 5 {
+		c.Sync(ctx, DefaultTimeout, "")
+	}
+	if n := s.fetches(); n != 1 {
+		t.Fatalf("key.fetch %d times within the wait", n)
+	}
+	now = now.Add(KeyRetryAfter + time.Minute)
+	c.Sync(ctx, DefaultTimeout, "")
+	if n := s.fetches(); n != 2 {
+		t.Fatalf("key.fetch %d times after the wait", n)
+	}
+	if len(outbox(t, c)) != 1 {
+		t.Fatal("the item was lost")
 	}
 }

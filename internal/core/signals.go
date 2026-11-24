@@ -47,7 +47,7 @@ func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.Si
 	if !ok {
 		return r, fmt.Errorf("no signal %s in your projects", target)
 	}
-	me, err := c.member(ctx, st.Signal.Project)
+	me, err := c.member(ctx, st.Signal.Project, sid)
 	if err != nil {
 		return r, err
 	}
@@ -90,16 +90,25 @@ func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.Si
 
 // member is this machine's member on the project: the one its project key was fetched for (asked of the server
 // only when the store does not say), so a verdict can be recorded offline.
-func (c *Core) member(ctx context.Context, pid string) (string, error) {
+func (c *Core) member(ctx context.Context, pid, sid string) (string, error) {
 	b, err := c.binding()
 	if err != nil {
 		return "", err
 	}
-	if _, err := c.ProjectKey(ctx, pid); err != nil {
-		return "", err
-	}
-	if _, m, _, _, ok := c.St.ProjectKey(b, pid); ok && m != "" {
+	_, kerr := c.ProjectKey(ctx, pid)
+	if _, m, _, _, ok := c.St.ProjectKey(b, pid); kerr == nil && ok && m != "" {
 		return m, nil
+	}
+	if kerr != nil {
+		if !errors.Is(kerr, api.ErrOffline) {
+			return "", kerr
+		}
+		// Offline with no key: the session's member, else none known (no earlier verdict is superseded; the
+		// server refuses it if one should have been, and the session is told).
+		if sess, ok, _ := c.St.Session(sid); ok && sess.Project == pid {
+			return sess.Member, nil
+		}
+		return "", nil
 	}
 	a, err := c.API(ctx, pid, DefaultTimeout)
 	if err != nil {
