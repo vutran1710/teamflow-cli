@@ -141,6 +141,9 @@ func ownerOnly(path string) error {
 	return nil
 }
 
+// Dir is the folder the store lives in.
+func (s *Store) Dir() string { return filepath.Dir(s.path) }
+
 // Close closes the store. Reads after it answer empty; writes fail.
 func (s *Store) Close() error {
 	if s.in != nil {

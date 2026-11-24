@@ -102,6 +102,8 @@ type fake struct {
 	polls    []protocol.SyncPoll
 	fail     func(n int) int  // HTTP status to answer request n (1-based) with, 0: answer as usual
 	lose     func(n int) bool // handle request n, then drop the connection (the answer is lost)
+	onReq    func(n int)      // runs before request n is handled (outside the lock)
+	order    []string         // every call's signal or drift id, in the order the server read them (retries too)
 	requests int
 }
 
@@ -115,9 +117,15 @@ func newFake(t *testing.T) (*fake, *httptest.Server) {
 func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.requests++
 	n := f.requests
+	hook := f.onReq
+	f.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.bodies = append(f.bodies, json.RawMessage(body))
 	if f.fail != nil {
 		if code := f.fail(n); code != 0 {
@@ -137,6 +145,7 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal(req.Params, &raw); err != nil {
 				f.t.Errorf("emit params: %v", err)
 			}
+			f.order = append(f.order, raw.Signal.ID)
 			if f.callErr != nil {
 				if e := f.callErr(raw.Signal.ID); e != nil {
 					out.Error = e
@@ -158,6 +167,21 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 			b, _ := json.Marshal(res)
 			f.results[raw.Signal.ID] = b
 			out.Result = b
+		case "drift.resolve", "drift.dismiss":
+			var d struct {
+				Drift string `json:"drift"`
+			}
+			if err := json.Unmarshal(req.Params, &d); err != nil {
+				f.t.Errorf("drift params: %v", err)
+			}
+			f.order = append(f.order, req.Method+" "+d.Drift)
+			if f.callErr != nil {
+				if e := f.callErr(d.Drift); e != nil {
+					out.Error = e
+					return out
+				}
+			}
+			out.Result = json.RawMessage(`{"drifts": []}`)
 		case "sync.poll":
 			var p protocol.SyncPoll
 			if err := json.Unmarshal(req.Params, &p); err != nil {
