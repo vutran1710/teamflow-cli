@@ -73,7 +73,7 @@ func TestMidTurnSyncsAtMostOncePerWindow(t *testing.T) {
 		t.Fatal("never synced again after the window")
 	}
 	// Another project's window is its own: the claim is per project.
-	if ok, err := c.St.ClaimHookSync("pj_other", *now, HookSyncEvery); err != nil || !ok {
+	if ok, err := c.St.ClaimHookSync("pj_other", *now, HookSyncEvery, HookOfflineFor); err != nil || !ok {
 		t.Fatalf("other project: %v %v", ok, err)
 	}
 }

@@ -1086,3 +1086,58 @@ func TestClaimNoticesHandsEachOutOnce(t *testing.T) {
 		}
 	}
 }
+
+// ClaimHookSync: one claim per window; an offline mark in force refuses; a clock set back never keeps the hook off
+// the network (a last sync in the future, an offline mark further ahead than offlineFor, are stale).
+// Sad paths: a claim inside the window; an offline mark in force; the clock set back after each.
+func TestClaimHookSyncClockSetBack(t *testing.T) {
+	st := open(t, t.TempDir())
+	every, off := 10*time.Second, 30*time.Second
+	claim := func(at time.Time) bool {
+		t.Helper()
+		ok, err := st.ClaimHookSync("pj_a", at, every, off)
+		must(t, err)
+		return ok
+	}
+	if !claim(t0) || claim(t0.Add(5*time.Second)) {
+		t.Fatal("not one claim per window")
+	}
+	if !claim(t0.Add(-time.Hour)) {
+		t.Fatal("a last sync in the future refused the claim")
+	}
+	must(t, st.SetHookOffline("pj_a", t0.Add(off)))
+	if claim(t0.Add(15 * time.Second)) {
+		t.Fatal("claimed while marked offline")
+	}
+	if !claim(t0.Add(-time.Hour + 15*time.Second)) {
+		t.Fatal("an offline mark far ahead refused the claim")
+	}
+}
+
+// A transaction's Store view: reads see the transaction's own writes, its Tx runs in the same transaction (no
+// second BEGIN, which would wait on itself), its Close leaves the store open; a failure rolls the whole back.
+// Sad paths: a nested Tx; Close on the view; an error inside the nested Tx.
+func TestTxStoreView(t *testing.T) {
+	st := open(t, t.TempDir())
+	must(t, st.Tx(func(tx *Tx) error {
+		v := tx.Store()
+		must(t, v.SetLiveAt("pj_a", t0))
+		if got := v.LiveAt("pj_a"); !got.Equal(t0) {
+			t.Fatalf("the view does not see its own write: %v", got)
+		}
+		must(t, v.Tx(func(in *Tx) error { return in.SetLiveAt("pj_b", t0) }))
+		return v.Close()
+	}))
+	if st.LiveAt("pj_b").IsZero() {
+		t.Fatal("the nested write was lost")
+	}
+	boom := errors.New("boom")
+	err := st.Tx(func(tx *Tx) error {
+		v := tx.Store()
+		must(t, v.SetLiveAt("pj_c", t0))
+		return v.Tx(func(*Tx) error { return boom })
+	})
+	if !errors.Is(err, boom) || !st.LiveAt("pj_c").IsZero() {
+		t.Fatalf("not rolled back: %v", err)
+	}
+}

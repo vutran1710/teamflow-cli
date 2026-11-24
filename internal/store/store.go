@@ -84,10 +84,16 @@ type Store struct {
 	ops
 	db   *sql.DB
 	path string
+	in   *Tx // a view of a transaction (Tx.Store): every accessor runs in it
 }
 
 // Tx is a write transaction (BEGIN IMMEDIATE): every accessor of Store, all committed together.
 type Tx struct{ ops }
+
+// Store is a view of the transaction as a Store, for code written against a Store: every read and write runs in
+// the transaction (one snapshot, no other writer committing meanwhile), its Tx runs fn in this same transaction,
+// and its Close does nothing.
+func (t *Tx) Store() *Store { return &Store{ops: t.ops, in: t} }
 
 // Open opens (creating and migrating when needed) the store in dir: dir/store.db, WAL, busy_timeout 250 ms,
 // mode 0600. The folder is created 0700 when missing; guarding an existing one is home.Ensure's job.
@@ -136,10 +142,18 @@ func ownerOnly(path string) error {
 }
 
 // Close closes the store. Reads after it answer empty; writes fail.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s.in != nil {
+		return nil
+	}
+	return s.db.Close()
+}
 
 // Tx runs fn in one write transaction: committed when fn returns nil, rolled back on an error or a panic.
 func (s *Store) Tx(fn func(*Tx) error) (err error) {
+	if s.in != nil {
+		return fn(s.in)
+	}
 	sqlTx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return wrap(err)
@@ -975,13 +989,17 @@ func (o ops) SetLiveAt(project string, t time.Time) error {
 }
 
 // ClaimHookSync takes a hook's turn to sync the project over the network: true at most once per every (racing
-// hooks: one wins), and never while the project is marked offline (SetHookOffline).
-func (o ops) ClaimHookSync(project string, now time.Time, every time.Duration) (bool, error) {
-	if until := o.meta("hook_offline_until:" + project); until != "" && parseTS(until).After(now) {
-		return false, nil
+// hooks: one wins), and never while the project is marked offline (SetHookOffline) for at most offlineFor. A clock
+// set back never keeps the hook off the network: a last sync later than now, or an offline mark further ahead than
+// offlineFor, is stale.
+func (o ops) ClaimHookSync(project string, now time.Time, every, offlineFor time.Duration) (bool, error) {
+	if until := o.meta("hook_offline_until:" + project); until != "" {
+		if u := parseTS(until); u.After(now) && !u.After(now.Add(offlineFor)) {
+			return false, nil
+		}
 	}
 	res, err := o.exec("INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value "+
-		"WHERE meta.value <= ?", "hook_sync_at:"+project, ts(now), ts(now.Add(-every)))
+		"WHERE meta.value <= ? OR meta.value > ?", "hook_sync_at:"+project, ts(now), ts(now.Add(-every)), ts(now))
 	if err != nil {
 		return false, wrap(err)
 	}

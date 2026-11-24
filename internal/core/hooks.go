@@ -162,8 +162,12 @@ func (c *Core) MidTurn(ctx context.Context, sid string) string {
 	}
 	now := c.Now()
 	if live := c.St.LiveAt(sess.Project); live.IsZero() || now.Sub(live) > LiveFresh {
-		if mine, err := c.St.ClaimHookSync(sess.Project, now, HookSyncEvery); err == nil && mine {
-			if !c.Sync(ctx, MidTurnTimeout, sess.Project) {
+		if mine, err := c.St.ClaimHookSync(sess.Project, now, HookSyncEvery, HookOfflineFor); err == nil && mine {
+			// The whole sync (push, every page of the pull, names) is bounded, not each request.
+			sctx, cancel := context.WithTimeout(ctx, MidTurnTimeout)
+			online := c.Sync(sctx, MidTurnTimeout, sess.Project)
+			cancel()
+			if !online {
 				if err := c.St.SetHookOffline(sess.Project, now.Add(HookOfflineFor)); err != nil {
 					c.logHook("marking the project offline", err)
 				}
@@ -346,10 +350,33 @@ func (c *Core) fullContext(sess store.Session, budget int) (string, int64, int64
 
 // ------------------------------------------------------------------ what is new
 
+// deltaRead runs after Delta's reads, before its bookmark (a test's hook: a sync committing in between).
+var deltaRead = func() {}
+
 // Delta is what the session has not seen: notices (approval requests as the approval queue's text), a new plan
 // once, Deliverables news, and signals new or changed since its last prompt; "" when nothing. The bookmark moves
-// to what it was given; notices are claimed, and given back if the bookmark could not be kept.
+// to what it was given.
+//
+// Every read, the claims and the bookmark are one transaction (BEGIN IMMEDIATE): no sync commits between what the
+// session is shown and where its bookmark moves, so a teammate's signal is never skipped; on any failure nothing
+// is claimed or moved, and the next prompt tells it all.
 func (c *Core) Delta(sid string) (string, error) {
+	var text string
+	err := c.St.Tx(func(tx *store.Tx) error {
+		in := *c
+		in.St = tx.Store()
+		var err error
+		text, err = in.delta(sid)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+// delta is Delta's body, run with c.St a view of Delta's transaction.
+func (c *Core) delta(sid string) (string, error) {
 	sess, ok, err := c.St.Session(sid)
 	if err != nil || !ok || sess.Project == "" {
 		return "", err
@@ -425,11 +452,10 @@ func (c *Core) Delta(sid string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	deltaRead()
 
-	// The claims, the approval queue's read and the bookmark are one transaction: on any failure nothing is
-	// claimed or moved, and the next prompt tells it all.
 	var text string
-	err = c.St.Tx(func(tx *store.Tx) error {
+	err = c.St.Tx(func(tx *store.Tx) error { // Delta's own transaction (c.St is its view)
 		told, err := tx.ClaimNotices(sid, false)
 		if err != nil {
 			return err
