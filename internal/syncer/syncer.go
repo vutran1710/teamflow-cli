@@ -92,8 +92,9 @@ const maxRounds = 20
 // alone, or other calls in its request were answered (an unreadable answer inside a batch never counts). When a
 // whole request fails, or every call in it, nothing counts and the head goes alone next time. A signal with
 // GiveUpFails counted failures spanning at least GiveUpAfter is dropped (its session told) only when the item
-// right behind it is then answered in the same flush: the server works, the signal is the problem. If that item
-// fails the same way (an outage of one part of the server), both stay; with nothing behind it, it is never
+// right behind it is then freshly accepted in the same flush (never sent before: not the stored answer to an
+// earlier send): the server stores again, the signal is the problem. If that item is refused, answered from an
+// earlier send, or fails the same way (a store outage), the head stays; with nothing behind it, it is never
 // dropped. A human act is never dropped this way (only by the person: teamflow outbox drop). An unreachable
 // server (no connection, a timeout, 502, 503, 504, 429), UPGRADE_REQUIRED and a key no longer a member's never
 // count: waiting loses nothing.
@@ -195,7 +196,7 @@ func flushPass(ctx context.Context, st *store.Store, c *api.Client, ob store.Out
 			for i, r := range res {
 				own = own || answered(chunk[i], r)
 			}
-			candidate, stop = settle(st, chunk, res, mine, f, own)
+			candidate, stop = settle(st, chunk, res, mine, f, own, nil)
 			if stop != nil && !own { // which call the server failed on is not known: the head goes alone next
 				if err := st.SetAlone(chunk[0].item.Signal, true); err != nil {
 					stop = err
@@ -212,7 +213,7 @@ func flushPass(ctx context.Context, st *store.Store, c *api.Client, ob store.Out
 			if err := sendRun(); err != nil {
 				return err
 			}
-			if _, err := settle(st, []pending{p}, []api.Result{{Err: errUnreadable}}, mine, f, true); err != nil {
+			if _, err := settle(st, []pending{p}, []api.Result{{Err: errUnreadable}}, mine, f, true, nil); err != nil {
 				return err
 			}
 			continue
@@ -235,7 +236,7 @@ func flushPass(ctx context.Context, st *store.Store, c *api.Client, ob store.Out
 		if err != nil {
 			return err
 		}
-		if _, err := settle(st, []pending{p}, []api.Result{res}, mine, f, true); err != nil {
+		if _, err := settle(st, []pending{p}, []api.Result{res}, mine, f, true, nil); err != nil {
 			return err // a human act is never a give-up candidate
 		}
 	}
@@ -269,9 +270,10 @@ func answered(p pending, r api.Result) bool {
 }
 
 // confirmGiveUp decides on a head past the give-up limit (cd, kept with keep): the item right behind it is sent
-// alone; answered (accepted, or its own refusal), the server works and the head is the problem: it is dropped
-// and the flush goes on. Failing the same way, it is the server: both stay and the flush stops. With nothing
-// behind it, the head is never dropped.
+// alone. Freshly accepted (never sent before), the server stores and the head is the problem: the head is dropped
+// in the same transaction as that answer, and the pass starts over. Refused, or answered with what the server
+// stored for an earlier send, it leaves the outbox but proves nothing: the head stays. Failing the same way, both
+// stay. With nothing behind it, the head is never dropped.
 func confirmGiveUp(ctx context.Context, st *store.Store, c *api.Client, ob store.Outbox, cd pending, keep error,
 	mine map[string]bool, f *Flushed) error {
 	items, err := st.Spooled(ob)
@@ -304,34 +306,37 @@ func confirmGiveUp(ctx context.Context, st *store.Store, c *api.Client, ob store
 	if !answered(nx, res) {
 		return keep
 	}
-	if _, err := settle(st, []pending{nx}, []api.Result{res}, mine, f, false); err != nil {
-		return err
-	}
-	return giveUp(st, cd, keep, mine, f)
-}
-
-// giveUp drops a head the server keeps failing on, telling its session (or answering the caller's own).
-func giveUp(st *store.Store, p pending, last error, mine map[string]bool, f *Flushed) error {
-	t := now()
-	why := fmt.Errorf("%w after %d tries over %s: %v", ErrGaveUp, p.item.Fails, t.Sub(p.item.FirstFail).Round(time.Hour), last)
-	err := st.Tx(func(tx *store.Tx) error {
-		if err := tx.SpoolDone(p.item.Signal); err != nil {
+	if !fresh(nx, res) {
+		// A refusal, or the stored answer to an earlier send: no proof the server stores again. The item behind
+		// leaves (its session told); the head stays, and the next item is tried next time.
+		if _, err := settle(st, []pending{nx}, []api.Result{res}, mine, f, false, nil); err != nil {
 			return err
 		}
-		if mine[p.item.Signal] {
-			return nil
-		}
-		typ, about, text := noticeOf(p, protocol.SignalResult{}, why)
-		return tx.Notice(p.item.Session, typ, about, text, t)
-	})
-	if err != nil {
-		return fmt.Errorf("record the drop: %w", err)
+		return keep
 	}
-	f.Sent++
-	if mine[p.item.Signal] {
-		f.Answers[p.item.Signal] = Answer{Err: why}
+	// The item behind was freshly stored: the head is the problem. Its answer and the head's drop are one
+	// transaction.
+	_, err = settle(st, []pending{nx}, []api.Result{res}, mine, f, false, &giveUpOf{p: cd, last: keep})
+	return err
+}
+
+// giveUpOf is a head to drop, with the failure that kept it last.
+type giveUpOf struct {
+	p    pending
+	last error
+}
+
+// fresh says whether r proves the server stores now: p was never sent before (no earlier stored answer to come
+// back) and it was accepted (a signal), or done (a drift act). A refusal or a dedup proves nothing.
+func fresh(p pending, r api.Result) bool {
+	if p.item.Tries > 0 || r.Err != nil {
+		return false
 	}
-	return nil
+	if p.item.Method != "signal.emit" {
+		return true
+	}
+	var res protocol.SignalResult
+	return json.Unmarshal(r.Result, &res) == nil && res.Accepted
 }
 
 func reason(err error) protocol.RejectReason {
@@ -390,11 +395,14 @@ var (
 // settle records the answers to ps in one transaction: each answered item leaves the outbox, and its session gets
 // a notice (the caller's own get an Answer instead). A transient failure keeps the item, counted against it when
 // it is the server failing on that item (own: it went alone, or others in its request were answered; an
-// unreadable answer inside a batch never counts). A signal past GiveUpFails over GiveUpAfter is dropped only once
-// an item behind it is answered: here when one behind it in the same request was; when it is the last of its
-// request it comes back as the candidate (see confirmGiveUp). A human act is never dropped. It returns the
-// candidate, and the first error that kept an item (the flush stops), or the store's error.
-func settle(st *store.Store, ps []pending, results []api.Result, mine map[string]bool, f *Flushed, own bool) (*pending, error) {
+// unreadable answer inside a batch never counts). The outbox's head (no earlier item of its request kept), a
+// signal past GiveUpFails over GiveUpAfter, is dropped only once an item behind it is freshly accepted (see
+// fresh): here when one behind it in the same request was; when it is the last of its request it comes back as
+// the candidate (see confirmGiveUp). A human act is never dropped. drop, when given, is a head dropped in the
+// same transaction. It returns the candidate, and the first error that kept an item (the flush stops), or the
+// store's error.
+func settle(st *store.Store, ps []pending, results []api.Result, mine map[string]bool, f *Flushed, own bool,
+	drop *giveUpOf) (*pending, error) {
 	var keep error
 	var cand *pending
 	done := 0
@@ -412,6 +420,7 @@ func settle(st *store.Store, ps []pending, results []api.Result, mine map[string
 					callErr = fmt.Errorf("%w: %v", errUnreadableAnswer, err)
 				}
 			}
+			head := keep == nil // no earlier item of this request was kept: this one is the outbox's head
 			if callErr != nil && !refused(callErr) {
 				if !own || !counts(callErr) || (len(ps) > 1 && errors.Is(callErr, errUnreadableAnswer)) {
 					keep = cmpErr(keep, callErr)
@@ -422,10 +431,10 @@ func settle(st *store.Store, ps []pending, results []api.Result, mine map[string
 					return err
 				}
 				p.item = it
-				over := !p.human && it.Fails >= GiveUpFails && t.Sub(it.FirstFail) >= GiveUpAfter
-				behind := false
+				over := head && !p.human && it.Fails >= GiveUpFails && t.Sub(it.FirstFail) >= GiveUpAfter
+				behind := false // proof the server stores now: an item behind it freshly accepted
 				for j := i + 1; j < len(ps); j++ {
-					behind = behind || answered(ps[j], results[j])
+					behind = behind || fresh(ps[j], results[j])
 				}
 				if !over || !behind {
 					if over && i == len(ps)-1 && cand == nil {
@@ -448,6 +457,22 @@ func settle(st *store.Store, ps []pending, results []api.Result, mine map[string
 			typ, about, text := noticeOf(p, res, callErr)
 			if err := tx.Notice(p.item.Session, typ, about, text, t); err != nil {
 				return err
+			}
+		}
+		if drop != nil { // the head given up on, with the answer that proved it
+			p := drop.p
+			why := fmt.Errorf("%w after %d tries over %s: %v", ErrGaveUp, p.item.Fails, t.Sub(p.item.FirstFail).Round(time.Hour), drop.last)
+			if err := tx.SpoolDone(p.item.Signal); err != nil {
+				return err
+			}
+			done++
+			if mine[p.item.Signal] {
+				answers[p.item.Signal] = Answer{Err: why}
+			} else {
+				typ, about, text := noticeOf(p, protocol.SignalResult{}, why)
+				if err := tx.Notice(p.item.Session, typ, about, text, t); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

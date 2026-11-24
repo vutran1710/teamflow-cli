@@ -745,3 +745,64 @@ func TestStoreOnlyOutageDropsNothing(t *testing.T) {
 		})
 	}
 }
+
+// pastLimit makes id a signal the server has failed on GiveUpFails times since t0, marked to go alone.
+func pastLimit(t *testing.T, st *store.Store, id string) {
+	t.Helper()
+	for i := range GiveUpFails {
+		_, err := st.Failed(id, "boom", t0.Add(time.Duration(i)*3*time.Hour))
+		must(t, err)
+	}
+	must(t, st.SetAlone(id, true))
+}
+
+// A store-write outage: the server still answers reads, so the item behind a head past the limit may come back
+// refused (TOPIC_CLOSED) or as the stored answer to an earlier send (a dedup). Neither proves the server stores
+// again: the item behind leaves the outbox (its session told), the head stays, and the next item is tried next
+// time; with nothing behind, the head stays. Sad paths: a refusal behind (alone and inside the head's request), a
+// dedup behind, nothing behind.
+func TestStoreWriteOutageKeepsTheHead(t *testing.T) {
+	for _, alone := range []bool{true, false} {
+		t.Run(fmt.Sprint("head alone ", alone), func(t *testing.T) {
+			st := openStore(t)
+			f, srv := newFake(t)
+			spool(t, st, S1, protocol.SignalKindDecision, "head")
+			spool(t, st, S2, protocol.SignalKindNote, "refused behind")
+			spool(t, st, S3, protocol.SignalKindNote, "stored before")
+			pastLimit(t, st, S1)
+			if !alone {
+				must(t, st.SetAlone(S1, false))
+			}
+			must(t, st.Tried([]string{S3})) // sent before, its answer lost: the server holds it
+			f.set(func() {
+				f.results[S3] = json.RawMessage(`{"signal": "` + S3 + `", "accepted": true, "message": "", "state": "IN_FORCE"}`)
+				f.callErr = func(id string) *protocol.RpcError {
+					switch id {
+					case S1:
+						return &protocol.RpcError{Code: protocol.CodeInternalError, Message: "D1 write failed"}
+					case S2:
+						return &protocol.RpcError{Code: protocol.CodeRuleFailed, Message: "the topic is closed",
+							Data: map[string]any{"reason": "TOPIC_CLOSED"}}
+					}
+					return nil
+				}
+			})
+			for i := range 4 {
+				at(t, t0.Add(time.Duration(30+i)*time.Hour))
+				_, _ = Push(context.Background(), st, client(srv), ob)
+			}
+			if got := spooled(t, st); strings.Join(got, ",") != S1 {
+				t.Fatalf("left %v: the head must stay, the items behind leave", got)
+			}
+			ns := notices(t, st, "s1")
+			for _, n := range ns {
+				if n.About == S1 {
+					t.Fatalf("the head was given up: %+v", n)
+				}
+			}
+			if len(ofType(ns, protocol.NoticeTypeSignalRejected)) != 1 || len(ofTypeAbout(ns, protocol.NoticeTypeSignalSent)) != 1 {
+				t.Fatalf("notices %+v", ns)
+			}
+		})
+	}
+}
