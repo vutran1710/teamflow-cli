@@ -160,21 +160,61 @@ func (c *Core) MidTurn(ctx context.Context, sid string) string {
 	if err != nil || !ok || sess.Project == "" || !c.SignedIn() {
 		return ""
 	}
+	c.midTurnSync(ctx, sess.Project)
+	return c.raiseNew(sid)
+}
+
+// midTurnSync syncs the project for a hook inside the agent's turn: not when the background sync is live, at most
+// once per HookSyncEvery, the whole sync bounded by MidTurnTimeout, and not at all for HookOfflineFor after that
+// failed.
+func (c *Core) midTurnSync(ctx context.Context, project string) {
 	now := c.Now()
-	if live := c.St.LiveAt(sess.Project); live.IsZero() || now.Sub(live) > LiveFresh {
-		if mine, err := c.St.ClaimHookSync(sess.Project, now, HookSyncEvery, HookOfflineFor); err == nil && mine {
-			// The whole sync (push, every page of the pull, names) is bounded, not each request.
-			sctx, cancel := context.WithTimeout(ctx, MidTurnTimeout)
-			online := c.Sync(sctx, MidTurnTimeout, sess.Project)
-			cancel()
-			if !online {
-				if err := c.St.SetHookOffline(sess.Project, now.Add(HookOfflineFor)); err != nil {
-					c.logHook("marking the project offline", err)
-				}
-			}
+	if live := c.St.LiveAt(project); !live.IsZero() && now.Sub(live) <= LiveFresh && !live.After(now) {
+		return
+	}
+	mine, err := c.St.ClaimHookSync(project, now, HookSyncEvery, HookOfflineFor)
+	if err != nil || !mine {
+		return
+	}
+	// The whole sync (push, every page of the pull, names) is bounded, not each request.
+	sctx, cancel := context.WithTimeout(ctx, MidTurnTimeout)
+	online := c.Sync(sctx, MidTurnTimeout, project)
+	cancel()
+	if !online {
+		if err := c.St.SetHookOffline(project, now.Add(HookOfflineFor)); err != nil {
+			c.logHook("marking the project offline", err)
 		}
 	}
-	return c.raiseNew(sid)
+}
+
+// AfterTool is the hook after a tool, for agents whose prompt hook cannot add context (Copilot CLI, Cursor CLI):
+// what the session has not seen (Delta, or the full context the first time), synced as MidTurn syncs. "" for an
+// unshared or unknown session, signed out, or a project not synced yet.
+func (c *Core) AfterTool(ctx context.Context, sid string) (string, error) {
+	sess, ok, err := c.St.Session(sid)
+	if err != nil || !ok || sess.Project == "" || !c.SignedIn() {
+		return "", err
+	}
+	c.midTurnSync(ctx, sess.Project)
+	if _, ok, err := c.St.LatestState(sess.Project); err != nil || !ok {
+		return "", err
+	}
+	if sess.LastSeq == 0 && sess.StateVersion == 0 {
+		return c.full(sid, true)
+	}
+	return c.Delta(sid)
+}
+
+// BeforePrompt is the prompt hook of agents that cannot add context there (Copilot CLI, Cursor CLI): the session
+// recorded against its agent process, and its project synced, so the next hook that can speak (after a tool, the
+// turn's end) and the MCP tools tell what is new. Nothing is claimed here: what is claimed must be told.
+func (c *Core) BeforePrompt(ctx context.Context, sid, agent string, pid int, cwd string) error {
+	sess, err := c.St.UpsertSession(sid, agent, pid, cwd, c.Now())
+	if err != nil || sess.Project == "" || !c.SignedIn() {
+		return err
+	}
+	c.Sync(ctx, HookTimeout, sess.Project)
+	return nil
 }
 
 // logHook notes a trouble the agent is not told about in hook.log (0600) in the Teamflow home; never fails.
@@ -197,9 +237,13 @@ func (c *Core) Full(ctx context.Context, sid string) (string, error) {
 	if err != nil || !ok || sess.Project == "" {
 		return "", err
 	}
-	online := c.Sync(ctx, HookTimeout, sess.Project)
-	sess, _, err = c.St.Session(sid)
-	if err != nil {
+	return c.full(sid, c.Sync(ctx, HookTimeout, sess.Project))
+}
+
+// full is Full after its sync (online: the sync reached the server).
+func (c *Core) full(sid string, online bool) (string, error) {
+	sess, ok, err := c.St.Session(sid)
+	if err != nil || !ok || sess.Project == "" {
 		return "", err
 	}
 	if _, ok, err := c.St.LatestState(sess.Project); err != nil || !ok {
