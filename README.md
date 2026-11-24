@@ -151,7 +151,7 @@ What goes to that server:
 - **Keeping up to date:** your position (cursor) in each project's event log, to fetch what changed. The background
   sync asks for a short-lived live ticket (`live.ticket`, with the project key in the `Authorization` header), opens
   `wss://<server>/live?org=<id>&project=<id>` (ids only: no key or ticket in the URL; the socket carries no
-  `Authorization`), sends the ticket and its cursor as its first message, then `ping` every 30 seconds.
+  `Authorization`), sends the ticket and its cursor as its first message, then `ping` every 10 seconds.
 
 What stays on your machine:
 
@@ -173,16 +173,20 @@ Teamflow home. `sync` is a setup command: an agent never runs it without your sa
   written into the local copy as it commits, with its cursor, in one transaction, and turned into notices: an
   approval request reaches your session at its next step within seconds. An event already applied (a command's
   pull brought it first, or it is sent again) is not applied twice; gaps in the event numbers are normal.
-- **Freshness.** While a project's socket is live (heard within 15 seconds), hooks and commands do not pull it over
-  the network; when it is not, they pull as before (`HOOK_TIMEOUT`, 4 s).
-- **Reconnecting.** Once live it pings every 30 seconds; nothing heard within 10 seconds of a ping means the socket
-  is dead, and a new one opens at once with a fresh ticket from the cursor. A failed connect waits 1, 2, 3, 5, 8,
+- **Freshness.** While a project's socket is live (something heard from it, a pong or an event, within 15 seconds),
+  hooks and commands do not pull it over the network; when it is not, they pull as before (`HOOK_TIMEOUT`, 4 s).
+  Only what is heard moves that time, and it is cleared the moment a socket ends, so a socket that stops answering
+  is never trusted longer than 15 seconds.
+- **Reconnecting.** Once live it pings every 10 seconds (the server answers without waking); nothing heard within 5
+  seconds of a ping means the socket is dead, and a new one opens at once with a fresh ticket from the cursor. A failed connect waits 1, 2, 3, 5, 8,
   13 seconds; after 3 in a row (WebSockets blocked) it polls `sync.poll` (wait 25 s) and tries the socket again
-  every 60 seconds. The server closing with `TOO_SLOW` reconnects at once; `REPLACED` (a newer socket of yours on
+  every 60 seconds. A server with live sync off refuses the ticket (`use sync.poll`): that is a failed connect, so
+  it polls, and keeps the key (only a refusal of `sync.poll` itself, or `NOT_A_MEMBER`, drops it). The server closing with `TOO_SLOW` reconnects at once; `REPLACED` (a newer socket of yours on
   the project) stops that project's socket for good; `NOT_A_MEMBER` drops the project's key and its socket stays
   closed; a reset (a restored server) drops the project's local copy and fetches it again from the start.
 - **The outbox.** It sends what waits in the outbox through the same sync, under the same sender lock as commands
-  and hooks, so it never sends beside them; a stuck outbox is tried again after a growing wait.
+  and hooks, so it never sends beside them; an outbox it left items in is tried again after a wait (growing
+  while nothing moves), which also gives a waiting command its turn.
 - **Its log** names projects and reasons, never a ticket or a key (a server's message naming one is masked).
 
 ## How signals are sent
