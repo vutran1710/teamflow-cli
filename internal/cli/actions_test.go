@@ -1,21 +1,15 @@
 package cli
 
 // The commands for every action the web app has (no web-only actions): drift resolve|dismiss, deliverables
-// archive|delete|history, project title|remove-member|plan, org title, profile (and its avatar), tasks; and
-// `teamflow mcp`, the MCP server over stdio. Goldens are picked by what they hold, never by file number.
+// archive|delete|history, project title|remove-member|plan, org title, profile (and its avatar), tasks. Goldens are
+// picked by what they hold, never by file number.
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"testing"
-	"time"
 )
 
 // golden is the answer a selector names (see goldenPath).
@@ -283,74 +277,4 @@ func TestTasks(t *testing.T) {
 	r = m.run("", "tasks", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "NOT_A_MEMBER")
-}
-
-// ------------------------------------------------------------------ teamflow mcp
-
-func TestMCPServesOverStdio(t *testing.T) {
-	newMachine(t, true)
-	inR, inW := io.Pipe()
-	out := &lockedBuffer{}
-	var errb bytes.Buffer
-	code := make(chan int, 1)
-	go func() { code <- Main([]string{"mcp"}, inR, out, &errb) }()
-	for _, line := range []string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"agent","version":"1"}}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
-	} {
-		if _, err := io.WriteString(inW, line+"\n"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for strings.Count(out.String(), "\n") < 2 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	inW.Close() // the agent closes the pipe: the server ends cleanly
-	select {
-	case c := <-code:
-		if c != 0 {
-			t.Fatalf("exit %d, stderr %q", c, errb.String())
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("teamflow mcp did not end when its stdin closed")
-	}
-	sc := bufio.NewScanner(strings.NewReader(out.String()))
-	sc.Buffer(make([]byte, 1<<20), 1<<22)
-	var lines []map[string]any
-	for sc.Scan() {
-		var l map[string]any
-		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
-			t.Fatalf("not a JSON-RPC line on stdout: %q", sc.Text())
-		}
-		lines = append(lines, l)
-	}
-	if len(lines) != 2 {
-		t.Fatalf("answers %v (stderr %q)", lines, errb.String())
-	}
-	init := lines[0]["result"].(map[string]any)
-	if init["serverInfo"].(map[string]any)["name"] != "teamflow" || !strings.HasPrefix(init["instructions"].(string), "# Teamflow") {
-		t.Fatalf("initialize %v", init)
-	}
-	if tools := lines[1]["result"].(map[string]any)["tools"].([]any); len(tools) != 44 {
-		t.Fatalf("%d tools", len(tools))
-	}
-}
-
-type lockedBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (l *lockedBuffer) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.Write(p)
-}
-
-func (l *lockedBuffer) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.String()
 }

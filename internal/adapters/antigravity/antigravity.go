@@ -193,8 +193,6 @@ func (*Adapter) Install(binary string) ([]string, error) {
 		m.Remember(name, p)
 	}
 
-	// TODO(MCP removal follow-up): this is where the MCP server was registered (~/.gemini/config/mcp_config.json);
-	// agents use the teamflow CLI instead, allowed below.
 	if _, err := settingsRules(settings, binary, &m); err != nil {
 		return nil, err
 	}

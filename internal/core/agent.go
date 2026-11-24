@@ -1,6 +1,6 @@
 package core
 
-// The agent's side of the client: what the MCP tools (and the commands that share them) do with a session. A port
+// The agent's side of the client: what the agent's teamflow commands do with a session. A port
 // of the Ingestor's emit, cite, inbox, after_turn, Deliverables and action paths (client/tf_client/ingestor.py).
 
 import (
@@ -333,32 +333,13 @@ func (c *Core) AfterTurn(ctx context.Context, sid string) string {
 
 // raiseNew claims the session's new approval requests and lists the ones still waiting. The claim and the read
 // are one transaction: when the read fails, the claim is rolled back and the next turn raises them (claimed atomically,
-// so a hook and a tool call racing never both raise one).
+// so a hook and a command racing never both raise one).
 func (c *Core) raiseNew(sid string) string {
 	var out string
 	err := c.St.Tx(func(tx *store.Tx) error {
-		ns, err := tx.ClaimNotices(sid, true)
-		if err != nil || len(ns) == 0 {
-			return err
-		}
-		asked := map[string]bool{}
-		for _, n := range ns {
-			asked[n.About] = true
-		}
-		waiting, err := c.Approvals(sid, false)
-		if err != nil {
-			return err
-		}
-		var items []protocol.StoredSignal
-		for _, st := range waiting {
-			if asked[st.Signal.ID] {
-				items = append(items, st)
-			}
-		}
-		if len(items) > 0 {
-			out = c.ApprovalsText(items, "a new approval request arrived for the person you work with.")
-		}
-		return nil
+		var err error
+		out, err = c.claimApprovals(tx, sid)
+		return err
 	})
 	if err != nil {
 		c.logHook("raising approval requests", err)
@@ -367,10 +348,37 @@ func (c *Core) raiseNew(sid string) string {
 	return out
 }
 
+// claimApprovals claims the session's new approval requests in tx, as the approval queue's text of those still
+// waiting ("" when none).
+func (c *Core) claimApprovals(tx *store.Tx, sid string) (string, error) {
+	ns, err := tx.ClaimNotices(sid, true)
+	if err != nil || len(ns) == 0 {
+		return "", err
+	}
+	asked := map[string]bool{}
+	for _, n := range ns {
+		asked[n.About] = true
+	}
+	waiting, err := c.Approvals(sid, false)
+	if err != nil {
+		return "", err
+	}
+	var items []protocol.StoredSignal
+	for _, st := range waiting {
+		if asked[st.Signal.ID] {
+			items = append(items, st)
+		}
+	}
+	if len(items) == 0 {
+		return "", nil
+	}
+	return c.ApprovalsText(items, "a new approval request arrived for the person you work with."), nil
+}
+
 // NewNotices are the session's other notices not shown yet (stale citations, drifts, rejections after a queue,
-// topic deletions, actions…), marked shown: an agent with no hooks hears of them at its next tool call, once.
+// topic deletions, actions…), marked shown: an agent with no hooks hears of them at its next command, once.
 func (c *Core) NewNotices(sid string) []string {
-	ns, err := c.St.ClaimNotices(sid, false) // taken once, even by calls racing
+	ns, err := c.St.ClaimNotices(sid, false) // taken once, even by commands racing
 	if err != nil || len(ns) == 0 {
 		return nil
 	}
@@ -379,6 +387,44 @@ func (c *Core) NewNotices(sid string) []string {
 		out[i] = n.Text
 	}
 	return out
+}
+
+// News is what every teamflow command's output ends with: the approval requests that reached the session (its
+// project only, synced first as a hook inside a turn syncs: not when the background sync is live, at most once per
+// HookSyncEvery, briefly) and its other notices not shown yet. Both are claimed in one transaction: two commands
+// running at once never both carry one, and a failed read rolls the claims back for the next command.
+func (c *Core) News(ctx context.Context, sid string) (approvals string, notices []string) {
+	sess, ok, err := c.St.Session(sid)
+	if err != nil || !ok {
+		return "", nil
+	}
+	asking := sess.Project != "" && c.SignedIn()
+	if asking {
+		c.midTurnSync(ctx, sess.Project)
+	}
+	err = c.St.Tx(func(tx *store.Tx) error {
+		approvals, notices = "", nil
+		if asking {
+			text, err := c.claimApprovals(tx, sid)
+			if err != nil {
+				return err
+			}
+			approvals = text
+		}
+		ns, err := tx.ClaimNotices(sid, false)
+		if err != nil {
+			return err
+		}
+		for _, n := range ns {
+			notices = append(notices, n.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		c.logHook("claiming the news for a command", err)
+		return "", nil
+	}
+	return approvals, notices
 }
 
 // ------------------------------------------------------------------ human acts on drifts

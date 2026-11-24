@@ -1,4 +1,4 @@
-// Package core is the agent-independent client that the CLI (and later the MCP server and hooks) calls: the port
+// Package core is the agent-independent client that the CLI and the hooks call: the port
 // of client/tf_client/ingestor.py. It knows the config (server, auth key), the local store (replica, spool,
 // sessions, project keys) and the server, and keeps them in step.
 //

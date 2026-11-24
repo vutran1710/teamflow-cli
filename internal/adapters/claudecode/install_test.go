@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -116,8 +117,9 @@ func ourCommands(t *testing.T, settings map[string]any) map[string][]string {
 	return out
 }
 
-// A fresh install: MCP server, hooks for the five events, the instruction text, /teamf and the deny rule for the
-// Teamflow home, each where Claude Code reads it; a second install changes nothing.
+// A fresh install: hooks for the five events, the instruction text, /teamf, an allow rule per teamflow work command
+// and the deny rules for the Teamflow home, each where Claude Code reads it; no MCP server (agents use the CLI); a
+// second install changes nothing.
 func TestInstallFresh(t *testing.T) {
 	for _, viaEnv := range []bool{false, true} {
 		t.Run(map[bool]string{false: "HOME/.claude", true: "CLAUDE_CONFIG_DIR"}[viaEnv], func(t *testing.T) {
@@ -151,12 +153,26 @@ func TestInstallFresh(t *testing.T) {
 					t.Fatalf("deny lacks %s: %v", want, deny)
 				}
 			}
-			mcp := decode(t, e.claudeJSON())["mcpServers"].(map[string]any)["teamflow"].(map[string]any)
-			if mcp["command"] != e.bin || len(mcp["args"].([]any)) != 1 || mcp["args"].([]any)[0] != "mcp" || mcp["type"] != "stdio" {
-				t.Fatalf("mcp entry %v", mcp)
+			allow := s["permissions"].(map[string]any)["allow"].([]any)
+			for _, w := range adapters.WorkCommands {
+				for _, head := range []string{"teamflow", adapters.ShellQuote(e.bin)} {
+					if !containsAny(allow, "Bash("+head+" "+w+":*)") {
+						t.Fatalf("allow lacks %s %s: %v", head, w, allow)
+					}
+				}
 			}
-			if fi, _ := os.Stat(e.claudeJSON()); fi.Mode().Perm() != 0o600 {
-				t.Fatalf("a new claude json must be owner-only: %v", fi.Mode())
+			for _, setup := range adapters.SetupCommands {
+				for _, r := range allow {
+					if strings.Contains(r.(string), " "+setup+":") || strings.Contains(r.(string), " "+setup+")") {
+						t.Fatalf("a setup command is auto-allowed: %v", r)
+					}
+				}
+			}
+			if len(allow) != 2*len(adapters.WorkCommands) {
+				t.Fatalf("allow rules %v", allow)
+			}
+			if _, err := os.Stat(e.claudeJSON()); err == nil {
+				t.Fatal("install wrote a claude json: no MCP server is registered any more")
 			}
 			md := read(t, e.claudeMD())
 			if !strings.Contains(md, adapters.BlockBegin+"\n"+protocol.AgentInstructions+adapters.BlockEnd) {
@@ -276,8 +292,11 @@ func TestInstallKeepsThePersonsOwn(t *testing.T) {
 	if s["model"] != "opus" || !strings.Contains(read(t, e.settings()), `"command": "my-guard --strict"`) {
 		t.Fatal("the person's settings were not kept")
 	}
-	if !strings.Contains(read(t, e.claudeJSON()), `"other": {`) {
-		t.Fatal("the person's MCP server was not kept")
+	if allow := s["permissions"].(map[string]any)["allow"].([]any); allow[0] != "Bash(git status)" || !containsAny(allow, "Bash(teamflow topic:*)") {
+		t.Fatalf("the person's allow rule first, Teamflow's after: %v", allow)
+	}
+	if read(t, e.claudeJSON()) != claudeJSON {
+		t.Fatal("install touched a claude json with no Teamflow MCP server in it")
 	}
 	if !strings.HasPrefix(read(t, e.claudeMD()), md) {
 		t.Fatal("the person's CLAUDE.md was not kept")
@@ -301,8 +320,9 @@ func TestInstallKeepsThePersonsOwn(t *testing.T) {
 	}
 }
 
-// Over a Python-era install: its hook groups (with the guard's matcher), its MCP entry and its old /team command are
-// replaced, never doubled; the person's own entries beside them stay; uninstall leaves only the person's.
+// Over a Python-era install: its hook groups (with the guard's matcher) and its old /team command are replaced,
+// never doubled, and its MCP entry is taken out (agents use the CLI now); the person's own entries beside them stay;
+// uninstall leaves only the person's.
 func TestInstallOverPythonEra(t *testing.T) {
 	e := newEnv(t, false)
 	py := func(ev string) string { return `/opt/tf/venv/bin/python -m tf_cli hook claude-code ` + ev }
@@ -345,8 +365,8 @@ func TestInstallOverPythonEra(t *testing.T) {
 		t.Fatalf("PreToolUse keeps the guard's matcher: %v", pre)
 	}
 	servers := decode(t, e.claudeJSON())["mcpServers"].(map[string]any)
-	if servers["teamflow"].(map[string]any)["command"] != e.bin || servers["mine"] == nil {
-		t.Fatalf("mcp servers %v", servers)
+	if servers["teamflow"] != nil || servers["mine"] == nil {
+		t.Fatalf("the old Teamflow MCP server is taken out, the person's kept: %v", servers)
 	}
 	if _, err := os.Stat(filepath.Join(e.cfg, "commands", "team.md")); err == nil {
 		t.Fatal("the old /team command of ours is left")
@@ -368,21 +388,21 @@ func TestInstallOverPythonEra(t *testing.T) {
 	}
 }
 
-// Sad paths: a malformed settings.json or claude json, hooks or deny of the wrong shape, a damaged CLAUDE.md block,
-// or a read-only settings.json: refused with a message, and nothing at all is written anywhere.
+// Sad paths: a malformed settings.json, hooks, deny or allow of the wrong shape, a damaged CLAUDE.md block, a
+// read-only settings.json, or a read-only claude json holding an old Teamflow MCP server to take out: refused with a
+// message, and nothing at all is written anywhere.
 func TestInstallRefusals(t *testing.T) {
 	cases := map[string]func(e *env){
-		"malformed settings.json": func(e *env) { e.write(nil, e.settings(), `{"hooks": {`, 0o644) },
-		"malformed claude json":   func(e *env) { e.write(nil, e.claudeJSON(), `{"mcpServers": nope}`, 0o600) },
-		"hooks not an object":     func(e *env) { e.write(nil, e.settings(), `{"hooks": []}`, 0o644) },
-		"an event not a list":     func(e *env) { e.write(nil, e.settings(), `{"hooks": {"Stop": {}}}`, 0o644) },
-		"deny not a list":         func(e *env) { e.write(nil, e.settings(), `{"permissions": {"deny": "x"}}`, 0o644) },
-		"mcpServers not an object": func(e *env) {
-			e.write(nil, e.claudeJSON(), `{"mcpServers": []}`, 0o600)
-		},
+		"malformed settings.json":   func(e *env) { e.write(nil, e.settings(), `{"hooks": {`, 0o644) },
+		"hooks not an object":       func(e *env) { e.write(nil, e.settings(), `{"hooks": []}`, 0o644) },
+		"an event not a list":       func(e *env) { e.write(nil, e.settings(), `{"hooks": {"Stop": {}}}`, 0o644) },
+		"deny not a list":           func(e *env) { e.write(nil, e.settings(), `{"permissions": {"deny": "x"}}`, 0o644) },
+		"allow not a list":          func(e *env) { e.write(nil, e.settings(), `{"permissions": {"allow": {}}}`, 0o644) },
 		"a damaged CLAUDE.md block": func(e *env) { e.write(nil, e.claudeMD(), adapters.BlockBegin+"\nhalf\n", 0o644) },
 		"read-only settings.json":   func(e *env) { e.write(nil, e.settings(), `{}`, 0o444) },
-		"read-only claude json":     func(e *env) { e.write(nil, e.claudeJSON(), `{}`, 0o400) },
+		"read-only claude json with an old Teamflow MCP server": func(e *env) {
+			e.write(nil, e.claudeJSON(), `{"mcpServers": {"teamflow": {"command": "/x/teamflow", "args": ["mcp"]}}}`, 0o400)
+		},
 	}
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -409,6 +429,65 @@ func TestInstallRefusals(t *testing.T) {
 	}
 	if read(t, e.settings()) != `{"hooks": {` {
 		t.Fatal("a malformed settings.json was changed")
+	}
+}
+
+// A claude json Teamflow has nothing to do with (malformed, read-only, mcpServers of another shape, or none) never
+// stops the install and is never touched: no MCP server is registered any more.
+func TestInstallLeavesAClaudeJSONWithoutTeamflowAlone(t *testing.T) {
+	for name, body := range map[string]string{
+		"malformed":                `{"mcpServers": nope}`,
+		"mcpServers not an object": `{"mcpServers": []}`,
+		"read-only, no Teamflow":   `{"mcpServers": {"mine": {"command": "x"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, true)
+			e.write(t, e.claudeJSON(), body, 0o400)
+			_, err := New().Install(e.bin)
+			must(t, err)
+			if read(t, e.claudeJSON()) != body {
+				t.Fatal("the claude json was changed")
+			}
+			_, err = New().Uninstall()
+			must(t, err)
+			if read(t, e.claudeJSON()) != body {
+				t.Fatal("the claude json was changed by uninstall")
+			}
+		})
+	}
+}
+
+// An install from before agents used the CLI (Go or Python) left a Teamflow MCP server: uninstall alone still takes it
+// out, the person's servers kept, and a claude json left empty that Teamflow made goes.
+func TestUninstallRemovesAnOldMCPServer(t *testing.T) {
+	e := newEnv(t, true)
+	old := `{"numStartups": 3, "mcpServers": {"teamflow": {"type": "stdio", "command": "/usr/local/bin/teamflow", "args": ["mcp"], "env": {}, "alwaysLoad": true}, "mine": {"command": "x"}}}`
+	e.write(t, e.claudeJSON(), old, 0o600)
+	lines, err := New().Uninstall()
+	must(t, err)
+	if !slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, "removed MCP server 'teamflow'") }) {
+		t.Fatalf("not said: %v", lines)
+	}
+	cj := decode(t, e.claudeJSON())
+	if servers := cj["mcpServers"].(map[string]any); servers["teamflow"] != nil || servers["mine"] == nil || cj["numStartups"] != float64(3) {
+		t.Fatalf("after uninstall %v", cj)
+	}
+	// Only Teamflow's server, in a claude json an old install made (its manifest says so): the file goes.
+	e = newEnv(t, true)
+	e.write(t, e.claudeJSON(), `{"mcpServers": {"teamflow": {"command": "/x/teamflow", "args": ["mcp"]}}}`, 0o600)
+	e.write(t, filepath.Join(e.cfg, ".teamflow-install.json"), `{"created": ["claude.json", "mcpServers"], "deny": []}`, 0o644)
+	_, err = New().Uninstall()
+	must(t, err)
+	if _, err := os.Stat(e.claudeJSON()); err == nil {
+		t.Fatal("a claude json the old install made, left empty, stays")
+	}
+	// Install over it takes it out too, so no agent starts a server that no longer exists.
+	e = newEnv(t, true)
+	e.write(t, e.claudeJSON(), old, 0o600)
+	_, err = New().Install(e.bin)
+	must(t, err)
+	if servers := decode(t, e.claudeJSON())["mcpServers"].(map[string]any); servers["teamflow"] != nil || servers["mine"] == nil {
+		t.Fatalf("after install %v", servers)
 	}
 }
 

@@ -1,5 +1,5 @@
 // Package procs walks process ancestry: how a command finds the agent session it runs under. Hooks record each
-// session against the agent's process id; a command run from the agent's shell, or the MCP server the agent
+// session against the agent's process id; a command run from the agent's shell
 // started, walks up its own ancestors to that process (Python's tf_client.procs).
 package procs
 

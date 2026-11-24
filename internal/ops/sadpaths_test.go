@@ -1,6 +1,6 @@
-package mcpserver
+package ops
 
-// The sad paths every tool meets: no sign-in, no session, an unshared session, the server unreachable, an expired
+// The sad paths every action meets: no sign-in, no session, an unshared session, the server unreachable, an expired
 // auth key, a revoked membership, an old client, a broken session lookup, a restart, and calls at the same time.
 
 import (
@@ -29,7 +29,6 @@ var args = map[string]map[string]any{
 	"signal_cite":           {"signals": []any{S1}},
 	"artifact_write":        {"topic": "Rounding", "summary": "s", "content": "x", "name": "a.md"},
 	"artifact_publish":      {"topic": "Rounding", "name": "a.mp4", "summary": "s", "url": "https://x.example/a.mp4"},
-	"artifact_get":          {"id": S1},
 	"artifact_list":         nil,
 	"session_join":          {"project": "Pricing"},
 	"deliverables_validate": {"milestones": []any{map[string]any{"name": "D", "due": "2099-01-01", "actions": []any{map[string]any{"name": "A", "topic": "Rounding", "due": "2099-01-01"}}}}},
@@ -111,7 +110,7 @@ func TestNoSession(t *testing.T) {
 	m.find.id = ""
 	for _, name := range needs {
 		r := m.call(name, args[name])
-		wantErr(t, r, "no agent session found; is Teamflow installed for this agent?")
+		wantErr(t, r, "no agent session found above this process")
 	}
 	m.find.err = errors.New("database is locked")
 	wantErr(t, m.call("inbox", nil), "could not look up the agent session: database is locked")
@@ -177,7 +176,7 @@ func TestOffline(t *testing.T) {
 	m.srv.on("signal.emit", acceptedEmit)
 	m.srv.on("account.me", lanMe(t))
 	m.srv.on("member.me", memberMe(t))
-	m.cs = nil
+	m.later()
 	m.call("whoami", nil).obj(t)
 	m.withStore(func(st *store.Store) error {
 		n, err := st.SpoolSize()
@@ -207,6 +206,7 @@ func TestRefusedKeysAndOldClients(t *testing.T) {
 	wantErr(t, m.call("project_get", nil), "NOT_A_MEMBER")
 	// A key the server no longer takes is dropped at the next sync.
 	m.srv.on("sync.poll", refused(t, "member.list", "NOT_A_MEMBER"))
+	m.later()
 	m.call("inbox", nil)
 	m.withStore(func(st *store.Store) error {
 		if _, _, _, _, ok := st.ProjectKey(store.Binding(m.srv.srv.URL, email), P); ok {
@@ -261,7 +261,6 @@ func TestSignInIsReadAtEachCall(t *testing.T) {
 func TestConcurrentCalls(t *testing.T) {
 	m := newMachine(t, true)
 	m.srv.on("signal.emit", acceptedEmit)
-	m.connect()
 	var wg sync.WaitGroup
 	errs := make(chan string, 8)
 	for i := range 8 {

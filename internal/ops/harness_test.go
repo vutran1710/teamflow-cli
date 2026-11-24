@@ -1,7 +1,8 @@
-package mcpserver
+package ops
 
 // The test harness: an httptest server answering with the exported golden answers (picked by what they hold, never
-// by file number), a Teamflow home on disk, a fake session finder, and an MCP client over in-memory transports.
+// by file number), a Teamflow home on disk, a fake session finder, and each action run as a command runs it: the
+// client opened afresh, the session found, the answer with the session's news added (an error too).
 
 import (
 	"bytes"
@@ -20,10 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/core"
+	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 	"github.com/vutran1710/teamflow-cli/internal/syncer"
@@ -312,7 +312,6 @@ type machine struct {
 	dir  string
 	srv  *fakeServer
 	find *finder
-	cs   *mcp.ClientSession
 }
 
 // newMachine is a fresh Teamflow home: signed in on the fake server (when signedIn), with this machine's key for P,
@@ -385,29 +384,6 @@ func (m *machine) session(id, project string, topics []string) {
 	})
 }
 
-// connect starts the MCP server for this machine and a client on it.
-func (m *machine) connect() *mcp.ClientSession {
-	m.t.Helper()
-	if m.cs != nil {
-		return m.cs
-	}
-	ctx := context.Background()
-	server := New(core.Open, m.find, "test")
-	st, ct := mcp.NewInMemoryTransports()
-	ss, err := server.Connect(ctx, st, nil)
-	if err != nil {
-		m.t.Fatal(err)
-	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, nil)
-	cs, err := client.Connect(ctx, ct, nil)
-	if err != nil {
-		m.t.Fatal(err)
-	}
-	m.t.Cleanup(func() { cs.Close(); ss.Close() })
-	m.cs = cs
-	return cs
-}
-
 // reply is a tool's answer: its text blocks and whether it is an error.
 type reply struct {
 	blocks []string
@@ -453,18 +429,41 @@ func (m *machine) call(name string, args map[string]any) reply {
 	if args == nil {
 		args = map[string]any{}
 	}
-	res, err := m.connect().CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+	return run(m.find, name, args)
+}
+
+// run runs one action as a command does: the client opened for it, the session found, the news claimed after it.
+func run(find *finder, name string, args map[string]any) reply {
+	ctx := context.Background()
+	c, err := core.Open()
+	if err != nil {
+		return reply{blocks: []string{ErrText(err)}, err: true}
+	}
+	defer c.Close()
+	var sess *store.Session
+	var why error
+	s, ok, err := find.Current(c.St)
+	switch {
+	case err != nil:
+		why = fmt.Errorf("could not look up the agent session: %w", err)
+	case ok:
+		sess = &s
+	}
+	out, err := New(ctx, c, sess, why).Do(name, args)
+	news := NewsFor(ctx, c, sess)
+	if err != nil {
+		text := ErrText(err)
+		if !news.Empty() {
+			extra, _ := ojson.Indent(news.Obj())
+			text += "\n\n" + extra
+		}
+		return reply{blocks: []string{text}, err: true}
+	}
+	blocks, err := Blocks(With(out, news))
 	if err != nil {
 		return reply{blocks: []string{err.Error()}, err: true}
 	}
-	var r reply
-	r.err = res.IsError
-	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
-			r.blocks = append(r.blocks, tc.Text)
-		}
-	}
-	return r
+	return reply{blocks: blocks}
 }
 
 func (m *machine) params(method string) map[string]any {
@@ -504,6 +503,18 @@ func wantText(t *testing.T, r reply, want ...string) {
 			t.Fatalf("want %q in %s", w, r)
 		}
 	}
+}
+
+// later is the time a command's news waits between syncs, and after a failed one, gone by: the next command syncs.
+func (m *machine) later() {
+	m.t.Helper()
+	m.withStore(func(st *store.Store) error {
+		if err := st.SetHookOffline(P, time.Time{}); err != nil {
+			return err
+		}
+		_, err := st.ClaimHookSync(P, time.Now().Add(time.Hour), 0, 0) // a last sync "ahead" is stale
+		return err
+	})
 }
 
 func applyEvent(tx *store.Tx, ev protocol.SyncEvent) error { return syncer.Apply(tx, ev, time.Now()) }

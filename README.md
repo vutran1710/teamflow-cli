@@ -1,11 +1,11 @@
 # teamflow-cli
 
-The Teamflow client: one static binary, `teamflow`, that holds the command line, the MCP server your agent talks
-to, and the agents' hooks. It records what your agents decide and do into a Teamflow project, and tells each
+The Teamflow client: one static binary, `teamflow`, that holds the command line (for you and your agents alike)
+and the agents' hooks. It records what your agents decide and do into a Teamflow project, and tells each
 agent session what changed since its last step.
 
 **Status: early.** This repo holds the wire protocol (Go types generated from the schema the Teamflow server
-exports, checked against golden messages), the local store and sync, the command line and the MCP server. The
+exports, checked against golden messages), the local store and sync, and the command line. The
 agent adapters (Claude Code, Cursor CLI, Antigravity CLI, Copilot CLI), the background sync and self-update land
 here as they are built. The first release is tagged once the client passes the server's
 end-to-end suite.
@@ -42,22 +42,19 @@ teamflow org members|add-member|remove-member|title …
 teamflow profile [--name NAME] [--alias ALIAS] | profile avatar FILE | profile avatar --remove
 teamflow tasks [--project P] [--kind K] [--state S]
 teamflow log [--all] [--project P]
-teamflow mcp                                             the MCP server (started by your agent, over stdio)
 ```
 
-Every action the Teamflow web app has is a command here and an MCP tool (pictures are command-line only: they
-need a file). The server decides who may do what. Consequential commands (delete, archive, remove a member,
+Every action the Teamflow web app has is a command here. The server decides who may do what. Consequential commands (delete, archive, remove a member,
 rewrite the plan, settle a drift) ask on the terminal, or take `--yes`.
 
 `SERVER` defaults to `https://teamflow.vutr.io`. A password is never a command-line argument. A verdict is always
 recorded as yours, whether you run it, the web app records it, or your agent records it on your explicit words.
 
-## The MCP server
+## Agents use the command line
 
-`teamflow mcp` serves 44 tools (`protocol/agent/tools.json`) to any MCP agent, with one agent-neutral instruction
-text (`protocol/agent/instructions.md`) as its instructions. The tools the Python client had keep its input
-schemas exactly. Each call reads the sign-in and keys from disk and finds the agent session it runs under. Every
-result carries what is new for the session: approval requests waiting for you, and the session's other notices, once.
+There is no MCP server: every agent runs `teamflow` commands in its shell (`protocol/agent/commands.json` lists
+them), with one agent-neutral instruction text (`protocol/agent/instructions.md`) placed where each agent reads
+instructions. Each command reads the sign-in and keys from disk and finds the agent session it runs under.
 
 **Release notes (vs. the Python client):** the placeholder `teamflow tui` is dropped. The local store is new
 (`~/.teamflow/store.db`); a Python-era `client.sqlite` is left alone and can be deleted, so sign in once more with
@@ -67,12 +64,16 @@ result carries what is new for the session: approval requests waiting for you, a
 
 `teamflow install -a claude-code` writes only Teamflow's own entries ($CLAUDE_CONFIG_DIR, else `~/.claude`):
 
-- `.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` or `~/.claude.json`): the MCP server `teamflow`;
-- `settings.json`: hooks for SessionStart, UserPromptSubmit, PreToolUse, Stop and SessionEnd, and
-  `permissions.deny` rules for the Teamflow home (backed up once as `settings.json.teamflow-backup`);
+- `settings.json`: hooks for SessionStart, UserPromptSubmit, PreToolUse, Stop and SessionEnd,
+  `permissions.allow` rules `Bash(teamflow <command>:*)` for each work command (the same by the binary's path), and
+  `permissions.deny` rules for the Teamflow home (backed up once as `settings.json.teamflow-backup`). Setup commands
+  (login, logout, install, uninstall, self-update, sync) keep Claude Code's prompt;
 - `CLAUDE.md`: the instruction text, word for word, between `<!-- teamflow:begin … -->` and `<!-- teamflow:end -->`;
 - `commands/teamf.md`: the `/teamf` command;
 - `.teamflow-install.json`: what install added, so `teamflow uninstall` takes out exactly that.
+
+No MCP server is registered. An older install's `teamflow` MCP server in `.claude.json` is taken out by install and
+by uninstall; a `.claude.json` without one is never touched.
 
 A malformed or read-only file stops the install before anything is written. Your own settings, hooks, rules and
 instructions stay byte for byte; a Python-era install's entries are replaced, never doubled. A hook never fails
@@ -152,15 +153,15 @@ What stays on your machine:
   and the server kept in step). `internal/config`: `config.json`. `internal/adapters`: the agent adapter registry.
   `internal/procs`: process ancestry, to find the agent session a command runs under.
 - `internal/protocol`: the wire types and the agent texts. `*_gen.go` are generated; never edit them.
-- `internal/mcpserver`: the MCP server and its tools. `internal/core`: what the commands and tools do with the
-  store and the server. `internal/ojson`: ordered JSON objects (tool answers keep Python's field order).
+- `internal/ops`: what each agent command does, answering with an ordered JSON object (`--json` prints it).
+  `internal/core`: what the commands do with the store and the server. `internal/ojson`: ordered JSON objects (tool answers keep Python's field order).
 - `internal/protocolgen`, `tools/gen`: the generator (`go run ./tools/gen`).
 - `internal/deliverables`: the Deliverables check (a port of the server's, run before anything is sent), tested
   against the shared vectors in `protocol/deliverables/vectors.json`.
 - `internal/artifacts`: reading a file to publish (at most 5 MB; larger ones are published as links), its kind
   and media type, and pulling a stored version back.
 - `protocol/`: the protocol exported from the Teamflow server: `schema.json`, `methods.json`, golden messages,
-  Deliverables test vectors, MCP tool list, hook fixtures and agent texts. `VERSION` names the server commit and
+  Deliverables test vectors, hook fixtures and agent texts (instructions, `/teamf`, the commands). `VERSION` names the server commit and
   protocol version it came from.
 
 `go test ./...` decodes and re-encodes every golden message through the Go types, so a protocol change the client

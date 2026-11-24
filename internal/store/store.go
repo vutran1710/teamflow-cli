@@ -2,7 +2,7 @@
 // replica of the member's projects, the spool, the agent sessions, citations, notices and the project keys.
 // All of the client's SQL lives here; the schema is in migrations/NNNN_*.sql.
 //
-// Several processes share the file: the background sync writes while hooks, the MCP server and the CLI read. The
+// Several processes share the file: the background sync writes while hooks and the CLI read. The
 // file is in WAL mode, so a reader never waits for a writer: it reads the last committed state. A writer waits for
 // another writer at most 250 ms (busy_timeout) and then gets ErrBusy, so a hook answers from what it has rather
 // than hold up the agent's step.

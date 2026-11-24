@@ -1,5 +1,5 @@
-// Package ojson is a JSON object that keeps its keys in the order they were added, as a Python dict does: the MCP
-// tools answer with the Python tools' objects, field for field and in their order.
+// Package ojson is a JSON object that keeps its keys in the order they were added, as a Python dict does: the
+// commands' JSON answers keep the Python tools' objects, field for field and in their order.
 package ojson
 
 import (

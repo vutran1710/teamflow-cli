@@ -1,15 +1,17 @@
-// Package claudecode is the Claude Code adapter: it registers the MCP server in Claude Code's config, adds hooks
-// (notices and approval requests at session start, before each prompt and tool, at the turn's end), places the one
-// instruction text in CLAUDE.md, adds the /teamf command and a deny rule for the Teamflow home. Everything it
-// writes is Teamflow's own entry; the person's settings stay as they were, and uninstall takes only Teamflow's out.
+// Package claudecode is the Claude Code adapter: it adds hooks (notices and approval requests at session start,
+// before each prompt and tool, at the turn's end), places the one instruction text in CLAUDE.md, adds the /teamf
+// command, an allow rule per teamflow work command (agents use the teamflow CLI for everything, with no prompt) and
+// deny rules for the Teamflow home. Everything it writes is Teamflow's own entry; the person's settings stay as they
+// were, and uninstall takes only Teamflow's out.
 //
-//	<config dir>/settings.json        hooks; permissions.deny for the Teamflow home (backed up once)
-//	<claude json>                     mcpServers.teamflow
+//	<config dir>/settings.json        hooks; permissions.allow for teamflow work commands; permissions.deny for the
+//	                                  Teamflow home (backed up once)
 //	<config dir>/CLAUDE.md            the instruction text, in a Teamflow block
 //	<config dir>/commands/teamf.md    /teamf
 //
-// The config dir is $CLAUDE_CONFIG_DIR or ~/.claude; the claude json $CLAUDE_CONFIG_DIR/.claude.json or
-// ~/.claude.json.
+// No MCP server is registered (owner, 2026-11-25: CLI only). An older install's mcpServers.teamflow in the claude
+// json ($CLAUDE_CONFIG_DIR/.claude.json or ~/.claude.json) is taken out by install and by uninstall; a claude json
+// without one is never read for anything else, nor written.
 package claudecode
 
 import (
@@ -65,7 +67,7 @@ func ConfigDir() string {
 	return filepath.Join(h, ".claude")
 }
 
-// ClaudeJSON is where Claude Code keeps its MCP servers: $CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json.
+// ClaudeJSON is where Claude Code keeps its MCP servers (an older install put Teamflow's there): $CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json.
 func ClaudeJSON() string {
 	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
 		return filepath.Join(d, ".claude.json")
@@ -113,7 +115,8 @@ func (*Adapter) Installed() bool {
 
 // manifest is what install created or added beyond Teamflow's own marked entries.
 type manifest struct {
-	Created []string // containers it made: hooks, hooks.<event>, permissions, permissions.deny, mcpServers
+	Created []string // containers it made: hooks, hooks.<event>, permissions, permissions.allow, permissions.deny
+	Allow   []string // allow rules it added
 	Deny    []string // deny rules it added
 	found   bool
 }
@@ -125,7 +128,7 @@ func loadManifest() (manifest, error) {
 	}
 	b, _ := os.ReadFile(manifestPath())
 	m := manifest{found: len(bytes.TrimSpace(b)) > 0}
-	m.Created, m.Deny = strings_(get(doc, "created")), strings_(get(doc, "deny"))
+	m.Created, m.Allow, m.Deny = strings_(get(doc, "created")), strings_(get(doc, "allow")), strings_(get(doc, "deny"))
 	return m, nil
 }
 
@@ -133,12 +136,12 @@ func (m manifest) save() error {
 	slices.Sort(m.Created)
 	m.Created = slices.Compact(m.Created)
 	return adapters.SaveJSON(manifestPath(), ojson.Obj{{Key: "created", Value: anyList(m.Created)},
-		{Key: "deny", Value: anyList(m.Deny)}}, 0o644)
+		{Key: "allow", Value: anyList(m.Allow)}, {Key: "deny", Value: anyList(m.Deny)}}, 0o644)
 }
 
 func (m manifest) created(path string) bool { return slices.Contains(m.Created, path) }
 
-// Install sets Teamflow up in Claude Code with binary (an absolute path) in its hooks, MCP entry and /teamf. Every
+// Install sets Teamflow up in Claude Code with binary (an absolute path) in its hooks, allow rules and /teamf. Every
 // file is checked before any is written: a malformed or read-only one refuses the whole install.
 func (a *Adapter) Install(binary string) ([]string, error) {
 	unlock, err := lock()
@@ -146,16 +149,18 @@ func (a *Adapter) Install(binary string) ([]string, error) {
 		return nil, err
 	}
 	defer unlock()
-	for _, p := range []string{settingsPath(), ClaudeJSON(), claudeMD(), teamfPath(), manifestPath()} {
+	for _, p := range []string{settingsPath(), claudeMD(), teamfPath(), manifestPath()} {
 		if err := adapters.Writable(p); err != nil {
 			return nil, err
 		}
 	}
-	settings, err := adapters.LoadJSON(settingsPath())
-	if err != nil {
-		return nil, err
+	oldMCP := hasOldMCP()
+	if oldMCP {
+		if err := adapters.Writable(ClaudeJSON()); err != nil {
+			return nil, err
+		}
 	}
-	cj, err := adapters.LoadJSON(ClaudeJSON())
+	settings, err := adapters.LoadJSON(settingsPath())
 	if err != nil {
 		return nil, err
 	}
@@ -168,9 +173,6 @@ func (a *Adapter) Install(binary string) ([]string, error) {
 	}
 	newSettings, err := installSettings(settings, binary, &m)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := installMCP(cj, binary, &manifest{}); err != nil {
 		return nil, err
 	}
 
@@ -188,15 +190,15 @@ func (a *Adapter) Install(binary string) ([]string, error) {
 	if err := adapters.SaveJSON(settingsPath(), newSettings, 0o644); err != nil {
 		return done, err
 	}
-	done = append(done, fmt.Sprintf("hooks %s and a deny rule for the Teamflow home in %s", strings.Join(Events, ", "),
-		home.Display(settingsPath())))
-	if _, err := os.Lstat(ClaudeJSON()); errors.Is(err, fs.ErrNotExist) {
-		m.Created = append(m.Created, "claude.json")
+	done = append(done, fmt.Sprintf("hooks %s, an allow rule for teamflow commands and a deny rule for the Teamflow "+
+		"home in %s", strings.Join(Events, ", "), home.Display(settingsPath())))
+	if oldMCP {
+		if line, err := removeOldMCP(m); err != nil {
+			return done, err
+		} else if line != "" {
+			done = append(done, line)
+		}
 	}
-	if err := updateJSON(ClaudeJSON(), func(doc ojson.Obj) (ojson.Obj, error) { return installMCP(doc, binary, &m) }); err != nil {
-		return done, err
-	}
-	done = append(done, fmt.Sprintf("MCP server '%s' in %s", mcpName, home.Display(ClaudeJSON())))
 	if _, err := os.Lstat(claudeMD()); errors.Is(err, fs.ErrNotExist) {
 		m.Created = append(m.Created, "CLAUDE.md")
 	}
@@ -214,6 +216,46 @@ func (a *Adapter) Install(binary string) ([]string, error) {
 	}
 	done = append(done, "/teamf command at "+home.Display(teamfPath()))
 	return done, m.save()
+}
+
+// hasOldMCP says whether the claude json holds Teamflow's MCP server, from an install made before agents used the
+// CLI. A claude json that cannot be read as one says no: Teamflow has nothing else to do there.
+func hasOldMCP() bool {
+	cj, err := adapters.LoadJSON(ClaudeJSON())
+	if err != nil {
+		return false
+	}
+	servers, ok := adapters.Obj(get(cj, "mcpServers"))
+	if !ok {
+		return false
+	}
+	_, has := servers.Get(mcpName)
+	return has
+}
+
+// removeOldMCP takes Teamflow's MCP server out of the claude json; mcpServers left empty goes when Teamflow made it
+// (or with no record), and the file too when Teamflow made it and nothing is left.
+func removeOldMCP(m manifest) (string, error) {
+	err := updateJSON(ClaudeJSON(), func(doc ojson.Obj) (ojson.Obj, error) {
+		servers, ok := adapters.Obj(get(doc, "mcpServers"))
+		if !ok {
+			return doc, nil
+		}
+		servers, _ = adapters.Without(servers, mcpName)
+		if len(servers) == 0 && (m.created("mcpServers") || !m.found) {
+			doc, _ = adapters.Without(doc, "mcpServers")
+			if len(doc) == 0 && m.created("claude.json") {
+				return nil, nil // the file an old install made, left empty, goes
+			}
+			return doc, nil
+		}
+		return doc.Set("mcpServers", servers), nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("removed MCP server '%s' from %s (agents use the teamflow command now)", mcpName,
+		home.Display(ClaudeJSON())), nil
 }
 
 func lock() (func(), error) { return adapters.InstallLock() }
@@ -273,68 +315,73 @@ func installSettings(s ojson.Obj, binary string, m *manifest) (ojson.Obj, error)
 	if !ok {
 		return nil, fmt.Errorf("%s: permissions is not an object; fix it by hand first", home.Display(settingsPath()))
 	}
-	denyV, has := perms.Get("deny")
+	if perms, m.Deny, err = addRules(perms, "deny", DenyRules(binary), m.Deny, m); err != nil {
+		return nil, err
+	}
+	if perms, m.Allow, err = addRules(perms, "allow", AllowRules(binary), m.Allow, m); err != nil {
+		return nil, err
+	}
+	return s.Set("permissions", perms), nil
+}
+
+// addRules is perms with Teamflow's rules in its list key (allow or deny): a rule an earlier install added and no
+// longer wanted goes, a rule the person had already is theirs and stays theirs, and the rest are added. It returns
+// the rules that are Teamflow's now.
+func addRules(perms ojson.Obj, key string, want, before []string, m *manifest) (ojson.Obj, []string, error) {
+	listV, has := perms.Get(key)
 	if !has {
-		denyV = []any{}
-		m.Created = append(m.Created, "permissions.deny")
+		listV = []any{}
+		m.Created = append(m.Created, "permissions."+key)
 	}
-	deny, ok := denyV.([]any)
+	list, ok := listV.([]any)
 	if !ok {
-		return nil, fmt.Errorf("%s: permissions.deny is not a list; fix it by hand first", home.Display(settingsPath()))
+		return nil, nil, fmt.Errorf("%s: permissions.%s is not a list; fix it by hand first", home.Display(settingsPath()), key)
 	}
-	want := DenyRules(binary)
 	var kept []any
-	for _, r := range deny { // a rule an earlier install added and no longer wanted (the home moved) goes
-		if rs, ok := r.(string); ok && slices.Contains(m.Deny, rs) && !slices.Contains(want, rs) {
+	for _, r := range list { // a rule an earlier install added and no longer wanted (the home moved) goes
+		if rs, ok := r.(string); ok && slices.Contains(before, rs) && !slices.Contains(want, rs) {
 			continue
 		}
 		kept = append(kept, r)
 	}
-	deny = kept
+	list = kept
 	var added []string
 	for _, r := range want {
-		if slices.Contains(m.Deny, r) {
+		if slices.Contains(before, r) {
 			added = append(added, r) // ours from before
-			if !slices.ContainsFunc(deny, func(x any) bool { return x == r }) {
-				deny = append(deny, r)
+			if !slices.ContainsFunc(list, func(x any) bool { return x == r }) {
+				list = append(list, r)
 			}
 			continue
 		}
-		if slices.ContainsFunc(deny, func(x any) bool { return x == r }) {
+		if slices.ContainsFunc(list, func(x any) bool { return x == r }) {
 			continue // the person's own rule: never taken out
 		}
-		deny = append(deny, r)
+		list = append(list, r)
 		added = append(added, r)
 	}
-	if deny == nil {
-		deny = []any{}
+	if list == nil {
+		list = []any{}
 	}
-	m.Deny = added
-	perms = perms.Set("deny", deny)
-	return s.Set("permissions", perms), nil
+	return perms.Set(key, list), added, nil
 }
 
-// installMCP is the claude json with Teamflow's MCP server set (the same place when it was there).
-func installMCP(doc ojson.Obj, binary string, m *manifest) (ojson.Obj, error) {
-	serversV, has := doc.Get("mcpServers")
-	if !has {
-		serversV = ojson.Obj{}
-		m.Created = append(m.Created, "mcpServers")
+// AllowRules let every teamflow work command run with no prompt (adapters.WorkCommands; setup commands keep Claude
+// Code's prompt): Bash(teamflow <command>:*), a prefix rule Claude Code checks per command, never across a chain
+// (`teamflow status && curl …` still asks), and the same by the binary's path when it is called by one. The deny
+// rules for the Teamflow home win over these, so a work command naming the home still asks.
+func AllowRules(binary string) []string {
+	heads := []string{"teamflow"}
+	if binary != "" && filepath.Base(binary) != binary {
+		heads = append(heads, shellQuote(binary)) // as the agent types it: quoted when it needs it
 	}
-	servers, ok := serversV.(ojson.Obj)
-	if !ok {
-		return nil, fmt.Errorf("%s: mcpServers is not an object; fix it by hand first", home.Display(ClaudeJSON()))
+	var rules []string
+	for _, h := range heads {
+		for _, c := range adapters.WorkCommands {
+			rules = append(rules, "Bash("+h+" "+c+":*)")
+		}
 	}
-	// alwaysLoad: Teamflow's tools are in every prompt, never deferred behind Claude Code's tool search, so an agent
-	// that notices something to record has signal_emit's schema at hand.
-	servers = servers.Set(mcpName, ojson.Obj{
-		{Key: "type", Value: "stdio"},
-		{Key: "command", Value: binary},
-		{Key: "args", Value: []any{"mcp"}},
-		{Key: "env", Value: ojson.Obj{}},
-		{Key: "alwaysLoad", Value: true},
-	})
-	return doc.Set("mcpServers", servers), nil
+	return rules
 }
 
 // DenyRules keep Claude Code's file tools, and shell commands that name it, out of the Teamflow home (the person's
@@ -396,7 +443,7 @@ func removeOldTeam() (string, error) {
 
 // ------------------------------------------------------------------ uninstall
 
-// Uninstall takes out Teamflow's hooks, deny rules, MCP server, instruction block and /teamf (and an old /team of
+// Uninstall takes out Teamflow's hooks, allow and deny rules, an old MCP server, instruction block and /teamf (and an old /team of
 // Teamflow's); the person's own entries stay as they were.
 func (a *Adapter) Uninstall() ([]string, error) {
 	unlock, err := lock()
@@ -405,10 +452,6 @@ func (a *Adapter) Uninstall() ([]string, error) {
 	}
 	defer unlock()
 	settings, err := adapters.LoadJSON(settingsPath())
-	if err != nil {
-		return nil, err
-	}
-	cj, err := adapters.LoadJSON(ClaudeJSON())
 	if err != nil {
 		return nil, err
 	}
@@ -424,32 +467,21 @@ func (a *Adapter) Uninstall() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, denyChanged := stripDeny(s, m)
+	s, denyChanged := stripRules(s, "deny", m.Deny, m)
+	s, allowChanged := stripRules(s, "allow", m.Allow, m)
+	denyChanged = denyChanged || allowChanged
 	if changed || denyChanged {
 		if err := adapters.SaveJSON(settingsPath(), s, 0o644); err != nil {
 			return done, err
 		}
-		done = append(done, "removed Teamflow's hooks and deny rules from "+home.Display(settingsPath()))
+		done = append(done, "removed Teamflow's hooks, allow and deny rules from "+home.Display(settingsPath()))
 	}
-	if servers, ok := adapters.Obj(get(cj, "mcpServers")); ok {
-		if _, has := servers.Get(mcpName); has {
-			err := updateJSON(ClaudeJSON(), func(doc ojson.Obj) (ojson.Obj, error) {
-				servers, _ := adapters.Obj(get(doc, "mcpServers"))
-				servers, _ = adapters.Without(servers, mcpName)
-				if len(servers) == 0 && (m.created("mcpServers") || !m.found) {
-					doc, _ = adapters.Without(doc, "mcpServers")
-					if len(doc) == 0 && m.created("claude.json") {
-						return nil, nil // the file install made, left empty, goes
-					}
-					return doc, nil
-				}
-				return doc.Set("mcpServers", servers), nil
-			})
-			if err != nil {
-				return done, err
-			}
-			done = append(done, fmt.Sprintf("removed MCP server '%s' from %s", mcpName, home.Display(ClaudeJSON())))
+	if hasOldMCP() { // left by an install from before agents used the CLI
+		line, err := removeOldMCP(m)
+		if err != nil {
+			return done, err
 		}
+		done = append(done, line)
 	}
 	if removed, err := adapters.RemoveBlock(claudeMD()); err != nil {
 		return done, err
@@ -483,33 +515,34 @@ func (a *Adapter) Uninstall() ([]string, error) {
 	return done, nil
 }
 
-// stripDeny takes out the deny rules install added, and the containers it made when they are left empty.
-func stripDeny(s ojson.Obj, m manifest) (ojson.Obj, bool) {
+// stripRules takes out the rules of a permissions list (allow or deny) that install added, and the containers it
+// made when they are left empty.
+func stripRules(s ojson.Obj, key string, ours []string, m manifest) (ojson.Obj, bool) {
 	perms, ok := adapters.Obj(get(s, "permissions"))
 	if !ok {
 		return s, false
 	}
-	deny, ok := get(perms, "deny").([]any)
+	list, ok := get(perms, key).([]any)
 	if !ok {
 		return s, false
 	}
 	var kept []any
-	for _, r := range deny {
-		if rs, ok := r.(string); ok && slices.Contains(m.Deny, rs) {
+	for _, r := range list {
+		if rs, ok := r.(string); ok && slices.Contains(ours, rs) {
 			continue
 		}
 		kept = append(kept, r)
 	}
-	if len(kept) == len(deny) && !(len(deny) == 0 && m.created("permissions.deny")) {
+	if len(kept) == len(list) && !(len(list) == 0 && m.created("permissions."+key)) {
 		return s, false
 	}
-	if len(kept) == 0 && m.created("permissions.deny") {
-		perms, _ = adapters.Without(perms, "deny")
+	if len(kept) == 0 && m.created("permissions."+key) {
+		perms, _ = adapters.Without(perms, key)
 	} else {
 		if kept == nil {
 			kept = []any{}
 		}
-		perms = perms.Set("deny", kept)
+		perms = perms.Set(key, kept)
 	}
 	if len(perms) == 0 && m.created("permissions") {
 		s, _ = adapters.Without(s, "permissions")

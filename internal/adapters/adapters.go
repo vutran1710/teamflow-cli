@@ -1,7 +1,7 @@
-// Package adapters is the registry of agent adapters. The core (CLI, store, sync, MCP server) is the same for
-// every agent; an adapter adds only that agent's extras (registering the MCP server in the agent's config, its
-// hooks, its /teamf command, the one instruction text where the agent reads instructions, a deny rule for the
-// Teamflow home). Each supported agent's adapter registers itself here.
+// Package adapters is the registry of agent adapters. The core (the teamflow CLI, store and sync) is the same for
+// every agent; an adapter adds only that agent's extras (its hooks, its /teamf command, the one instruction text
+// where the agent reads instructions, an allow rule for teamflow work commands and a deny rule for the Teamflow
+// home). Each supported agent's adapter registers itself here.
 package adapters
 
 import (
@@ -18,7 +18,7 @@ type Adapter interface {
 	Name() string
 	// Detect says whether the agent is installed on this machine.
 	Detect() bool
-	// Install sets Teamflow up in the agent, calling binary (an absolute path) from its hooks and MCP entry. It is
+	// Install sets Teamflow up in the agent, calling binary (an absolute path) from its hooks and rules. It is
 	// idempotent, and says what it wrote where.
 	Install(binary string) ([]string, error)
 	// Uninstall removes what Install added, leaving the person's own settings as they were.

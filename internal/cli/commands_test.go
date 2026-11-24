@@ -1101,7 +1101,8 @@ func TestInstallClaudeCode(t *testing.T) {
 	r := m.run("", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL())
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "claude-code:\n", "hooks SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd",
-		"MCP server 'teamflow' in ~/.claude/.claude.json", "/teamf command at ~/.claude/commands/teamf.md")
+		"an allow rule for teamflow commands", "/teamf command at ~/.claude/commands/teamf.md")
+	lacks(t, "stdout", r.out, "MCP")
 	cfg := os.Getenv("CLAUDE_CONFIG_DIR")
 	if b, err := os.ReadFile(filepath.Join(cfg, "settings.json")); err != nil || !strings.Contains(string(b), " hook claude-code SessionStart") {
 		t.Fatalf("settings: %v", err)
@@ -1110,7 +1111,7 @@ func TestInstallClaudeCode(t *testing.T) {
 	contains(t, "stdout", r.out, "claude-code: installed\n")
 	r = m.run("", "uninstall", "-a", "claude-code")
 	wantCode(t, r, 0)
-	contains(t, "stdout", r.out, "removed MCP server 'teamflow'")
+	contains(t, "stdout", r.out, "removed Teamflow's hooks, allow and deny rules")
 	// A malformed settings.json refuses the install: exit 1 with the reason; the file is left as it was.
 	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte("{oops"), 0o644); err != nil {
 		t.Fatal(err)

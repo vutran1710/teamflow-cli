@@ -1,4 +1,4 @@
-package mcpserver
+package ops
 
 // Each tool against the fake server with golden answers: what it sends (method, params, key) and what it answers.
 // Python twins: tests/mcp/test_tools.py (the 28 tools), tests/server/test_web_actions_from_client.py (the
@@ -11,9 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
@@ -281,32 +279,7 @@ func TestArtifactTools(t *testing.T) {
 		t.Fatalf("artifact_publish %v %v", a, sig)
 	}
 
-	// artifact_get: text inline with the data note; save_to; never into the home
 	m.withStore(func(st *store.Store) error { return seedArtifact(st) })
-	m.srv.on("artifact.get", resultHas(t, "artifact.get", `"content_b64": "`))
-	o = m.call("artifact_get", map[string]any{"id": S1}).obj(t)
-	if o["note"] != dataNote || o["content"] == nil || !strings.Contains(o["about"].(string), "ARTIFACT") {
-		t.Fatalf("artifact_get %v", o)
-	}
-	if p := m.params("artifact.get"); p["artifact"] != S1 || p["version"] != nil {
-		t.Fatalf("by artifact id: the version in force: %v", p)
-	}
-	m.call("artifact_get", map[string]any{"id": S1, "exact_version": true}).obj(t)
-	if p := m.params("artifact.get"); p["version"] != S1 {
-		t.Fatalf("exact_version: %v", p)
-	}
-	out := filepath.Join(t.TempDir(), "sub", "spec.md")
-	o = m.call("artifact_get", map[string]any{"id": S1, "save_to": out}).obj(t)
-	if _, err := os.Stat(out); err != nil || o["saved_to"] != out {
-		t.Fatalf("save_to %v %v", o, err)
-	}
-	wantErr(t, m.call("artifact_get", map[string]any{"id": S1, "save_to": filepath.Join(m.dir, "x.md")}), "Teamflow's home")
-	if _, err := os.Stat(filepath.Join(m.dir, "x.md")); err == nil {
-		t.Fatal("written into the home")
-	}
-	m.srv.on("artifact.get", refused(t, "artifact.get", "CONTENT_MISMATCH"))
-	wantErr(t, m.call("artifact_get", map[string]any{"id": S1}), "CONTENT_MISMATCH")
-
 	m.srv.on("artifact.list", ok(t, "artifact.list"))
 	l := m.call("artifact_list", map[string]any{"topic": "Rounding", "include_archived": true}).objs(t)
 	if p := m.params("artifact.list"); p["topic"] != T1 || p["include_archived"] != true || len(l) == 0 || l[0]["artifact"] != S1 {
@@ -582,7 +555,12 @@ func TestProjectPeoplePlanAndTopicDelete(t *testing.T) {
 	}
 	m.srv.on("topic.delete", refused(t, "topic.delete", "STALE_PROJECT_VERSION"))
 	wantErr(t, m.call("topic_delete", map[string]any{"topic": "Rounding", "expected_version": 6}), "STALE_PROJECT_VERSION")
-	wantErr(t, m.call("topic_delete", map[string]any{"topic": "Rounding"}), "expected_version")
+	// Without a version, the one just read goes (the command reads the project, then deletes).
+	m.srv.on("topic.delete", ok(t, "topic.delete"))
+	m.call("topic_delete", map[string]any{"topic": "Rounding"}).obj(t)
+	if p := m.params("topic.delete"); p["expected_version"] != float64(1) {
+		t.Fatalf("topic_delete with the version read: %v", p)
+	}
 }
 
 func TestOrgAndProfileTools(t *testing.T) {
@@ -623,184 +601,4 @@ func TestOrgAndProfileTools(t *testing.T) {
 	// More than one org (or none): which one?
 	m.srv.on("account.me", `{"result": {"account": {"id": "ac_1", "email": "lan@acme.test", "name": "lan", "alias": "", "avatar": null, "created_at": "2026-01-15T09:00:00Z", "disabled_at": null}, "orgs": [], "protocol": 1, "min_client_protocol": 1}}`)
 	wantErr(t, m.call("org_set_title", map[string]any{"member": "huy", "title": "x"}), "which org? you are in: none")
-}
-
-// artifact_get's save_to never writes into Teamflow's home (its keys): not through a link to a file there, a
-// linked folder, a case variant of its path, or a hard link to one of its files; and never over an existing file
-// unless overwrite says so.
-func TestSaveToNeverReachesTheHome(t *testing.T) {
-	m := newMachine(t, true)
-	m.withStore(func(st *store.Store) error { return seedArtifact(st) })
-	m.srv.on("artifact.get", resultHas(t, "artifact.get", `"content_b64": "`))
-	config := filepath.Join(m.dir, "config.json")
-	before, err := os.ReadFile(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	work := t.TempDir()
-	linkFile := filepath.Join(work, "out.json")
-	if err := os.Symlink(config, linkFile); err != nil {
-		t.Fatal(err)
-	}
-	linkDir := filepath.Join(work, "into-home")
-	if err := os.Symlink(m.dir, linkDir); err != nil {
-		t.Fatal(err)
-	}
-	hard := filepath.Join(work, "hard.json")
-	if err := os.Link(config, hard); err != nil {
-		t.Fatal(err)
-	}
-	cases := map[string]map[string]any{
-		"a link to a file in the home":             {"id": S1, "save_to": linkFile, "overwrite": true},
-		"a new file through a linked folder":       {"id": S1, "save_to": filepath.Join(linkDir, "new.md")},
-		"an existing file through a linked folder": {"id": S1, "save_to": filepath.Join(linkDir, "config.json"), "overwrite": true},
-		"a hard link to a file in the home":        {"id": S1, "save_to": hard, "overwrite": true},
-		"the home itself":                          {"id": S1, "save_to": filepath.Join(m.dir, "x.md")},
-		"a folder made under a link":               {"id": S1, "save_to": filepath.Join(linkDir, "sub", "x.md")},
-	}
-	if upper := strings.ToUpper(m.dir); upper != m.dir {
-		if fi, err := os.Stat(upper); err == nil { // a case-insensitive file system (macOS)
-			if home, _ := os.Stat(m.dir); os.SameFile(fi, home) {
-				cases["a case variant of the home"] = map[string]any{"id": S1, "save_to": filepath.Join(upper, "y.md")}
-			}
-		}
-	}
-	for name, a := range cases {
-		t.Run(name, func(t *testing.T) {
-			r := m.call("artifact_get", a)
-			if !r.err {
-				t.Fatalf("written: %s", r)
-			}
-		})
-	}
-	after, _ := os.ReadFile(config)
-	if string(after) != string(before) {
-		t.Fatal("config.json was changed")
-	}
-	for _, p := range []string{filepath.Join(m.dir, "new.md"), filepath.Join(m.dir, "x.md"), filepath.Join(m.dir, "sub")} {
-		if _, err := os.Stat(p); err == nil {
-			t.Fatalf("%s was made in the home", p)
-		}
-	}
-
-	// An existing file is kept unless overwrite says so; a plain new file is written.
-	existing := filepath.Join(work, "spec.md")
-	if err := os.WriteFile(existing, []byte("mine"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wantErr(t, m.call("artifact_get", map[string]any{"id": S1, "save_to": existing}), "already exists")
-	if b, _ := os.ReadFile(existing); string(b) != "mine" {
-		t.Fatal("an existing file was replaced without overwrite")
-	}
-	if o := m.call("artifact_get", map[string]any{"id": S1, "save_to": existing, "overwrite": true}).obj(t); o["saved_to"] != existing {
-		t.Fatalf("overwrite %v", o)
-	}
-	if b, _ := os.ReadFile(existing); string(b) == "mine" {
-		t.Fatal("overwrite did not write")
-	}
-}
-
-// A FIFO swapped in at the target after it was checked never hangs the server (it serves every agent call on one
-// stdio stream): the open does not wait for a reader, and anything but a plain file is refused.
-func TestSaveToNeverHangsOnAFIFO(t *testing.T) {
-	m := newMachine(t, true)
-	m.withStore(func(st *store.Store) error { return seedArtifact(st) })
-	m.srv.on("artifact.get", resultHas(t, "artifact.get", `"content_b64": "`))
-	work := t.TempDir()
-	target := filepath.Join(work, "out.md")
-	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	saveRace = func(stage string) {
-		if stage == "open" {
-			_ = os.Remove(target)
-			if err := syscall.Mkfifo(target, 0o644); err != nil {
-				t.Error(err)
-			}
-		}
-	}
-	t.Cleanup(func() { saveRace = func(string) {} })
-	done := make(chan reply, 1)
-	go func() { done <- m.call("artifact_get", map[string]any{"id": S1, "save_to": target, "overwrite": true}) }()
-	select {
-	case r := <-done:
-		if !r.err {
-			t.Fatalf("written into a FIFO: %s", r)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("artifact_get hung on a FIFO swapped in at save_to")
-	}
-}
-
-// A parent folder swapped for a link to the home after the checks: the file the open made there is refused and
-// removed, never left (even empty) among the person's keys.
-func TestSaveToLeavesNothingInTheHomeOnAParentSwap(t *testing.T) {
-	m := newMachine(t, true)
-	m.withStore(func(st *store.Store) error { return seedArtifact(st) })
-	m.srv.on("artifact.get", resultHas(t, "artifact.get", `"content_b64": "`))
-	work := t.TempDir()
-	dir := filepath.Join(work, "out")
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	saveRace = func(stage string) {
-		if stage == "open" {
-			if err := os.Rename(dir, dir+".moved"); err != nil {
-				t.Error(err)
-			}
-			if err := os.Symlink(m.dir, dir); err != nil {
-				t.Error(err)
-			}
-		}
-	}
-	t.Cleanup(func() { saveRace = func(string) {} })
-	r := m.call("artifact_get", map[string]any{"id": S1, "save_to": filepath.Join(dir, "x.md")})
-	if !r.err {
-		t.Fatalf("written through a swapped parent: %s", r)
-	}
-	if _, err := os.Lstat(filepath.Join(m.dir, "x.md")); err == nil {
-		t.Fatal("an empty file was left in the home")
-	}
-	// The person's own file of that name in the home is never removed by a refusal.
-	saveRace = func(string) {}
-	_ = os.Remove(dir)
-	_ = os.Rename(dir+".moved", dir)
-	mine := filepath.Join(m.dir, "config.json")
-	before, _ := os.ReadFile(mine)
-	saveRace = func(stage string) {
-		if stage == "open" {
-			_ = os.Rename(dir, dir+".moved2")
-			_ = os.Symlink(m.dir, dir)
-		}
-	}
-	r = m.call("artifact_get", map[string]any{"id": S1, "save_to": filepath.Join(dir, "config.json"), "overwrite": true})
-	if !r.err {
-		t.Fatalf("overwrote through a swapped parent: %s", r)
-	}
-	if after, err := os.ReadFile(mine); err != nil || string(after) != string(before) {
-		t.Fatalf("the home's config.json was changed or removed: %v", err)
-	}
-
-	// overwrite of an existing file: the target removed and its parent swapped for a link to the home after the
-	// checks; the open must not make a new (empty) file there.
-	saveRace = func(string) {}
-	_ = os.Remove(dir)
-	_ = os.Rename(dir+".moved2", dir)
-	existing := filepath.Join(dir, "spec.md")
-	if err := os.WriteFile(existing, []byte("mine"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	saveRace = func(stage string) {
-		if stage == "open" {
-			_ = os.Rename(dir, dir+".moved3")
-			_ = os.Symlink(m.dir, dir)
-		}
-	}
-	r = m.call("artifact_get", map[string]any{"id": S1, "save_to": existing, "overwrite": true})
-	if !r.err {
-		t.Fatalf("overwrite through a swapped parent: %s", r)
-	}
-	if _, err := os.Lstat(filepath.Join(m.dir, "spec.md")); err == nil {
-		t.Fatal("overwrite left a file in the home")
-	}
 }

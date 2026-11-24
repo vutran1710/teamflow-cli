@@ -3,9 +3,9 @@ package core
 // What an agent's hooks give a session (Python's ingestor start/prompt/end and context.full/delta/after_compact):
 // the full context when a session is shared or starts shared, at each prompt what it has not seen yet, and what
 // survives compaction. The one instruction text is not repeated here: every adapter places it where its agent
-// always reads instructions, and the MCP server carries it too.
+// always reads instructions.
 //
-// Notices are only ever taken with store.ClaimNotices (never read, then marked), so a hook and a tool call racing
+// Notices are only ever taken with store.ClaimNotices (never read, then marked), so a hook and a command racing
 // never both tell one; and claimed notices are given back when the session could not be told.
 
 import (
@@ -208,7 +208,7 @@ func (c *Core) AfterTool(ctx context.Context, sid string) (string, error) {
 
 // BeforePrompt is the prompt hook of agents that cannot add context there (Copilot CLI, Cursor CLI): the session
 // recorded against its agent process, and its project synced, so the next hook that can speak (after a tool, the
-// turn's end) and the MCP tools tell what is new. Nothing is claimed here: what is claimed must be told.
+// turn's end) and every teamflow command's output tells what is new. Nothing is claimed here: what is claimed must be told.
 func (c *Core) BeforePrompt(ctx context.Context, sid, agent string, pid int, cwd string) error {
 	sess, err := c.St.UpsertSession(sid, agent, pid, cwd, c.Now())
 	if err != nil || sess.Project == "" || !c.SignedIn() {

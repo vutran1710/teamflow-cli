@@ -15,7 +15,7 @@ import (
 )
 
 // Logf logs what the sync skips (an event variant from a newer server). It goes to stderr, never stdout, which
-// hooks and the MCP server answer on.
+// hooks and commands answer on.
 var Logf = log.New(os.Stderr, "teamflow: ", 0).Printf
 
 var (

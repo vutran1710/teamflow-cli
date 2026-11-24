@@ -1,7 +1,7 @@
 package adapters
 
 // What every adapter's install and uninstall share: the install lock, the manifest of what install created (so
-// uninstall takes out exactly that), Teamflow's entry in an agent's JSON map (its MCP server), deny rules added to
+// uninstall takes out exactly that), Teamflow's entry in an agent's JSON map, allow and deny rules added to
 // an agent's list, the Teamflow home as commands and paths name it, and /teamf as a skill.
 
 import (
@@ -528,7 +528,7 @@ var WorkCommands = []string{"projects", "status", "stop", "approve", "reject", "
 
 // SetupCommands change where Teamflow is set up, who is signed in, or the binary itself: never auto-allowed. sync
 // is here until the background sync is built (Task 10), so no spelling of `sync --stop` can slip through.
-var SetupCommands = []string{"login", "logout", "install", "uninstall", "self-update", "hook", "mcp", "debug", "sync"}
+var SetupCommands = []string{"login", "logout", "install", "uninstall", "self-update", "hook", "debug", "sync"}
 
 // notPlain are the characters that make a command more than one plain teamflow run: chaining, pipes, redirects,
 // substitution and expansion (variables, globs, braces, ~), escapes and line breaks.

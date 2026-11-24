@@ -15,7 +15,7 @@
 // managed policy), so the preToolUse hook answers instead: it allows a plain teamflow command (no prompt) and
 // refuses tool calls that name the Teamflow home. The /teamf skill lists shell(teamflow) in allowed-tools too. Its
 // userPromptSubmitted hook cannot add context, so notices arrive at session start, after each tool
-// (postToolUse additionalContext), in every MCP tool result, and an approval request at the turn's end (agentStop).
+// (postToolUse additionalContext), at the end of every teamflow command's output, and an approval request at the turn's end (agentStop).
 package copilot
 
 import (
@@ -120,8 +120,6 @@ func (*Adapter) Install(binary string) ([]string, error) {
 		return nil, fmt.Errorf("%s is someone else's /teamf skill; move it, then run the install again", home.Display(skillPath()))
 	}
 	m.MarkDirs(ConfigDir(), ".", "hooks", "skills", filepath.Join("skills", "teamf"))
-	// TODO(MCP removal follow-up): this is where the MCP server was registered (<config>/mcp-config.json); agents
-	// use the teamflow CLI instead, allowed by the preToolUse hook.
 	m.MarkFileIfNew("copilot-instructions.md", instrPath())
 	// The manifest first: a write failing half way still leaves uninstall knowing what install made.
 	if err := m.Save(); err != nil {

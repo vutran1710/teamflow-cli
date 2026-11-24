@@ -253,8 +253,6 @@ func (*Adapter) Install(binary string) ([]string, error) {
 		m.Remember(f, filepath.Join(ConfigDir(), f))
 	}
 
-	// TODO(MCP removal follow-up): this is where the MCP server was registered (~/.cursor/mcp.json); agents use the
-	// teamflow CLI instead, allowed below.
 	newHooks := installHooks(hooksDoc, binary, &m)
 	if _, err := cliRules(cli, binary, &m); err != nil {
 		return nil, err

@@ -1,8 +1,8 @@
 package cli
 
 // Commands for every action the web app has, so none is web-only: drift resolve|dismiss, deliverables
-// archive|delete|history, project title|remove-member|plan, org title, profile (and its avatar), tasks; and
-// `teamflow mcp`, the MCP server agents start. The server decides who may do what (initiator, admin, approver).
+// archive|delete|history, project title|remove-member|plan, org title, profile (and its avatar), tasks. The server
+// decides who may do what (initiator, admin, approver).
 
 import (
 	"encoding/base64"
@@ -12,24 +12,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/artifacts"
 	"github.com/vutran1710/teamflow-cli/internal/core"
-	"github.com/vutran1710/teamflow-cli/internal/mcpserver"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
-
-// ------------------------------------------------------------------ mcp
-
-// runMCP serves the MCP tools over stdin and stdout, for the agent that started it.
-func runMCP(r *inv, _ *parsed) int {
-	if err := mcpserver.Run(r.ctx, core.Open, adapters.Ancestry{}, api.Version, r.in, r.out); err != nil {
-		fmt.Fprintln(r.errw, "teamflow mcp:", err)
-		return 1
-	}
-	return 0
-}
 
 // ------------------------------------------------------------------ drift
 

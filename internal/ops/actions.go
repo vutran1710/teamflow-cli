@@ -1,15 +1,12 @@
-package mcpserver
+package ops
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/api"
@@ -32,55 +29,62 @@ const (
 	notSentNote = "Not sent: Teamflow checked it on this machine. Fix every problem, then submit again."
 )
 
-// registry is every tool's handler, by name. New registers exactly the tools of protocol.AgentTools.
-var registry = map[string]adder{
-	"project_get":                   tool(projectGet),
-	"project_list":                  tool(projectList),
-	"project_create":                tool(projectCreate),
-	"project_members":               tool(projectMembers),
-	"topic_create":                  tool(topicCreate),
-	"topic_update":                  tool(topicUpdate),
-	"project_request_update":        tool(projectRequestUpdate),
-	"project_history":               tool(projectHistory),
-	"signal_emit":                   tool(signalEmit),
-	"signal_get":                    tool(signalGet),
-	"signal_list":                   tool(signalList),
-	"signal_cite":                   tool(signalCite),
-	"artifact_write":                tool(artifactWrite),
-	"artifact_publish":              tool(artifactPublish),
-	"artifact_get":                  tool(artifactGet),
-	"artifact_list":                 tool(artifactList),
-	"drift_list":                    tool(driftList),
-	"inbox":                         tool(inbox),
-	"approvals":                     tool(approvals),
-	"session_join":                  tool(sessionJoin),
-	"whoami":                        tool(whoami),
-	"deliverables_get":              tool(deliverablesGet),
-	"deliverables_validate":         tool(deliverablesValidate),
-	"deliverables_publish":          tool(deliverablesPublish),
-	"deliverables_update_milestone": tool(deliverablesUpdateMilestone),
-	"deliverables_rename":           tool(deliverablesRename),
-	"action_result":                 tool(actionResult),
-	"action_revoke":                 tool(actionRevoke),
-	"verdict":                       tool(verdict),
-	"drift_resolve":                 tool(driftResolve),
-	"drift_dismiss":                 tool(driftDismiss),
-	"deliverables_archive":          tool(deliverablesArchive),
-	"deliverables_delete":           tool(deliverablesDelete),
-	"deliverables_history":          tool(deliverablesHistory),
-	"project_set_title":             tool(projectSetTitle),
-	"project_remove_member":         tool(projectRemoveMember),
-	"project_write_state":           tool(projectWriteState),
-	"org_set_title":                 tool(orgSetTitle),
-	"profile_update":                tool(profileUpdate),
-	"task_list":                     tool(taskList),
-	"topic_delete":                  tool(topicDelete),
-	"artifact_archive":              tool(artifactArchive),
-	"org_add_member":                tool(orgAddMember),
-	"org_remove_member":             tool(orgRemoveMember),
+// registry is every action, by name (the former MCP tools' names).
+var registry = map[string]func(k *Call, raw json.RawMessage) (any, error){
+	"project_get":                   op(projectGet),
+	"project_list":                  op(projectList),
+	"project_create":                op(projectCreate),
+	"project_members":               op(projectMembers),
+	"topic_create":                  op(topicCreate),
+	"topic_update":                  op(topicUpdate),
+	"project_request_update":        op(projectRequestUpdate),
+	"project_history":               op(projectHistory),
+	"signal_emit":                   op(signalEmit),
+	"signal_get":                    op(signalGet),
+	"signal_list":                   op(signalList),
+	"signal_cite":                   op(signalCite),
+	"artifact_write":                op(artifactWrite),
+	"artifact_publish":              op(artifactPublish),
+	"artifact_list":                 op(artifactList),
+	"drift_list":                    op(driftList),
+	"inbox":                         op(inbox),
+	"approvals":                     op(approvals),
+	"session_join":                  op(sessionJoin),
+	"whoami":                        op(whoami),
+	"deliverables_get":              op(deliverablesGet),
+	"deliverables_validate":         op(deliverablesValidate),
+	"deliverables_publish":          op(deliverablesPublish),
+	"deliverables_update_milestone": op(deliverablesUpdateMilestone),
+	"deliverables_rename":           op(deliverablesRename),
+	"action_result":                 op(actionResult),
+	"action_revoke":                 op(actionRevoke),
+	"verdict":                       op(verdict),
+	"drift_resolve":                 op(driftResolve),
+	"drift_dismiss":                 op(driftDismiss),
+	"deliverables_archive":          op(deliverablesArchive),
+	"deliverables_delete":           op(deliverablesDelete),
+	"deliverables_history":          op(deliverablesHistory),
+	"project_set_title":             op(projectSetTitle),
+	"project_remove_member":         op(projectRemoveMember),
+	"project_write_state":           op(projectWriteState),
+	"org_set_title":                 op(orgSetTitle),
+	"profile_update":                op(profileUpdate),
+	"task_list":                     op(taskList),
+	"topic_delete":                  op(topicDelete),
+	"artifact_archive":              op(artifactArchive),
+	"org_add_member":                op(orgAddMember),
+	"org_remove_member":             op(orgRemoveMember),
 }
 
 func bad(format string, a ...any) error { return &core.BadInput{Msg: fmt.Sprintf(format, a...)} }
+
+// noteFits refuses a note over maxNote characters.
+func noteFits(note string) error {
+	if n := len([]rune(note)); n > maxNote {
+		return bad("the note is %d characters; at most %d", n, maxNote)
+	}
+	return nil
+}
 
 // pyRepr quotes a name as Python's repr does for the plain names people type.
 func pyRepr(s string) string {
@@ -124,13 +128,13 @@ func strs(xs []string) []string {
 }
 
 // projectAPI is the server with the project's key.
-func (k *call) projectAPI(pid string) (*api.Client, error) {
+func (k *Call) projectAPI(pid string) (*api.Client, error) {
 	return k.c.API(k.ctx, pid, core.DefaultTimeout)
 }
 
-func (k *call) authAPI() (*api.Client, error) { return k.c.AuthAPI(core.DefaultTimeout) }
+func (k *Call) authAPI() (*api.Client, error) { return k.c.AuthAPI(core.DefaultTimeout) }
 
-func (k *call) projectView(pid string) (protocol.ProjectView, error) {
+func (k *Call) projectView(pid string) (protocol.ProjectView, error) {
 	var view protocol.ProjectView
 	a, err := k.projectAPI(pid)
 	if err != nil {
@@ -140,7 +144,7 @@ func (k *call) projectView(pid string) (protocol.ProjectView, error) {
 }
 
 // everyone are the members of the project's org (with its key), or of an org (signed in).
-func (k *call) everyone(project, org string) ([]protocol.Member, error) {
+func (k *Call) everyone(project, org string) ([]protocol.Member, error) {
 	return k.c.Everyone(k.ctx, project, org)
 }
 
@@ -150,7 +154,7 @@ func member(everyone []protocol.Member, who string) (protocol.Member, error) {
 }
 
 // members are members by name: of the project's org, or of an org.
-func (k *call) members(names []string, project, org string) ([]string, error) {
+func (k *Call) members(names []string, project, org string) ([]string, error) {
 	out := []string{}
 	if len(names) == 0 {
 		return out, nil
@@ -170,7 +174,7 @@ func (k *call) members(names []string, project, org string) ([]string, error) {
 }
 
 // org is the org named, or the account's only org.
-func (k *call) org(org *string) (string, error) {
+func (k *Call) org(org *string) (string, error) {
 	if org != nil && *org != "" {
 		return *org, nil
 	}
@@ -210,7 +214,7 @@ type projectArg struct {
 	Project *string `json:"project"`
 }
 
-func projectGet(k *call, in projectArg) (any, error) {
+func projectGet(k *Call, in projectArg) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -236,7 +240,7 @@ type sessionJoinIn struct {
 	Topics  []string `json:"topics"`
 }
 
-func sessionJoin(k *call, in sessionJoinIn) (any, error) {
+func sessionJoin(k *Call, in sessionJoinIn) (any, error) {
 	sess, err := k.session()
 	if err != nil {
 		return nil, err
@@ -244,7 +248,7 @@ func sessionJoin(k *call, in sessionJoinIn) (any, error) {
 	return k.c.Join(k.ctx, sess.ID, in.Project, in.Topics)
 }
 
-func projectList(k *call, _ struct{}) (any, error) {
+func projectList(k *Call, _ struct{}) (any, error) {
 	mine, err := k.c.Projects(k.ctx)
 	if err != nil {
 		return nil, err
@@ -270,7 +274,7 @@ type projectCreateIn struct {
 	Org         *string              `json:"org"`
 }
 
-func projectCreate(k *call, in projectCreateIn) (any, error) {
+func projectCreate(k *Call, in projectCreateIn) (any, error) {
 	org, err := k.org(in.Org)
 	if err != nil {
 		return nil, err
@@ -301,7 +305,7 @@ type projectMembersIn struct {
 	Project *string  `json:"project"`
 }
 
-func projectMembers(k *call, in projectMembersIn) (any, error) {
+func projectMembers(k *Call, in projectMembersIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -340,7 +344,7 @@ func topicNames(view protocol.ProjectView) []string {
 	return out
 }
 
-func topicCreate(k *call, in topicCreateIn) (any, error) {
+func topicCreate(k *Call, in topicCreateIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -379,7 +383,7 @@ func topicOf(view protocol.ProjectView, topic string) (protocol.Topic, error) {
 	return protocol.Topic{}, bad("no topic %s", pyRepr(topic))
 }
 
-func topicUpdate(k *call, in topicUpdateIn) (any, error) {
+func topicUpdate(k *Call, in topicUpdateIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -413,7 +417,10 @@ type requestUpdateIn struct {
 	Project *string `json:"project"`
 }
 
-func projectRequestUpdate(k *call, in requestUpdateIn) (any, error) {
+func projectRequestUpdate(k *Call, in requestUpdateIn) (any, error) {
+	if err := noteFits(in.Note); err != nil {
+		return nil, err
+	}
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -453,7 +460,7 @@ func taskObj(view protocol.TaskView, more bool) ojson.Obj {
 	return o
 }
 
-func projectHistory(k *call, in projectArg) (any, error) {
+func projectHistory(k *Call, in projectArg) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -513,7 +520,7 @@ type signalEmitIn struct {
 	Signals []signalDraft `json:"signals"`
 }
 
-func signalEmit(k *call, in signalEmitIn) (any, error) {
+func signalEmit(k *Call, in signalEmitIn) (any, error) {
 	sess, err := k.session()
 	if err != nil {
 		return nil, err
@@ -526,7 +533,7 @@ func signalEmit(k *call, in signalEmitIn) (any, error) {
 }
 
 // scope is the session, when it works on pid following only some topics (nil: no limit here).
-func (k *call) scope(pid string) *store.Session {
+func (k *Call) scope(pid string) *store.Session {
 	if k.sess == nil || k.sess.Project != pid || k.sess.Topics == nil {
 		return nil
 	}
@@ -537,7 +544,7 @@ type signalGetIn struct {
 	Signal string `json:"signal"`
 }
 
-func signalGet(k *call, in signalGetIn) (any, error) {
+func signalGet(k *Call, in signalGetIn) (any, error) {
 	st, ok, err := k.c.St.Signal(in.Signal)
 	if err != nil {
 		return nil, err
@@ -571,10 +578,13 @@ type signalListIn struct {
 	Project     *string `json:"project"`
 }
 
-func signalList(k *call, in signalListIn) (any, error) {
+func signalList(k *Call, in signalListIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
+	}
+	if in.Limit == 0 {
+		in.Limit = 50 // the Python tool's default
 	}
 	params := protocol.SignalList{Project: pid, InForceOnly: in.InForceOnly, Query: in.Query, After: in.After, Limit: in.Limit}
 	if in.Topic != nil && *in.Topic != "" {
@@ -593,11 +603,17 @@ func signalList(k *call, in signalListIn) (any, error) {
 		params.Topic = &tid
 	}
 	if in.Kind != nil {
-		kind := protocol.SignalKind(*in.Kind)
+		kind := protocol.SignalKind(strings.ToUpper(*in.Kind))
+		if !slices.Contains(protocol.SignalKindValues, kind) {
+			return nil, bad("no signal kind %s; one of %s", pyRepr(*in.Kind), oneOf(protocol.SignalKindValues))
+		}
 		params.Kind = &kind
 	}
 	if in.State != nil {
-		state := protocol.SignalState(*in.State)
+		state := protocol.SignalState(strings.ToUpper(*in.State))
+		if !slices.Contains(protocol.SignalStateValues, state) {
+			return nil, bad("no signal state %s; one of %s", pyRepr(*in.State), oneOf(protocol.SignalStateValues))
+		}
 		params.State = &state
 	}
 	a, err := k.projectAPI(pid)
@@ -628,7 +644,7 @@ type signalCiteIn struct {
 	Signals []string `json:"signals"`
 }
 
-func signalCite(k *call, in signalCiteIn) (any, error) {
+func signalCite(k *Call, in signalCiteIn) (any, error) {
 	sess, err := k.session()
 	if err != nil {
 		return nil, err
@@ -660,6 +676,8 @@ type artifactWriteIn struct {
 	Title      *string  `json:"title"`
 	Supersedes *string  `json:"supersedes"`
 	Approvers  []string `json:"approvers"`
+	Required   *int64   `json:"required"`
+	Project    *string  `json:"project"`
 }
 
 func str(s *string) string {
@@ -675,8 +693,42 @@ func tooLarge(e *artifacts.TooLargeError) ojson.Obj {
 		{"next", artifacts.TooLargeNext}}
 }
 
-func artifactWrite(k *call, in artifactWriteIn) (any, error) {
-	sess, err := k.shared()
+// where is the project an artifact goes to (the one named, else the session's) and the session id that sends it
+// (the session's, when it works on that project).
+func (k *Call) where(project *string) (string, string, error) {
+	pid, err := k.project(project)
+	if err != nil {
+		return "", "", err
+	}
+	sid := ""
+	if k.sess != nil && k.sess.Project == pid {
+		sid = k.sess.ID
+	}
+	return pid, sid, nil
+}
+
+// approval is the request for approval an artifact carries: approvers by name, and how many must approve (all of
+// them by default).
+func approval(d map[string]any, approvers []string, required *int64) error {
+	if len(approvers) == 0 {
+		if required != nil {
+			return bad("--required needs --approver: who must approve")
+		}
+		return nil
+	}
+	n := int64(len(approvers))
+	if required != nil {
+		if *required < 1 || *required > n {
+			return bad("required must be between 1 and the number of approvers (%d)", n)
+		}
+		n = *required
+	}
+	d["request_for_approval"] = map[string]any{"approvers": approvers, "required": n}
+	return nil
+}
+
+func artifactWrite(k *Call, in artifactWriteIn) (any, error) {
+	pid, sid, err := k.where(in.Project)
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +738,10 @@ func artifactWrite(k *call, in artifactWriteIn) (any, error) {
 	kind := protocol.ArtifactKind(str(in.Kind))
 	var p artifacts.Prepared
 	if in.Path != nil {
-		project := sess.Cwd
+		project := ""
+		if k.sess != nil {
+			project = k.sess.Cwd
+		}
 		if project == "" {
 			project, _ = os.Getwd()
 		}
@@ -702,9 +757,12 @@ func artifactWrite(k *call, in artifactWriteIn) (any, error) {
 	if err != nil {
 		return nil, &core.BadInput{Msg: err.Error()}
 	}
-	d := artifacts.Signal(p.Name, in.Topic, p.Kind, in.Summary, in.Points, str(in.Title), in.Supersedes, in.Approvers,
+	d := artifacts.Signal(p.Name, in.Topic, p.Kind, in.Summary, in.Points, str(in.Title), in.Supersedes, nil,
 		artifacts.Content{})
-	r, err := k.c.ArtifactWrite(k.ctx, sess.Project, sess.ID, d, p, protocol.ActorAgent)
+	if err := approval(d, in.Approvers, in.Required); err != nil {
+		return nil, err
+	}
+	r, err := k.c.ArtifactWrite(k.ctx, pid, sid, d, p, k.actor())
 	if err != nil {
 		return nil, err
 	}
@@ -714,6 +772,7 @@ func artifactWrite(k *call, in artifactWriteIn) (any, error) {
 	}
 	out := core.ResultObj(protocol.SignalResult{Signal: r.Signal, Accepted: r.Accepted, Reason: r.Reason,
 		Message: r.Message, Seq: r.Seq, ReceivedAt: r.ReceivedAt, State: r.State})
+	out = append(out, ojson.KV{"name", p.Name}, ojson.KV{"kind", string(p.Kind)})
 	if r.Stored != nil {
 		out = append(out, ojson.KV{"stored", r.Stored})
 	}
@@ -738,10 +797,12 @@ type artifactPublishIn struct {
 	Title      *string  `json:"title"`
 	Supersedes *string  `json:"supersedes"`
 	Approvers  []string `json:"approvers"`
+	Required   *int64   `json:"required"`
+	Project    *string  `json:"project"`
 }
 
-func artifactPublish(k *call, in artifactPublishIn) (any, error) {
-	sess, err := k.shared()
+func artifactPublish(k *Call, in artifactPublishIn) (any, error) {
+	pid, sid, err := k.where(in.Project)
 	if err != nil {
 		return nil, err
 	}
@@ -749,206 +810,41 @@ func artifactPublish(k *call, in artifactPublishIn) (any, error) {
 	if kind == "" {
 		kind, _ = artifacts.Infer(in.Name, str(in.MediaType), "")
 	}
-	d := artifacts.Signal(in.Name, in.Topic, kind, in.Summary, in.Points, str(in.Title), in.Supersedes, in.Approvers,
+	d := artifacts.Signal(in.Name, in.Topic, kind, in.Summary, in.Points, str(in.Title), in.Supersedes, nil,
 		artifacts.Content{URL: in.URL, MediaType: str(in.MediaType), Size: in.Size, SHA256: str(in.Sha256)})
-	out, err := k.c.Emit(k.ctx, sess.ID, []map[string]any{d})
+	if err := approval(d, in.Approvers, in.Required); err != nil {
+		return nil, err
+	}
+	r, err := k.c.ArtifactPublish(k.ctx, pid, sid, d, k.actor())
 	if err != nil {
 		return nil, err
 	}
-	return out[0], nil
-}
-
-type artifactGetIn struct {
-	ID           string  `json:"id"`
-	SaveTo       *string `json:"save_to"`
-	ExactVersion bool    `json:"exact_version"`
-	Overwrite    bool    `json:"overwrite"`
-}
-
-func artifactGet(k *call, in artifactGetIn) (any, error) {
-	got, err := k.c.ArtifactGet(k.ctx, in.ID, in.ExactVersion, true)
-	if err != nil {
-		return nil, err
-	}
-	st := got.Signal
-	body, ok := st.Signal.Body.(protocol.ArtifactBody)
-	if !ok {
-		return nil, bad("%s is not an artifact", in.ID)
-	}
-	names, _ := k.c.St.Names()
-	info := ojson.Obj{{"artifact", got.Artifact}, {"version", st.Signal.ID}, {"archived", got.Archived},
-		{"about", core.SignalBlock(st, k.c.TopicsByID(st.Signal.Project), "", names)}}
-	if body.URL != nil && *body.URL != "" {
-		info = append(info, ojson.KV{"url", *body.URL})
-	}
-	if got.ContentB64 == nil {
-		if body.URL != nil && *body.URL != "" {
-			return append(info, ojson.KV{"note", "A link: fetch it with your own tools if you need it."}), nil
-		}
-		return append(info, ojson.KV{"note", "The stored content could not be read."}), nil
-	}
-	data, err := base64.StdEncoding.DecodeString(*got.ContentB64)
-	if err != nil {
-		return append(info, ojson.KV{"note", "The stored content could not be read."}), nil
-	}
-	if in.SaveTo != nil && *in.SaveTo != "" {
-		target, err := k.saveTo(*in.SaveTo, data, in.Overwrite)
-		if err != nil {
-			return nil, err
-		}
-		return append(info, ojson.KV{"saved_to", target}, ojson.KV{"size", len(data)}, ojson.KV{"note", dataNote}), nil
-	}
-	media := str(body.MediaType)
-	if body.Stored != nil {
-		media = body.Stored.MediaType
-	}
-	text, ok := artifacts.Readable(data, body.Kind, media)
-	if !ok {
-		return append(info, ojson.KV{"size", len(data)},
-			ojson.KV{"note", "Not shown inline (binary, or over 100,000 characters): call again with save_to."}), nil
-	}
-	return append(info, ojson.KV{"content", text}, ojson.KV{"note", dataNote}), nil
-}
-
-// saveTo writes an artifact's content where the agent asked (its folders made). Teamflow's home holds the
-// person's keys, so nothing is ever written there: the path is checked as given and once its links are resolved,
-// folders compared by identity (a case variant or a linked folder is still the home), the file itself is never
-// followed when it is a link, and an existing file is replaced only with overwrite, never when it is one of the
-// home's files under another name (a hard link).
-func (k *call) saveTo(path string, data []byte, overwrite bool) (string, error) {
-	target := path
-	if strings.HasPrefix(target, "~/") || target == "~" {
-		h, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		target = filepath.Join(h, strings.TrimPrefix(target, "~"))
-	}
-	abs, err := filepath.Abs(target)
-	if err != nil {
-		return "", err
-	}
-	refused := bad("Teamflow's home holds the person's keys: save the artifact somewhere else")
-	intoHome := func() bool { return inside(abs, k.c.Dir) || inside(resolved(abs), k.c.Dir) }
-	if intoHome() {
-		return "", refused
-	}
-	existed := false
-	if fi, err := os.Lstat(abs); err == nil {
-		switch {
-		case fi.Mode()&os.ModeSymlink != 0:
-			return "", bad("%s is a link: save the artifact to a plain file", target)
-		case !fi.Mode().IsRegular():
-			return "", bad("%s is not a file", target)
-		case !overwrite:
-			return "", bad("%s already exists: pass overwrite to replace it, or choose another path", target)
-		}
-		existed = true
-	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return "", err
-	}
-	if intoHome() { // a folder swapped for a link while it was made
-		return "", refused
-	}
-	saveRace("open")
-	// O_NONBLOCK: a FIFO swapped in after the checks never makes the open wait for a reader (it would hang the
-	// stdio server). With no file there, O_CREATE|O_EXCL, so a file this call makes is known to be its own; over an
-	// existing file, no O_CREATE at all, so a target removed after the checks is refused, never made anew.
-	flags := os.O_WRONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
-	if !existed {
-		flags |= os.O_CREATE | os.O_EXCL
-	}
-	f, err := os.OpenFile(abs, flags, 0o644)
-	if err != nil {
-		return "", bad("cannot write %s: %v", target, errors.Unwrap(err))
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	// Checked on the open file, before anything is truncated: a plain file, and none of the home's.
-	if !fi.Mode().IsRegular() || homeFile(fi, k.c.Dir) {
-		if !existed { // made by this call (O_EXCL): never left behind, not even empty
-			if now, err := os.Lstat(abs); err == nil && os.SameFile(now, fi) {
-				_ = os.Remove(abs)
-			}
-		}
-		if !fi.Mode().IsRegular() {
-			return "", bad("%s is not a file", target)
-		}
-		return "", refused
-	}
-	if err := f.Truncate(0); err != nil {
-		return "", err
-	}
-	if _, err := f.Write(data); err != nil {
-		return "", err
-	}
-	return target, f.Close()
-}
-
-// saveRace lets a test change the file system between saveTo's checks and its open (a race an agent could run).
-var saveRace = func(stage string) {}
-
-// resolved is p with the links of its deepest existing part resolved (the rest appended as written).
-func resolved(p string) string {
-	rest := ""
-	for q := filepath.Clean(p); ; q = filepath.Dir(q) {
-		if r, err := filepath.EvalSymlinks(q); err == nil {
-			return filepath.Join(r, rest)
-		}
-		if q == filepath.Dir(q) {
-			return p
-		}
-		rest = filepath.Join(filepath.Base(q), rest)
-	}
-}
-
-// homeFile says whether fi is one of the files in the home (by identity: a hard link to it is it).
-func homeFile(fi os.FileInfo, home string) bool {
-	found := false
-	_ = filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
-		if err != nil || found {
-			return nil
-		}
-		if hfi, err := os.Stat(p); err == nil && os.SameFile(hfi, fi) {
-			found = true
-		}
-		return nil
-	})
-	return found
-}
-
-// inside says whether p is dir or in it, comparing folders by identity (a case variant or a link is still dir).
-func inside(p, dir string) bool {
-	d, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-	for q := filepath.Clean(p); ; q = filepath.Dir(q) {
-		if fi, err := os.Stat(q); err == nil && fi.IsDir() && os.SameFile(fi, d) {
-			return true
-		}
-		if q == filepath.Dir(q) {
-			return false
+	out := core.ResultObj(r)
+	out = append(out, ojson.KV{"name", in.Name}, ojson.KV{"kind", string(kind)})
+	if r.Accepted {
+		if st, ok, _ := k.c.St.Signal(r.Signal); ok {
+			out = append(out, ojson.KV{"artifact", st.Chain}, ojson.KV{"version", st.ChainVersion})
 		}
 	}
+	return out, nil
 }
 
 type artifactListIn struct {
 	Topic           *string `json:"topic"`
 	IncludeArchived bool    `json:"include_archived"`
+	Project         *string `json:"project"`
 }
 
-func artifactList(k *call, in artifactListIn) (any, error) {
-	sess, err := k.shared()
+func artifactList(k *Call, in artifactListIn) (any, error) {
+	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
 	}
-	topics := k.c.TopicsByID(sess.Project)
-	list, err := k.c.ArtifactList(k.ctx, sess.Project, str(in.Topic), in.IncludeArchived)
+	if k.c.SignedIn() {
+		k.c.Sync(k.ctx, core.DefaultTimeout, pid)
+	}
+	topics := k.c.TopicsByID(pid)
+	list, err := k.c.ArtifactList(k.ctx, pid, str(in.Topic), in.IncludeArchived)
 	if err != nil {
 		return nil, err
 	}
@@ -973,7 +869,10 @@ func artifactList(k *call, in artifactListIn) (any, error) {
 	return out, nil
 }
 
-func artifactArchive(k *call, in artifactArchiveIn) (any, error) {
+func artifactArchive(k *Call, in artifactArchiveIn) (any, error) {
+	if err := noteFits(in.Note); err != nil {
+		return nil, err
+	}
 	archived := in.Archived == nil || *in.Archived
 	out, err := k.c.ArtifactArchive(k.ctx, in.Artifact, archived, in.Note)
 	if err != nil {
@@ -985,7 +884,7 @@ func artifactArchive(k *call, in artifactArchiveIn) (any, error) {
 // ------------------------------------------------------------------ Deliverables
 
 // deliverablesObj is the Deliverables as an agent reads them; me is the session's member.
-func (k *call) deliverablesObj(pid string, view protocol.DeliverablesView, me string) ojson.Obj {
+func (k *Call) deliverablesObj(pid string, view protocol.DeliverablesView, me string) ojson.Obj {
 	d := view.Deliverables
 	names, _ := k.c.St.Names()
 	topics := k.c.TopicsByID(pid)
@@ -1021,12 +920,16 @@ func (k *call) deliverablesObj(pid string, view protocol.DeliverablesView, me st
 		{"milestones", milestones}, {"note", namesNote}}
 }
 
-func deliverablesGet(k *call, _ struct{}) (any, error) {
-	sess, err := k.shared()
+func deliverablesGet(k *Call, in projectIn) (any, error) {
+	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
 	}
-	view, err := k.c.DeliverablesGet(k.ctx, sess.Project)
+	me := ""
+	if k.sess != nil && k.sess.Project == pid {
+		me = k.sess.Member
+	}
+	view, err := k.c.DeliverablesGet(k.ctx, pid)
 	if errors.Is(err, api.ErrOffline) {
 		return ojson.Obj{{"deliverables", nil}, {"message", offlineGet}}, nil
 	}
@@ -1034,7 +937,7 @@ func deliverablesGet(k *call, _ struct{}) (any, error) {
 		return nil, err
 	}
 	if view.Deliverables == nil {
-		held, ok, _ := k.c.St.Deliverables(sess.Project)
+		held, ok, _ := k.c.St.Deliverables(pid)
 		if ok && held.Archived {
 			return ojson.Obj{{"deliverables", nil}, {"message", "The Deliverables are archived by the project's " +
 				"initiator: nothing changes until they restore them."}}, nil
@@ -1042,20 +945,22 @@ func deliverablesGet(k *call, _ struct{}) (any, error) {
 		return ojson.Obj{{"deliverables", nil}, {"message", "This project has no Deliverables yet. Derive them from " +
 			"the plan and publish them with deliverables_publish (ask the person for any due date the plan does not give)."}}, nil
 	}
-	return k.deliverablesObj(sess.Project, view, sess.Member), nil
+	k.c.Sync(k.ctx, core.HookTimeout, pid) // names and topics for the answer
+	return k.deliverablesObj(pid, view, me), nil
 }
 
 type milestonesIn struct {
 	Milestones  json.RawMessage `json:"milestones"`
 	BaseVersion *int64          `json:"base_version"`
+	Project     *string         `json:"project"`
 }
 
-func deliverablesValidate(k *call, in milestonesIn) (any, error) {
-	sess, err := k.shared()
+func deliverablesValidate(k *Call, in milestonesIn) (any, error) {
+	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
 	}
-	problems, err := k.c.DeliverablesValidate(k.ctx, sess.Project, in.Milestones)
+	problems, err := k.c.DeliverablesValidate(k.ctx, pid, in.Milestones)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,7 +969,7 @@ func deliverablesValidate(k *call, in milestonesIn) (any, error) {
 
 // publishing is a publishing tool's answer: the new version, or every problem found here (nothing was sent), or
 // the server's refusal, or why it could not be sent.
-func (k *call) publishing(send func(sid string) (protocol.DeliverablesView, error)) (any, error) {
+func (k *Call) publishing(send func(sid string) (protocol.DeliverablesView, error)) (any, error) {
 	sess, err := k.shared()
 	if err != nil {
 		return nil, err
@@ -1092,7 +997,7 @@ func (k *call) publishing(send func(sid string) (protocol.DeliverablesView, erro
 	return append(ojson.Obj{{"published", true}}, k.deliverablesObj(sess.Project, view, sess.Member)...), nil
 }
 
-func deliverablesPublish(k *call, in milestonesIn) (any, error) {
+func deliverablesPublish(k *Call, in milestonesIn) (any, error) {
 	return k.publishing(func(sid string) (protocol.DeliverablesView, error) {
 		return k.c.DeliverablesPublish(k.ctx, sid, in.Milestones, in.BaseVersion)
 	})
@@ -1103,7 +1008,7 @@ type milestoneIn struct {
 	BaseVersion *int64          `json:"base_version"`
 }
 
-func deliverablesUpdateMilestone(k *call, in milestoneIn) (any, error) {
+func deliverablesUpdateMilestone(k *Call, in milestoneIn) (any, error) {
 	return k.publishing(func(sid string) (protocol.DeliverablesView, error) {
 		return k.c.DeliverablesUpdateMilestone(k.ctx, sid, in.Milestone, in.BaseVersion)
 	})
@@ -1135,7 +1040,7 @@ func orderedNames(raw json.RawMessage) ([]deliverables.Rename, error) {
 	return out, nil
 }
 
-func deliverablesRename(k *call, in renameIn) (any, error) {
+func deliverablesRename(k *Call, in renameIn) (any, error) {
 	return k.publishing(func(sid string) (protocol.DeliverablesView, error) {
 		names, err := orderedNames(in.Names)
 		if err != nil {
@@ -1145,7 +1050,10 @@ func deliverablesRename(k *call, in renameIn) (any, error) {
 	})
 }
 
-func deliverablesArchive(k *call, in archiveIn) (any, error) {
+func deliverablesArchive(k *Call, in archiveIn) (any, error) {
+	if err := noteFits(in.Note); err != nil {
+		return nil, err
+	}
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -1168,7 +1076,7 @@ func deliverablesArchive(k *call, in archiveIn) (any, error) {
 	return out, nil
 }
 
-func deliverablesDelete(k *call, in projectIn) (any, error) {
+func deliverablesDelete(k *Call, in projectIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -1184,7 +1092,7 @@ func deliverablesDelete(k *call, in projectIn) (any, error) {
 	return ojson.Obj{{"deleted", true}, {"note", "The Deliverables and their history are gone; reported results stay as signals."}}, nil
 }
 
-func deliverablesHistory(k *call, in projectIn) (any, error) {
+func deliverablesHistory(k *Call, in projectIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -1226,7 +1134,7 @@ func invalidAnswer(err error) (any, error) {
 	return nil, err
 }
 
-func actionResult(k *call, in actionResultIn) (any, error) {
+func actionResult(k *Call, in actionResultIn) (any, error) {
 	sess, err := k.shared()
 	if err != nil {
 		return nil, err
@@ -1243,7 +1151,7 @@ type actionRevokeIn struct {
 	Reason string `json:"reason"`
 }
 
-func actionRevoke(k *call, in actionRevokeIn) (any, error) {
+func actionRevoke(k *Call, in actionRevokeIn) (any, error) {
 	sess, err := k.shared()
 	if err != nil {
 		return nil, err
@@ -1267,14 +1175,17 @@ func driftObj(d protocol.Drift) ojson.Obj {
 		{"signals", strs(d.Signals)}, {"resolution", d.Resolution}}
 }
 
-func driftList(k *call, in driftListIn) (any, error) {
+func driftList(k *Call, in driftListIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
 	}
 	params := protocol.DriftList{Project: pid}
 	if in.Status != nil {
-		s := protocol.DriftStatus(*in.Status)
+		s := protocol.DriftStatus(strings.ToUpper(*in.Status))
+		if !slices.Contains(protocol.DriftStatusValues, s) {
+			return nil, bad("no drift status %s; one of %s", pyRepr(*in.Status), oneOf(protocol.DriftStatusValues))
+		}
 		params.Status = &s
 	}
 	a, err := k.projectAPI(pid)
@@ -1294,7 +1205,7 @@ func driftList(k *call, in driftListIn) (any, error) {
 
 // driftProject is the project a drift act goes to: the one named, else the drift's (from the replica), else the
 // session's.
-func (k *call) driftProject(project *string, drift string) (string, error) {
+func (k *Call) driftProject(project *string, drift string) (string, error) {
 	if project != nil && *project != "" {
 		return *project, nil
 	}
@@ -1304,7 +1215,10 @@ func (k *call) driftProject(project *string, drift string) (string, error) {
 	return k.project(nil)
 }
 
-func (k *call) driftAct(method, drift, note string, resolvedBy []string, project *string) (any, error) {
+func (k *Call) driftAct(method, drift, note string, resolvedBy []string, project *string) (any, error) {
+	if err := noteFits(note); err != nil {
+		return nil, err
+	}
 	pid, err := k.driftProject(project, drift)
 	if err != nil {
 		return nil, err
@@ -1321,15 +1235,21 @@ func (k *call) driftAct(method, drift, note string, resolvedBy []string, project
 	return ojson.Obj{{"id", drift}, {"done", true}}, nil
 }
 
-func driftResolve(k *call, in driftIn) (any, error) {
+func driftResolve(k *Call, in driftIn) (any, error) {
 	return k.driftAct("drift.resolve", in.Drift, in.Note, in.ResolvedBy, in.Project)
 }
 
-func driftDismiss(k *call, in driftDismissIn) (any, error) {
+func driftDismiss(k *Call, in driftDismissIn) (any, error) {
 	return k.driftAct("drift.dismiss", in.Drift, in.Note, nil, in.Project)
 }
 
-func verdict(k *call, in verdictIn) (any, error) {
+func verdict(k *Call, in verdictIn) (any, error) {
+	if !slices.Contains(protocol.HumanActsVerdictSignalKinds, string(in.Verdict)) {
+		return nil, bad("verdict: APPROVE or REJECT, not %s", pyRepr(string(in.Verdict)))
+	}
+	if in.Verdict == verdictKind(protocol.SignalKindReject) && strings.TrimSpace(in.Note) == "" {
+		return nil, bad("say why it is rejected: a REJECT needs a note")
+	}
 	sid := ""
 	if k.sess != nil {
 		sid = k.sess.ID
@@ -1341,7 +1261,7 @@ func verdict(k *call, in verdictIn) (any, error) {
 	return core.ResultObj(r), nil
 }
 
-func inbox(k *call, _ struct{}) (any, error) {
+func inbox(k *Call, _ struct{}) (any, error) {
 	sess, err := k.session()
 	if err != nil {
 		return nil, err
@@ -1349,7 +1269,7 @@ func inbox(k *call, _ struct{}) (any, error) {
 	return k.c.Inbox(sess.ID)
 }
 
-func approvals(k *call, _ struct{}) (any, error) {
+func approvals(k *Call, _ struct{}) (any, error) {
 	sess, err := k.session()
 	if err != nil {
 		return nil, err
@@ -1357,7 +1277,7 @@ func approvals(k *call, _ struct{}) (any, error) {
 	return k.c.ApprovalsQueue(k.ctx, sess.ID, false)
 }
 
-func whoami(k *call, _ struct{}) (any, error) {
+func whoami(k *Call, _ struct{}) (any, error) {
 	a, err := k.authAPI()
 	if err != nil {
 		return nil, err
@@ -1387,7 +1307,7 @@ func whoami(k *call, _ struct{}) (any, error) {
 
 // ------------------------------------------------------------------ the project's people, plan and tasks
 
-func projectSetTitle(k *call, in setTitleIn) (any, error) {
+func projectSetTitle(k *Call, in setTitleIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -1407,7 +1327,7 @@ func projectSetTitle(k *call, in setTitleIn) (any, error) {
 	return ojson.Obj{{"member", nameOf(view.Names, ids[0])}, {"title", view.Project.Titles[ids[0]]}}, nil
 }
 
-func projectRemoveMember(k *call, in removeMemberIn) (any, error) {
+func projectRemoveMember(k *Call, in removeMemberIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -1433,7 +1353,7 @@ func projectRemoveMember(k *call, in removeMemberIn) (any, error) {
 	return ojson.Obj{{"members", memberNames(out)}}, nil
 }
 
-func projectWriteState(k *call, in writeStateIn) (any, error) {
+func projectWriteState(k *Call, in writeStateIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -1443,7 +1363,10 @@ func projectWriteState(k *call, in writeStateIn) (any, error) {
 		return nil, err
 	}
 	var view protocol.ProjectView
-	if err := a.Call(k.ctx, "project.write_state", protocol.WriteState{Project: pid, BaseVersion: in.BaseVersion,
+	if in.BaseVersion == nil {
+		return nil, bad("base_version: the state version you read (project get's state_version)")
+	}
+	if err := a.Call(k.ctx, "project.write_state", protocol.WriteState{Project: pid, BaseVersion: *in.BaseVersion,
 		Plan: in.Plan, Instruction: in.Instruction}, &view); err != nil {
 		return nil, err
 	}
@@ -1451,18 +1374,24 @@ func projectWriteState(k *call, in writeStateIn) (any, error) {
 	return ojson.Obj{{"state_version", view.State.Version}, {"plan", view.State.Plan}, {"instruction", view.State.Instruction}}, nil
 }
 
-func taskList(k *call, in taskListIn) (any, error) {
+func taskList(k *Call, in taskListIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
 	}
 	params := protocol.TaskList{Project: pid}
 	if in.Kind != nil {
-		kind := protocol.TaskKind(*in.Kind)
+		kind := protocol.TaskKind(strings.ToUpper(string(*in.Kind)))
+		if !slices.Contains(protocol.TaskKindValues, kind) {
+			return nil, bad("no task kind %s; one of %s", pyRepr(string(*in.Kind)), oneOf(protocol.TaskKindValues))
+		}
 		params.Kind = &kind
 	}
 	if in.State != nil {
-		state := protocol.TaskState(*in.State)
+		state := protocol.TaskState(strings.ToUpper(string(*in.State)))
+		if !slices.Contains(protocol.TaskStateValues, state) {
+			return nil, bad("no task state %s; one of %s", pyRepr(string(*in.State)), oneOf(protocol.TaskStateValues))
+		}
 		params.State = &state
 	}
 	a, err := k.projectAPI(pid)
@@ -1480,7 +1409,7 @@ func taskList(k *call, in taskListIn) (any, error) {
 	return out, nil
 }
 
-func topicDelete(k *call, in topicDeleteIn) (any, error) {
+func topicDelete(k *Call, in topicDeleteIn) (any, error) {
 	pid, err := k.project(in.Project)
 	if err != nil {
 		return nil, err
@@ -1497,8 +1426,12 @@ func topicDelete(k *call, in topicDeleteIn) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	version := in.ExpectedVersion
+	if version == 0 { // the version just read
+		version = view.Project.Version
+	}
 	var out protocol.TopicDeleted
-	if err := a.Call(k.ctx, "topic.delete", protocol.TopicDelete{Project: pid, ExpectedVersion: in.ExpectedVersion,
+	if err := a.Call(k.ctx, "topic.delete", protocol.TopicDelete{Project: pid, ExpectedVersion: version,
 		Topic: t.ID}, &out); err != nil {
 		return nil, err
 	}
@@ -1508,7 +1441,7 @@ func topicDelete(k *call, in topicDeleteIn) (any, error) {
 
 // ------------------------------------------------------------------ the org and the person's profile
 
-func orgSetTitle(k *call, in orgTitleIn) (any, error) {
+func orgSetTitle(k *Call, in orgTitleIn) (any, error) {
 	org, err := k.org(in.Org)
 	if err != nil {
 		return nil, err
@@ -1532,7 +1465,7 @@ func orgSetTitle(k *call, in orgTitleIn) (any, error) {
 	return ojson.Obj{{"member", out.Name}, {"org", org}, {"title", out.Title}}, nil
 }
 
-func orgAddMember(k *call, in orgAddIn) (any, error) {
+func orgAddMember(k *Call, in orgAddIn) (any, error) {
 	org, err := k.org(in.Org)
 	if err != nil {
 		return nil, err
@@ -1548,7 +1481,7 @@ func orgAddMember(k *call, in orgAddIn) (any, error) {
 	return ojson.Obj{{"member", m.ID}, {"name", m.Name}, {"email", m.Email}, {"org", org}, {"title", m.Title}}, nil
 }
 
-func orgRemoveMember(k *call, in orgRemoveIn) (any, error) {
+func orgRemoveMember(k *Call, in orgRemoveIn) (any, error) {
 	org, err := k.org(in.Org)
 	if err != nil {
 		return nil, err
@@ -1576,7 +1509,7 @@ func orgRemoveMember(k *call, in orgRemoveIn) (any, error) {
 	return ojson.Obj{{"removed", m.Name}, {"members", left}}, nil
 }
 
-func profileUpdate(k *call, in profileIn) (any, error) {
+func profileUpdate(k *Call, in profileIn) (any, error) {
 	if in.Name == nil && in.Alias == nil {
 		return nil, bad("give a new name or alias")
 	}
@@ -1592,4 +1525,13 @@ func profileUpdate(k *call, in profileIn) (any, error) {
 		return nil, err
 	}
 	return ojson.Obj{{"name", acc.Name}, {"alias", acc.Alias}}, nil
+}
+
+// oneOf lists an enum's values.
+func oneOf[T ~string](xs []T) string {
+	var out []string
+	for _, x := range xs {
+		out = append(out, string(x))
+	}
+	return strings.Join(out, ", ")
 }

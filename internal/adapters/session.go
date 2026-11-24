@@ -1,7 +1,7 @@
 package adapters
 
 // Finding the agent session a process runs under. Hooks record each session (by the id the agent gives them)
-// against the agent's process; the MCP server the agent started, and any command run from its shell, walk up their
+// against the agent's process; any teamflow command run from its shell, walk up their
 // own ancestors to the nearest process with a recorded session. Two agents started from nested shells are each the
 // nearest to their own children, so each finds its own session.
 

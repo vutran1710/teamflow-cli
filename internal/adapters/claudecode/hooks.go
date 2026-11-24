@@ -17,7 +17,7 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
 )
 
-// EnvPID is the agent marker Claude Code sets for the processes it starts (hooks, its shell, MCP servers): its own
+// EnvPID is the agent marker Claude Code sets for the processes it starts (hooks, its shell): its own
 // process id. CLAUDECODE=1 is set too (checked on Claude Code 2.1.331).
 const EnvPID = "CLAUDE_PID"
 
