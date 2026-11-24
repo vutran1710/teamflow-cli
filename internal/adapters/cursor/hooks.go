@@ -93,6 +93,7 @@ func (*Adapter) Hook(event string, stdin []byte, c *core.Core) ([]byte, error) {
 		}
 		return context_(protocol.AgentInstructions + text), nil
 	case "beforeSubmitPrompt":
+		adapters.EnsureSync() // not running (a reboot, a restart, its quiet exit): started again
 		if err := c.BeforePrompt(ctx, sid, Name, agentPID(), in.cwd()); err != nil {
 			return nil, err
 		}

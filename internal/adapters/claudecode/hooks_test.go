@@ -509,6 +509,9 @@ func TestHookResumeAfterRestart(t *testing.T) {
 	if out := m.hook("UserPromptSubmit", `{"session_id": "huy-1", "prompt": "go"}`); !strings.Contains(out, "After the reboot") {
 		t.Fatalf("after resume: %q", out)
 	}
+	if started != 2 { // a prompt starts it too when it is not running; its failure never fails the hook
+		t.Fatalf("background sync started %d times", started)
+	}
 }
 
 // Compaction re-sends the project and the session's citations; the person's own /teamf approve prompt adds

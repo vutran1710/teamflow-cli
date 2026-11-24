@@ -265,6 +265,10 @@ func TestHookResumeAfterRestart(t *testing.T) {
 	if out := m.Hook("postToolUse", in("cp-1", `"toolName": "bash"`)); !strings.Contains(out, "After the reboot") {
 		t.Fatalf("after resume: %q", out)
 	}
+	m.Hook("userPromptSubmitted", in("cp-1", `"prompt": "go"`))
+	if started != 2 { // a prompt starts it too when it is not running
+		t.Fatalf("background sync started %d times", started)
+	}
 }
 
 // 50 tool steps in a turn make at most one network sync (the tool hooks stay off the network).

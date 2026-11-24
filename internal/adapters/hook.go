@@ -15,8 +15,9 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/home"
 )
 
-// StartSync starts the background sync when this build has one (set by the CLI; nil: none). It is called at every
-// session start, so a sync stopped by a reboot or a restart starts again; one already running is left alone.
+// StartSync starts the background sync when this build has one (set by the teamflow binary; nil: none). It is
+// called at every session start and prompt, so a sync stopped by a reboot, a restart or its quiet exit starts
+// again; one already running is left alone.
 var StartSync func() error
 
 // EnsureSync starts the background sync if the build has one; a failure is logged, never raised.

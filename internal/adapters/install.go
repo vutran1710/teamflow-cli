@@ -527,8 +527,8 @@ var WorkCommands = []string{"projects", "status", "whoami", "inbox", "stop", "ap
 	"signal", "artifact", "deliverables", "action", "drift", "project", "org", "profile", "tasks", "log"}
 
 // SetupCommands change where Teamflow is set up, who is signed in, or the binary itself: never auto-allowed. sync
-// is here until the background sync is built (Task 10), so no spelling of `sync --stop` can slip through.
-// outbox is here: dropping queued signals is the person's decision.
+// is here: starting or stopping the machine's background sync (`sync --stop`) is the person's decision. outbox is
+// here: dropping queued signals is the person's decision.
 var SetupCommands = []string{"login", "logout", "install", "uninstall", "self-update", "hook", "debug", "sync", "outbox"}
 
 // notPlain are the characters that make a command more than one plain teamflow run: chaining, pipes, redirects,

@@ -929,7 +929,7 @@ func TestHiddenAndLaterCommands(t *testing.T) {
 	if r.out != "" || r.err != "" {
 		t.Fatalf("hook said something: %s", r)
 	}
-	for _, args := range [][]string{{"sync"}, {"self-update"}} {
+	for _, args := range [][]string{{"self-update"}} {
 		r := m.run("", args...)
 		wantCode(t, r, 1)
 		contains(t, "stderr", r.err, "not available in this build yet")

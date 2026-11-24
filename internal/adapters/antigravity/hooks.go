@@ -77,6 +77,7 @@ func (*Adapter) Hook(event string, stdin []byte, c *core.Core) ([]byte, error) {
 		return inject(text), err
 	case "PreInvocation":
 		if in.InvocationNum == nil || *in.InvocationNum == 0 { // the turn's first model call
+			adapters.EnsureSync() // not running (a reboot, a restart, its quiet exit): started again
 			text, err := c.Prompt(ctx, sid, Name, agentPID(), in.cwd(), in.LastUserInput)
 			return inject(text), err
 		}

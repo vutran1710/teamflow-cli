@@ -80,6 +80,7 @@ func (*Adapter) Hook(event string, stdin []byte, c *core.Core) ([]byte, error) {
 		text, err := c.Start(ctx, sid, Name, agentPID(), in.Cwd, in.Source)
 		return additional(text), err
 	case "userPromptSubmitted":
+		adapters.EnsureSync() // not running (a reboot, a restart, its quiet exit): started again
 		return nil, c.BeforePrompt(ctx, sid, Name, agentPID(), in.Cwd)
 	case "preToolUse": // answered by Quick, before the home is opened
 		return nil, nil

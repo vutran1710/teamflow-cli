@@ -275,6 +275,10 @@ func TestHookResumeAfterRestart(t *testing.T) {
 	if out := m.Hook("postToolUse", in("cu-1", "")); !strings.Contains(out, "After the reboot") {
 		t.Fatalf("after resume: %q", out)
 	}
+	m.Hook("beforeSubmitPrompt", in("cu-1", `"prompt": "go"`))
+	if started != 2 { // a prompt starts it too when it is not running
+		t.Fatalf("background sync started %d times", started)
+	}
 }
 
 // Detect: an agent binary on the PATH or ~/.cursor; neither: not here.

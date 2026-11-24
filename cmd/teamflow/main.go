@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/cli"
 )
@@ -14,7 +15,8 @@ import (
 var version = "dev"
 
 func main() {
-	api.Version = version // the Teamflow-Client header names this build
+	api.Version = version              // the Teamflow-Client header names this build
+	adapters.StartSync = cli.StartSync // install and the start and prompt hooks start the background sync
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 

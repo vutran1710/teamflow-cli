@@ -68,6 +68,7 @@ func (*Adapter) Hook(event string, stdin []byte, c *core.Core) ([]byte, error) {
 		text, err := c.Start(ctx, sid, Name, adapters.AgentPID(EnvPID, "claude"), in.Cwd, in.Source)
 		return addContext(event, text), err
 	case "UserPromptSubmit":
+		adapters.EnsureSync() // not running (a reboot, a restart, its quiet exit): started again
 		text, err := c.Prompt(ctx, sid, Name, adapters.AgentPID(EnvPID, "claude"), in.Cwd, in.Prompt)
 		return addContext(event, text), err
 	case "PreToolUse": // every step of the turn: from the replica, the network at most once per 10 s
