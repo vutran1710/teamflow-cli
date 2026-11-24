@@ -5,7 +5,6 @@
 package deliverables
 
 import (
-	"crypto/rand"
 	"fmt"
 	"regexp"
 	"slices"
@@ -14,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vutran1710/teamflow-cli/internal/ids"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
 
@@ -106,32 +106,8 @@ func init() {
 	}
 }
 
-const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-
-// newID is a fresh id with the prefix: a ULID (48 bits of milliseconds, 80 random bits), as Python's new_id.
-var newID = func(prefix string) string {
-	var b [16]byte
-	ms := uint64(time.Now().UnixMilli())
-	for i := 5; i >= 0; i-- {
-		b[i] = byte(ms)
-		ms >>= 8
-	}
-	if _, err := rand.Read(b[6:]); err != nil {
-		panic(err) // crypto/rand never fails on the supported platforms
-	}
-	var out [26]byte
-	// 128 bits as 26 base-32 digits, the first holding the top 3 bits
-	hi := uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 | uint64(b[4])<<24 |
-		uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
-	lo := uint64(b[8])<<56 | uint64(b[9])<<48 | uint64(b[10])<<40 | uint64(b[11])<<32 | uint64(b[12])<<24 |
-		uint64(b[13])<<16 | uint64(b[14])<<8 | uint64(b[15])
-	for i := 25; i >= 0; i-- {
-		out[i] = crockford[lo&31]
-		lo = lo>>5 | hi<<59
-		hi >>= 5
-	}
-	return prefix + string(out[:])
-}
+// newID is a fresh id with the prefix (a ULID); tests replace it.
+var newID = ids.New
 
 // topicRef is a topic by id or by name (ignoring case).
 func topicRef(ref string, topics []protocol.Topic) (string, bool) {
