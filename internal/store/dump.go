@@ -52,6 +52,7 @@ type DumpNotice struct {
 type DumpSpool struct {
 	N         int64           `json:"n"`
 	Signal    string          `json:"signal"`
+	Method    string          `json:"method"`
 	Session   string          `json:"session"`
 	KeyRef    string          `json:"key_ref"`
 	Params    json.RawMessage `json:"params"`
@@ -104,10 +105,10 @@ func (o ops) Dump() (Dump, error) {
 			})
 		},
 		func() error {
-			return o.each("SELECT n, signal, session, key_ref, params, created_at FROM spool ORDER BY n", nil, func(r *sql.Rows) error {
+			return o.each("SELECT n, signal, method, session, key_ref, params, created_at FROM spool ORDER BY n", nil, func(r *sql.Rows) error {
 				var s DumpSpool
 				var params string
-				if err := r.Scan(&s.N, &s.Signal, &s.Session, &s.KeyRef, &params, &s.CreatedAt); err != nil {
+				if err := r.Scan(&s.N, &s.Signal, &s.Method, &s.Session, &s.KeyRef, &params, &s.CreatedAt); err != nil {
 					return err
 				}
 				s.Params = json.RawMessage(params)

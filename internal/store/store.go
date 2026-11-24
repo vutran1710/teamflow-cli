@@ -1067,33 +1067,63 @@ func (o ops) ProtocolOK() (bool, string) {
 
 // ------------------------------------------------------------------ spool
 
-// SpoolItem is an emitted signal waiting to be accepted.
+// The spool is each project key's ordered outbox: what this machine records on the project's shared record leaves
+// in the order it was made. Most items are signal.emit; the human acts drift.resolve and drift.dismiss wait in it
+// too (a verdict is a signal.emit).
+
+// SpoolItem is an item waiting to be sent: Signal is its id (the signal's id; for a drift act, its own).
 type SpoolItem struct {
 	N       int64
 	Signal  string
+	Method  string // signal.emit, drift.resolve or drift.dismiss
 	Session string
-	Params  string // SignalEmit JSON
+	Params  string // the call's params as JSON (SignalEmit for signal.emit)
 }
 
 // SpoolAdd queues an emitted signal to go out with the key named keyRef. The same signal twice is queued once.
 func (o ops) SpoolAdd(signal, session, keyRef, params string, now time.Time) error {
-	_, err := o.exec("INSERT OR IGNORE INTO spool (signal, session, key_ref, params, created_at) VALUES (?, ?, ?, ?, ?)",
-		signal, session, keyRef, params, ts(now))
+	return o.OutboxAdd(signal, "signal.emit", session, keyRef, params, now)
+}
+
+// OutboxAdd queues one call (its id, method and params) at the end of the outbox of the key named keyRef. The
+// same id twice is queued once, in its first place.
+func (o ops) OutboxAdd(id, method, session, keyRef, params string, now time.Time) error {
+	_, err := o.exec("INSERT OR IGNORE INTO spool (signal, method, session, key_ref, params, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		id, method, session, keyRef, params, ts(now))
 	return err
 }
 
-// Spooled are the signals waiting for the key named keyRef, in order.
+// Spooled are the items waiting for the key named keyRef, in order.
 func (o ops) Spooled(keyRef string) ([]SpoolItem, error) {
 	var out []SpoolItem
-	err := o.each("SELECT n, signal, session, params FROM spool WHERE key_ref = ? ORDER BY n", []any{keyRef}, func(r *sql.Rows) error {
+	err := o.each("SELECT n, signal, method, session, params FROM spool WHERE key_ref = ? ORDER BY n", []any{keyRef}, func(r *sql.Rows) error {
 		var it SpoolItem
-		if err := r.Scan(&it.N, &it.Signal, &it.Session, &it.Params); err != nil {
+		if err := r.Scan(&it.N, &it.Signal, &it.Method, &it.Session, &it.Params); err != nil {
 			return err
 		}
 		out = append(out, it)
 		return nil
 	})
 	return out, err
+}
+
+// Ahead is how many items of the same key wait ahead of the item id; false when id is not queued.
+func (o ops) Ahead(keyRef, id string) (int, bool, error) {
+	var n int64
+	found, err := o.one("SELECT n FROM spool WHERE signal = ? AND key_ref = ?", []any{id, keyRef}, &n)
+	if err != nil || !found {
+		return 0, false, err
+	}
+	var ahead int
+	_, err = o.one("SELECT COUNT(*) FROM spool WHERE key_ref = ? AND n < ?", []any{keyRef, n}, &ahead)
+	return ahead, err == nil, err
+}
+
+// Waiting is how many items wait for the key named keyRef.
+func (o ops) Waiting(keyRef string) (int, error) {
+	var n int
+	_, err := o.one("SELECT COUNT(*) FROM spool WHERE key_ref = ?", []any{keyRef}, &n)
+	return n, err
 }
 
 // SpoolSize is how many signals wait.

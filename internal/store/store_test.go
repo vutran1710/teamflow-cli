@@ -1141,3 +1141,75 @@ func TestTxStoreView(t *testing.T) {
 		t.Fatalf("not rolled back: %v", err)
 	}
 }
+
+// The outbox (the spool, made explicit): every item keeps its method and its place; a human act's place says how
+// many wait ahead of it. Sad paths: the same item twice (kept once, in its first place), another key's items (never
+// counted), an item not queued (not found), a closed store.
+func TestOutboxKeepsMethodAndPlace(t *testing.T) {
+	st := open(t, t.TempDir())
+	must(t, st.SpoolAdd("sg_1", "ss_1", "ref_a", `{"a":1}`, t0))
+	must(t, st.OutboxAdd("dra_1", "drift.resolve", "ss_1", "ref_a", `{"drift":"dr_1"}`, t0))
+	must(t, st.SpoolAdd("sg_x", "ss_1", "ref_b", `{"a":9}`, t0))
+	must(t, st.OutboxAdd("sg_2", "signal.emit", "", "ref_a", `{"a":2}`, t0))
+	must(t, st.OutboxAdd("dra_1", "drift.dismiss", "ss_9", "ref_a", `{}`, t0)) // again: kept once, as first
+	items, err := st.Spooled("ref_a")
+	must(t, err)
+	var got []string
+	for _, it := range items {
+		got = append(got, it.Signal+":"+it.Method)
+	}
+	if strings.Join(got, ",") != "sg_1:signal.emit,dra_1:drift.resolve,sg_2:signal.emit" {
+		t.Fatalf("outbox %v", got)
+	}
+	for id, want := range map[string]int{"sg_1": 0, "dra_1": 1, "sg_2": 2} {
+		if n, ok, err := st.Ahead("ref_a", id); err != nil || !ok || n != want {
+			t.Fatalf("Ahead(%s) = %d %v %v, want %d", id, n, ok, err, want)
+		}
+	}
+	if _, ok, err := st.Ahead("ref_a", "sg_missing"); ok || err != nil {
+		t.Fatalf("an item not queued: %v %v", ok, err)
+	}
+	if n, _ := st.Waiting("ref_a"); n != 3 {
+		t.Fatalf("Waiting %d", n)
+	}
+	if n, _ := st.Waiting("ref_none"); n != 0 {
+		t.Fatalf("Waiting for another key %d", n)
+	}
+	st.Close()
+	if _, _, err := st.Ahead("ref_a", "sg_1"); err == nil {
+		t.Fatal("a closed store answered Ahead")
+	}
+	if _, err := st.Waiting("ref_a"); err == nil {
+		t.Fatal("a closed store answered Waiting")
+	}
+}
+
+// A spool written before the outbox knew methods (0001 and 0002 only) migrates: its rows are signal.emit, in their
+// order, and a restart sends them as before.
+func TestSpoolFromBeforeMethodsMigrates(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, FileName))
+	must(t, err)
+	stmts := []string{"CREATE TABLE " + migrationsTable + " (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"}
+	for _, n := range []string{"0001_init.sql", "0002_project_key_binding.sql"} {
+		body, err := os.ReadFile(filepath.Join("migrations", n))
+		must(t, err)
+		stmts = append(stmts, string(body), "INSERT INTO "+migrationsTable+" VALUES ('"+n+"', '2026-11-01T00:00:00Z')")
+	}
+	stmts = append(stmts,
+		"INSERT INTO spool (signal, session, key_ref, params, created_at) VALUES ('sg_old1', 'ss_1', 'ref_a', '{}', '2026-11-01T00:00:00Z')",
+		"INSERT INTO spool (signal, session, key_ref, params, created_at) VALUES ('sg_old2', 'ss_1', 'ref_a', '{}', '2026-11-01T00:00:00Z')")
+	for _, q := range stmts {
+		_, err = db.Exec(q)
+		must(t, err)
+	}
+	must(t, db.Close())
+	st := open(t, dir)
+	must(t, st.OutboxAdd("dra_new", "drift.dismiss", "ss_1", "ref_a", "{}", t0))
+	items, err := st.Spooled("ref_a")
+	must(t, err)
+	if len(items) != 3 || items[0].Method != "signal.emit" || items[1].Signal != "sg_old2" || items[1].Method != "signal.emit" ||
+		items[2].Method != "drift.dismiss" {
+		t.Fatalf("migrated outbox %+v", items)
+	}
+}
