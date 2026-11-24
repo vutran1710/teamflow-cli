@@ -7,9 +7,9 @@
     "id": 1,
     "error": {
       "code": -32000,
-      "message": "update teamflow: this server needs client protocol ≥ 1",
+      "message": "you are no longer in this org",
       "data": {
-        "reason": "UPGRADE_REQUIRED"
+        "reason": "NOT_A_MEMBER"
       }
     }
   }

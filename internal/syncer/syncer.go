@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,9 +26,11 @@ const MaxPages = 20
 // now is the clock for notices (a variable for tests).
 var now = time.Now
 
-// verdictKinds are the signal kinds that are human acts (HUMAN_ACTS.verdict_signal_kinds): sent alone, never
-// batched. TODO(protocol export): read HUMAN_ACTS from x-constants once the export carries it.
-var verdictKinds = map[protocol.SignalKind]bool{protocol.SignalKindApprove: true, protocol.SignalKindReject: true}
+// isVerdict says whether a signal kind is a human act (HUMAN_ACTS.verdict_signal_kinds). A human act is sent
+// alone as a plain object body, never in an array: the server counts any array, even of one, as a batch.
+func isVerdict(k protocol.SignalKind) bool {
+	return slices.Contains(protocol.HumanActsVerdictSignalKinds, string(k))
+}
 
 // spooledEmit is what Push reads of a spooled SignalEmit: enough to classify it and word its notice. The params
 // are sent as stored.
@@ -88,7 +91,7 @@ func Push(ctx context.Context, st *store.Store, c *api.Client) (int, error) {
 			}
 			continue
 		}
-		if !verdictKinds[p.emit.Signal.Kind] {
+		if !isVerdict(p.emit.Signal.Kind) {
 			batch = append(batch, p)
 			continue
 		}

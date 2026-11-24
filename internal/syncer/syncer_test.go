@@ -841,3 +841,20 @@ func TestPullSkipsAnUnknownEventAndMovesOn(t *testing.T) {
 		t.Fatalf("logged %q, want once", logged)
 	}
 }
+
+// TestVerdictKindsAreTheExportedHumanActs: the kinds sent alone are exactly HUMAN_ACTS.verdict_signal_kinds.
+func TestVerdictKindsAreTheExportedHumanActs(t *testing.T) {
+	if len(protocol.HumanActsVerdictSignalKinds) == 0 {
+		t.Fatal("the export names no verdict kinds")
+	}
+	for _, k := range protocol.HumanActsVerdictSignalKinds {
+		if !isVerdict(protocol.SignalKind(k)) {
+			t.Errorf("%s is a human act but would be batched", k)
+		}
+	}
+	for _, k := range []protocol.SignalKind{protocol.SignalKindNote, "", "approve", "FUTURE_KIND"} {
+		if isVerdict(k) {
+			t.Errorf("%q is not a human act but would be sent alone", k)
+		}
+	}
+}

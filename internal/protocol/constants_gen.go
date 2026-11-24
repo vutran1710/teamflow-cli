@@ -31,6 +31,11 @@ const (
 	ProtocolHeader     = "Teamflow-Protocol"             // PROTOCOL_HEADER
 )
 
+// HUMAN_ACTS
+const (
+	HumanActsBatchRefusal = "a verdict is sent on its own, not in a batch"
+)
+
 // RPC_ERROR_CODES
 const (
 	CodeParseError     = -32700
@@ -40,6 +45,10 @@ const (
 	CodeInternalError  = -32603
 	CodeRuleFailed     = -32000
 )
+
+// Lists from the schema's x-constants. Go has no constant slices: never change them.
+var HumanActsMethods = []string{"drift.resolve", "drift.dismiss"} // HUMAN_ACTS.methods
+var HumanActsVerdictSignalKinds = []string{"APPROVE", "REJECT"}   // HUMAN_ACTS.verdict_signal_kinds
 
 // Method is one RPC method: who may call it and the $defs of its params and result.
 type Method struct {

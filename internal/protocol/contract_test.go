@@ -799,6 +799,11 @@ func TestConstantsMatchExport(t *testing.T) {
 		"CLIENT_HEADER":        ClientHeader,
 		"CLIENT_HEADER_FORMAT": ClientHeaderFormat,
 		"PROTOCOL_HEADER":      ProtocolHeader,
+		"HUMAN_ACTS": map[string]any{
+			"methods":              HumanActsMethods,
+			"verdict_signal_kinds": HumanActsVerdictSignalKinds,
+			"batch_refusal":        HumanActsBatchRefusal,
+		},
 		"RPC_ERROR_CODES": map[string]any{
 			"PARSE_ERROR":      CodeParseError,
 			"INVALID_REQUEST":  CodeInvalidRequest,

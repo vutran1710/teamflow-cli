@@ -6,6 +6,17 @@
     "PROTOCOL_VERSION": 1,
     "MIN_CLIENT_PROTOCOL": 1,
     "MAX_BATCH": 50,
+    "HUMAN_ACTS": {
+      "methods": [
+        "drift.resolve",
+        "drift.dismiss"
+      ],
+      "verdict_signal_kinds": [
+        "APPROVE",
+        "REJECT"
+      ],
+      "batch_refusal": "a verdict is sent on its own, not in a batch"
+    },
     "MAX_BODY_BYTES": 8388608,
     "MAX_ARTIFACT_BYTES": 5242880,
     "AVATAR_MAX_BYTES": 204800,

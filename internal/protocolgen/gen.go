@@ -931,7 +931,7 @@ func constants(xc any, methodsJSON []byte) (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString(header + "package protocol\n\n// Constants from the schema's x-constants.\nconst (\n")
-	var nested []string
+	var nested, vars []string
 	for _, k := range cs.keys {
 		v := cs.get(k)
 		if o, ok := v.(*object); ok {
@@ -940,16 +940,33 @@ func constants(xc any, methodsJSON []byte) (string, error) {
 				prefix = goName(k)
 			}
 			var inner strings.Builder
-			fmt.Fprintf(&inner, "// %s\nconst (\n", k)
 			for _, ik := range o.keys {
-				lit, err := constLiteral(o.get(ik))
+				iv := o.get(ik)
+				if l, ok := iv.([]any); ok {
+					lit, err := stringsLiteral(l)
+					if err != nil {
+						return "", fmt.Errorf("x-constants %s.%s: %w", k, ik, err)
+					}
+					vars = append(vars, fmt.Sprintf("var %s%s = %s // %s.%s\n", prefix, goName(ik), lit, k, ik))
+					continue
+				}
+				lit, err := constLiteral(iv)
 				if err != nil {
 					return "", fmt.Errorf("x-constants %s.%s: %w", k, ik, err)
 				}
 				fmt.Fprintf(&inner, "\t%s%s = %s\n", prefix, goName(ik), lit)
 			}
-			inner.WriteString(")\n\n")
-			nested = append(nested, inner.String())
+			if inner.Len() > 0 {
+				nested = append(nested, fmt.Sprintf("// %s\nconst (\n%s)\n\n", k, inner.String()))
+			}
+			continue
+		}
+		if l, ok := v.([]any); ok {
+			lit, err := stringsLiteral(l)
+			if err != nil {
+				return "", fmt.Errorf("x-constants %s: %w", k, err)
+			}
+			vars = append(vars, fmt.Sprintf("var %s = %s // %s\n", goName(k), lit, k))
 			continue
 		}
 		lit, err := constLiteral(v)
@@ -964,6 +981,13 @@ func constants(xc any, methodsJSON []byte) (string, error) {
 	b.WriteString(")\n\n")
 	for _, n := range nested {
 		b.WriteString(n)
+	}
+	if len(vars) > 0 {
+		b.WriteString("// Lists from the schema's x-constants. Go has no constant slices: never change them.\n")
+		for _, v := range vars {
+			b.WriteString(v)
+		}
+		b.WriteString("\n")
 	}
 
 	root, err := parseOrdered(methodsJSON)
@@ -994,6 +1018,19 @@ func constants(xc any, methodsJSON []byte) (string, error) {
 	}
 	b.WriteString("}\n")
 	return b.String(), nil
+}
+
+// stringsLiteral maps a list constant: only a list of strings is supported.
+func stringsLiteral(l []any) (string, error) {
+	items := make([]string, len(l))
+	for i, e := range l {
+		x, ok := e.(string)
+		if !ok {
+			return "", fmt.Errorf("unsupported constant %v: a list must hold only strings", plainJSON(l))
+		}
+		items[i] = strconv.Quote(x)
+	}
+	return "[]string{" + strings.Join(items, ", ") + "}", nil
 }
 
 func constLiteral(v any) (string, error) {

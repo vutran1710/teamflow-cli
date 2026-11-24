@@ -66,6 +66,12 @@ does not follow fails the build.
   event type from a newer server) decodes to its `Unknown*` type, never an error. A signal body sent without its
   `type` is matched only when exactly one variant fits its fields; otherwise it stays unknown.
 - `protocol.Request` always encodes `"jsonrpc": "2.0"`.
+- **A human act is never sent in an array body**, not even a one-element array: the server counts any array as a
+  batch and refuses a human act inside one. Human acts are listed in the schema's `x-constants.HUMAN_ACTS`
+  (generated as `protocol.HumanActsMethods` and `protocol.HumanActsVerdictSignalKinds`): verdicts (`APPROVE`,
+  `REJECT` signals) and drift resolve and dismiss. Send each with `api.Client.Call`, never `Batch`.
+- List constants in `x-constants` (lists of strings only) are generated as `var`s of `[]string`; never change
+  them.
 - After changing `protocol/`, run `go run ./tools/gen`; CI fails if the generated code is stale.
 
 ## License

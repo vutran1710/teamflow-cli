@@ -25,6 +25,31 @@ func TestASmallSchemaGenerates(t *testing.T) {
 	}
 }
 
+func TestListsOfStringsBecomeVars(t *testing.T) {
+	files, err := Generate([]byte(schemaWith(`"Empty": {"type": "object", "properties": {}}`,
+		`"MAX_BATCH": 50, "TAGS": ["a", "b\"c"], "NONE": [], "HUMAN_ACTS": {"methods": ["drift.resolve", "drift.dismiss"], "batch_refusal": "alone"}, "ONLY_LISTS": {"x": ["y"]}`)),
+		[]byte(okMethods))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := strings.Join(strings.Fields(string(files["constants_gen.go"])), " ") // gofmt aligns comments
+	for _, want := range []string{
+		`var Tags = []string{"a", "b\"c"} // TAGS`,
+		`var None = []string{} // NONE`,
+		`var HumanActsMethods = []string{"drift.resolve", "drift.dismiss"}`,
+		`HumanActsBatchRefusal = "alone"`,
+		`MaxBatch = 50`,
+		`var OnlyListsX = []string{"y"}`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("constants_gen.go lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "const ( )") {
+		t.Errorf("an empty const block:\n%s", out)
+	}
+}
+
 func TestTheGeneratorRefusesWhatItCannotMap(t *testing.T) {
 	empty := `"Empty": {"type": "object", "properties": {}}`
 	cases := map[string]struct{ schema, methods, want string }{
@@ -47,10 +72,13 @@ func TestTheGeneratorRefusesWhatItCannotMap(t *testing.T) {
 			okMethods, "collide"},
 		"an unsupported default": {schemaWith(`"A": {"type": "object", "properties": {"b": {"type": "array", "items": {"type": "string"}, "default": ["x"]}}}`, `"A": 1`),
 			okMethods, "unsupported default"},
-		"a constant that is a list": {schemaWith(empty, `"A": [1]`), okMethods, "unsupported constant"},
-		"methods not JSON":          {schemaWith(empty, `"A": 1`), `{nope`, "methods.json"},
-		"a method without who":      {schemaWith(empty, `"A": 1`), `{"m": {"params": "Empty", "result": "Empty"}}`, "has no who"},
-		"no methods":                {schemaWith(empty, `"A": 1`), `{}`, "no methods"},
+		"a constant that is a list of numbers": {schemaWith(empty, `"A": [1]`), okMethods, "unsupported constant"},
+		"a list mixing strings and numbers":    {schemaWith(empty, `"A": ["x", 1]`), okMethods, "unsupported constant"},
+		"a nested list of numbers":             {schemaWith(empty, `"A": {"b": [1]}`), okMethods, "unsupported constant"},
+		"a list of lists":                      {schemaWith(empty, `"A": [["x"]]`), okMethods, "unsupported constant"},
+		"methods not JSON":                     {schemaWith(empty, `"A": 1`), `{nope`, "methods.json"},
+		"a method without who":                 {schemaWith(empty, `"A": 1`), `{"m": {"params": "Empty", "result": "Empty"}}`, "has no who"},
+		"no methods":                           {schemaWith(empty, `"A": 1`), `{}`, "no methods"},
 	}
 	for name, c := range cases {
 		_, err := Generate([]byte(c.schema), []byte(c.methods))
