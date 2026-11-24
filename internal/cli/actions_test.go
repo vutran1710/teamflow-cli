@@ -77,10 +77,18 @@ func TestDriftSadPaths(t *testing.T) {
 	r = m.run("", "drift", "resolve", "dr_1", "x", "--project", P, "--yes")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "NOT_ALLOWED")
-	m.offline()
+	// Offline: recorded, not lost; it waits in the outbox and goes alone at the next sync.
+	m.srv.offline(true)
 	r = m.run("", "drift", "dismiss", "dr_1", "x", "--project", P, "--yes")
-	wantCode(t, r, 1)
-	contains(t, "stderr", r.err, "unreachable")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "dismissed dr_1: queued: will be sent when the server is back")
+	noCall(t, m.srv, "drift.dismiss")
+	m.srv.offline(false)
+	m.srv.on("drift.dismiss", okAnswer(t, "drift.dismiss"))
+	m.run("", "approve", S9) // any command that syncs
+	if sent := m.srv.sent("drift.dismiss"); len(sent) != 1 || sent[0].Batch {
+		t.Fatalf("sent %+v", sent)
+	}
 	m2 := newMachine(t, false)
 	r = m2.run("", "drift", "resolve", "dr_1", "x", "--project", P, "--yes")
 	wantCode(t, r, 1)

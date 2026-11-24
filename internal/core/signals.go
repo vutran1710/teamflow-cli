@@ -24,7 +24,9 @@ import (
 
 // Verdict records an APPROVE or REJECT of a pending signal as this machine's member, superseding their own
 // earlier verdict on it. A verdict is the person's own however it is sent (their terminal, or their agent on their
-// explicit words): actor MEMBER, always. It travels alone: one call, never in a batch (HUMAN_ACTS).
+// explicit words): actor MEMBER, always. It is a human act: queued at the end of the project's outbox, it goes
+// alone (one call, never in a batch: HUMAN_ACTS) after everything queued before it. If those cannot all be sent
+// now, it waits behind them and the error is a *Queued (recorded, not failed).
 func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.SignalKind, note string) (protocol.SignalResult, error) {
 	var r protocol.SignalResult
 	if !contains(protocol.HumanActsVerdictSignalKinds, string(kind)) {
@@ -44,15 +46,11 @@ func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.Si
 	if !ok {
 		return r, fmt.Errorf("no signal %s in your projects", target)
 	}
-	a, err := c.API(ctx, st.Signal.Project, DefaultTimeout)
+	me, err := c.member(ctx, st.Signal.Project)
 	if err != nil {
 		return r, err
 	}
-	var me protocol.Member
-	if err := a.Call(ctx, "member.me", nil, &me); err != nil {
-		return r, err
-	}
-	earlier, err := c.myVerdict(st, me.ID)
+	earlier, err := c.myVerdict(st, me)
 	if err != nil {
 		return r, err
 	}
@@ -78,11 +76,39 @@ func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.Si
 	}
 	sig.EmittedAt = c.Now().UTC().Format(time.RFC3339Nano)
 	params := protocol.SignalEmit{ClientSession: sid, Actor: protocol.ActorMember, ProjectVersion: project.Version, Signal: sig}
-	if err := a.Call(ctx, "signal.emit", params, &r); err != nil { // alone: Call, never Batch
+	raw, err := c.humanAct(ctx, st.Signal.Project, sid, sig.ID, "signal.emit", params) // after the queue, alone
+	if err != nil {
 		return r, err
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return r, fmt.Errorf("signal.emit answer: %w", err)
 	}
 	c.Sync(ctx, DefaultTimeout, "")
 	return r, nil
+}
+
+// member is this machine's member on the project: the one its project key was fetched for (asked of the server
+// only when the store does not say), so a verdict can be recorded offline.
+func (c *Core) member(ctx context.Context, pid string) (string, error) {
+	b, err := c.binding()
+	if err != nil {
+		return "", err
+	}
+	if _, err := c.ProjectKey(ctx, pid); err != nil {
+		return "", err
+	}
+	if _, m, _, _, ok := c.St.ProjectKey(b, pid); ok && m != "" {
+		return m, nil
+	}
+	a, err := c.API(ctx, pid, DefaultTimeout)
+	if err != nil {
+		return "", err
+	}
+	var me protocol.Member
+	if err := a.Call(ctx, "member.me", nil, &me); err != nil {
+		return "", err
+	}
+	return me.ID, nil
 }
 
 func truncate(s string, n int) string {

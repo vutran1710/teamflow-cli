@@ -5,9 +5,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/ops"
-
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
 
@@ -67,6 +67,15 @@ func (r *inv) verdict(kind protocol.SignalKind, signal, note string) int {
 		sid = sess.ID
 	}
 	res, err := c.Verdict(r.ctx, sid, signal, kind, note)
+	var q *core.Queued
+	if errors.As(err, &q) && !q.Hard() { // recorded: it waits behind earlier signals, never sent ahead of them
+		word := "approve"
+		if kind == protocol.SignalKindReject {
+			word = "reject"
+		}
+		r.printf("%s %s: %s\n", word, signal, q.Error())
+		return 0
+	}
 	if err != nil {
 		return r.failErr(err)
 	}

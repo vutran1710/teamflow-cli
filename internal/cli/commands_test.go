@@ -209,13 +209,40 @@ func TestVerdictSadPaths(t *testing.T) {
 			}
 		})
 	}
+	// Offline the verdict is recorded, not lost: it waits in the project's outbox (exit 0, saying so), and the next
+	// command that syncs sends it, alone, once.
 	t.Run("offline", func(t *testing.T) {
 		m := newMachine(t, true)
 		approvalReplica(t, m)
-		m.offline()
+		m.srv.offline(true)
 		r := m.run("", "approve", S1)
-		wantCode(t, r, 1)
-		contains(t, "stderr", r.err, "unreachable")
+		wantCode(t, r, 0)
+		contains(t, "stdout", r.out, "approve "+S1+": queued: will be sent when the server is back")
+		noCall(t, m.srv, "signal.emit")
+		if n, _ := m.store().SpoolSize(); n != 1 {
+			t.Fatalf("outbox %d", n)
+		}
+		// --json carries the state: queued, and how many wait ahead of it (the approve above).
+		r = m.run("", "reject", S1, "changed my mind", "--json")
+		wantCode(t, r, 0)
+		var got map[string]any
+		if err := json.Unmarshal([]byte(r.out), &got); err != nil {
+			t.Fatalf("not JSON: %q", r.out)
+		}
+		if got["queued"] != true || got["ahead"] != float64(1) || !strings.Contains(got["message"].(string), "after 1 earlier signal") {
+			t.Fatalf("json %v", got)
+		}
+		m.srv.offline(false)
+		m.srv.on("signal.emit", accepted)
+		m.run("", "approve", S9) // any command that syncs
+		sent := m.srv.sent("signal.emit")
+		if len(sent) != 2 || sent[0].Batch || sent[1].Batch || !strings.Contains(string(sent[0].Params), `"APPROVE"`) ||
+			!strings.Contains(string(sent[1].Params), `"REJECT"`) {
+			t.Fatalf("sent %+v", sent)
+		}
+		if n, _ := m.store().SpoolSize(); n != 0 {
+			t.Fatalf("outbox %d", n)
+		}
 	})
 	t.Run("not signed in", func(t *testing.T) {
 		m := newMachine(t, false)

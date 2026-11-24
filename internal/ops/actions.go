@@ -1232,7 +1232,15 @@ func (k *Call) driftAct(method, drift, note string, resolvedBy []string, project
 	if err != nil {
 		return nil, err
 	}
-	ds, err := k.c.DriftAct(k.ctx, pid, method, drift, note, resolvedBy)
+	sid := ""
+	if k.sess != nil {
+		sid = k.sess.ID
+	}
+	ds, err := k.c.DriftAct(k.ctx, pid, sid, method, drift, note, resolvedBy)
+	var q *core.Queued
+	if errors.As(err, &q) && !q.Hard() { // recorded: it waits in the outbox behind earlier items, never sent ahead of them
+		return queuedObj("id", drift, q), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1264,10 +1272,19 @@ func verdict(k *Call, in verdictIn) (any, error) {
 		sid = k.sess.ID
 	}
 	r, err := k.c.Verdict(k.ctx, sid, in.Signal, protocol.SignalKind(in.Verdict), in.Note)
+	var q *core.Queued
+	if errors.As(err, &q) && !q.Hard() { // recorded: it waits in the outbox behind earlier items, never sent ahead of them
+		return queuedObj("signal", q.Item, q), nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	return core.ResultObj(r), nil
+}
+
+// queuedObj is the answer for a human act left queued in the outbox.
+func queuedObj(idKey, id string, q *core.Queued) ojson.Obj {
+	return ojson.Obj{{idKey, id}, {"queued", true}, {"ahead", q.Ahead}, {"message", q.Error()}}
 }
 
 func inbox(k *Call, _ struct{}) (any, error) {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/deliverables"
+	"github.com/vutran1710/teamflow-cli/internal/ids"
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
@@ -169,9 +170,11 @@ func invalid(msg string) ojson.Obj {
 // queuedText is the answer for a signal kept in the spool while the server is unreachable.
 const queuedText = "server unreachable; queued and sent when it is back"
 
-// Emit spools the session's drafts, then sends them (one batch). One answer per draft, in order: the server's
-// result, an INVALID refusal from this machine (nothing sent), or queued (the server unreachable: the spool sends
-// it later, once). A verdict is never emitted here: it has its own path and travels alone.
+// Emit queues the session's drafts at the end of the project's outbox, then flushes it: everything queued before
+// them first, then these, in batches. One answer per draft, in order: the server's result, a refusal (from this
+// machine, nothing sent; or from the server), or queued (the server unreachable, an earlier item stuck, or
+// another sender busy: the outbox sends it later, once, in its place). A verdict is never emitted here: it has
+// its own path and travels alone.
 func (c *Core) Emit(ctx context.Context, sid string, drafts []map[string]any) ([]ojson.Obj, error) {
 	sess, err := c.Shared(sid)
 	if err != nil {
@@ -206,89 +209,73 @@ func (c *Core) Emit(ctx context.Context, sid string, drafts []map[string]any) ([
 	}
 	ref := api.KeyRef(key)
 	now := c.Now()
-	err = c.St.Tx(func(tx *store.Tx) error {
-		for _, e := range ready {
-			raw, err := json.Marshal(e)
-			if err != nil {
-				return err
+	mine := map[string]bool{}
+	for _, e := range ready {
+		mine[e.Signal.ID] = true
+	}
+	// Queued at the end of the outbox and flushed under the sender lock: earlier items first, then these.
+	f, ferr, err := c.sendMine(ctx, key, HookTimeout, mine, func() error {
+		return c.St.Tx(func(tx *store.Tx) error {
+			for _, e := range ready {
+				raw, err := json.Marshal(e)
+				if err != nil {
+					return err
+				}
+				if err := tx.SpoolAdd(e.Signal.ID, sid, ref, string(raw), now); err != nil {
+					return err
+				}
 			}
-			if err := tx.SpoolAdd(e.Signal.ID, sid, ref, string(raw), now); err != nil {
-				return err
-			}
-		}
-		return nil
+			return nil
+		})
 	})
 	if err != nil {
 		return nil, err
 	}
-	results, err := c.send(ctx, pid, ready)
-	if err != nil {
-		return nil, err
+	if hard(ferr) { // an old client, a key no longer good: kept in the outbox, and the agent is told why
+		return nil, ferr
 	}
+	answered := false
 	for j, e := range ready {
-		if r, ok := results[e.Signal.ID]; ok {
-			answers[at[j]] = r
+		id := e.Signal.ID
+		a, ok := f.Answers[id]
+		if !ok {
+			ahead, _, _ := c.St.Ahead(ref, id)
+			msg := queuedText
+			if ahead > 0 || !errors.Is(ferr, api.ErrOffline) {
+				msg = queuedMessage(ahead, ferr)
+			}
+			answers[at[j]] = ojson.Obj{{"signal", id}, {"queued", true}, {"ahead", ahead}, {"message", msg}}
 			continue
 		}
-		answers[at[j]] = ojson.Obj{{"signal", e.Signal.ID}, {"queued", true}, {"message", queuedText}}
+		answered = true
+		var ae *api.APIError
+		switch {
+		case a.Err == nil:
+			var r protocol.SignalResult
+			if err := json.Unmarshal(a.Result, &r); err != nil {
+				return nil, fmt.Errorf("signal.emit answer: %w", err)
+			}
+			answers[at[j]] = ResultObj(r)
+		case errors.As(a.Err, &ae) && ae.Reason != "":
+			answers[at[j]] = ojson.Obj{{"signal", id}, {"accepted", false}, {"reason", ae.Reason}, {"message", ae.Message}}
+		default:
+			reason := "INVALID"
+			if errors.Is(a.Err, api.ErrTooLarge) {
+				reason = "TOO_LARGE"
+			}
+			msg := a.Err.Error()
+			if errors.As(a.Err, &ae) {
+				msg = ae.Message
+			}
+			answers[at[j]] = ojson.Obj{{"signal", id}, {"accepted", false}, {"reason", reason}, {"message", msg}}
+		}
+	}
+	if answered {
+		if a, err := c.API(ctx, pid, HookTimeout); err == nil {
+			_, _ = syncer.Pull(ctx, c.St, a, HookTimeout)
+		}
 	}
 	return answers, nil
-}
-
-// send sends spooled signals in one batch and takes each answered one out of the spool. Offline, the rest stay
-// spooled (no answer: queued). A refusal of one signal is its answer. A refusal that is not about the signal (an
-// old client, a key no longer good) is the error, and the signals stay spooled for the next sync.
-func (c *Core) send(ctx context.Context, pid string, items []protocol.SignalEmit) (map[string]ojson.Obj, error) {
-	a, err := c.API(ctx, pid, HookTimeout)
-	if err != nil {
-		return nil, err
-	}
-	calls := make([]api.Call, len(items))
-	for i, e := range items {
-		calls[i] = api.Call{Method: "signal.emit", Params: e}
-	}
-	results, berr := a.Batch(ctx, calls)
-	out := map[string]ojson.Obj{}
-	var keep error // why a signal stays spooled, when it is not that the server is unreachable
-	err = c.St.Tx(func(tx *store.Tx) error {
-		for i, res := range results {
-			id := items[i].Signal.ID
-			var r protocol.SignalResult
-			var ae *api.APIError
-			switch {
-			case res.Err == nil:
-				if err := json.Unmarshal(res.Result, &r); err != nil {
-					continue // an answer this client can't read: the spool sends it again
-				}
-				out[id] = ResultObj(r)
-			case errors.As(res.Err, &ae) && ae.Reason != "" && !errors.Is(res.Err, api.ErrUpgradeRequired) &&
-				ae.Reason != string(protocol.RejectReasonNotAMember):
-				out[id] = ojson.Obj{{"signal", id}, {"accepted", false}, {"reason", ae.Reason}, {"message", ae.Message}}
-			default:
-				if keep == nil && !errors.Is(res.Err, api.ErrOffline) {
-					keep = res.Err
-				}
-				continue
-			}
-			if err := tx.SpoolDone(id); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if berr != nil && !errors.Is(berr, api.ErrOffline) {
-		return nil, berr
-	}
-	if keep != nil { // an old client, a key no longer good: kept in the spool, and the agent is told why
-		return nil, keep
-	}
-	if len(out) > 0 {
-		_, _ = syncer.Pull(ctx, c.St, a, HookTimeout)
-	}
-	return out, nil
 }
 
 // Cite records that the session relies on these signals (the ones the replica knows); it returns them.
@@ -430,8 +417,10 @@ func (c *Core) News(ctx context.Context, sid string) (approvals string, notices 
 // ------------------------------------------------------------------ human acts on drifts
 
 // DriftAct resolves or dismisses a drift of the project (initiator only), with a note: drift.resolve or
-// drift.dismiss, sent alone (HUMAN_ACTS), never in a batch.
-func (c *Core) DriftAct(ctx context.Context, project, method, drift, note string, resolvedBy []string) (protocol.Drifts, error) {
+// drift.dismiss, a human act: queued at the end of the project's outbox, sent alone (HUMAN_ACTS) after everything
+// queued before it, or waiting behind them (a *Queued error: recorded, not failed). sid ("" outside an agent
+// session) is the session told what became of it if it is sent later.
+func (c *Core) DriftAct(ctx context.Context, project, sid, method, drift, note string, resolvedBy []string) (protocol.Drifts, error) {
 	var out protocol.Drifts
 	if !slices.Contains(protocol.HumanActsMethods, method) {
 		return out, fmt.Errorf("%s is not a drift act", method)
@@ -439,9 +428,8 @@ func (c *Core) DriftAct(ctx context.Context, project, method, drift, note string
 	if strings.TrimSpace(note) == "" {
 		return out, bad("say how it was settled: a note is needed")
 	}
-	a, err := c.API(ctx, project, DefaultTimeout)
-	if err != nil {
-		return out, err
+	if !c.SignedIn() {
+		return out, ErrNotSignedIn
 	}
 	var params any = protocol.DriftDismiss{Drift: drift, Note: note}
 	if method == "drift.resolve" {
@@ -450,8 +438,12 @@ func (c *Core) DriftAct(ctx context.Context, project, method, drift, note string
 		}
 		params = protocol.DriftResolve{Drift: drift, Note: note, ResolvedBy: resolvedBy}
 	}
-	if err := a.Call(ctx, method, params, &out); err != nil { // alone: Call, never Batch
+	raw, err := c.humanAct(ctx, project, sid, ids.New("da_"), method, params)
+	if err != nil {
 		return out, err
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("%s answer: %w", method, err)
 	}
 	c.Sync(ctx, HookTimeout, project)
 	return out, nil

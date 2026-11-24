@@ -45,14 +45,14 @@ func TestAgentActionsNeedASharedSession(t *testing.T) {
 func TestDriftActIsOnlyTheHumanActs(t *testing.T) {
 	ctx := context.Background()
 	c := open(t, nil)
-	if _, err := c.DriftAct(ctx, P, "drift.list", "dr_1", "x", nil); err == nil || !strings.Contains(err.Error(), "not a drift act") {
+	if _, err := c.DriftAct(ctx, P, "", "drift.list", "dr_1", "x", nil); err == nil || !strings.Contains(err.Error(), "not a drift act") {
 		t.Fatalf("a method that is not a human act: %v", err)
 	}
 	var b *BadInput
-	if _, err := c.DriftAct(ctx, P, "drift.resolve", "dr_1", "  ", nil); !errors.As(err, &b) {
+	if _, err := c.DriftAct(ctx, P, "", "drift.resolve", "dr_1", "  ", nil); !errors.As(err, &b) {
 		t.Fatalf("no note: %v", err)
 	}
-	if _, err := c.DriftAct(ctx, P, "drift.dismiss", "dr_1", "x", nil); !errors.Is(err, ErrNotSignedIn) {
+	if _, err := c.DriftAct(ctx, P, "", "drift.dismiss", "dr_1", "x", nil); !errors.Is(err, ErrNotSignedIn) {
 		t.Fatalf("signed out: %v", err)
 	}
 }

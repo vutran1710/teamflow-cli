@@ -126,7 +126,8 @@ func (c *Core) ProjectKey(ctx context.Context, project string) (string, error) {
 	return got.Key, nil
 }
 
-// API is the server with the project's key: everything on that project, and only that project.
+// API is the server with the project's key: everything on that project, and only that project. A write to the
+// project's shared record goes through the outbox's gate: never ahead of signals queued before it.
 func (c *Core) API(ctx context.Context, project string, timeout time.Duration) (*api.Client, error) {
 	if c.Cfg == nil || c.Cfg.Server == "" {
 		return nil, ErrNotSignedIn
@@ -135,7 +136,7 @@ func (c *Core) API(ctx context.Context, project string, timeout time.Duration) (
 	if err != nil {
 		return nil, err
 	}
-	return c.client(key, timeout), nil
+	return c.client(key, timeout).WithGate(c.gate(key)), nil
 }
 
 // Sync pushes the spool and pulls the events of each project this machine has a key for (or only `only`), then
@@ -158,7 +159,7 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 			continue
 		}
 		a := c.client(key, timeout)
-		err := c.syncOne(ctx, a, pid, timeout)
+		err := c.syncOne(ctx, a, key, pid, timeout)
 		if errors.Is(err, api.ErrOffline) {
 			return false
 		}
@@ -171,8 +172,8 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 	return true
 }
 
-func (c *Core) syncOne(ctx context.Context, a *api.Client, pid string, timeout time.Duration) error {
-	if _, err := syncer.Push(ctx, c.St, a); err != nil {
+func (c *Core) syncOne(ctx context.Context, a *api.Client, key, pid string, timeout time.Duration) error {
+	if err := c.pushOutbox(ctx, a, key); err != nil {
 		return err
 	}
 	if _, err := syncer.Pull(ctx, c.St, a, timeout); err != nil {

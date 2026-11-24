@@ -54,7 +54,17 @@ func (r *inv) driftAct(method string, a *parsed) int {
 			return r.fail(why)
 		}
 	}
-	if _, err := c.DriftAct(r.ctx, pid, method, drift, note, a.lists["resolved-by"]); err != nil {
+	sid := ""
+	if sess, ok := r.session(); ok {
+		sid = sess.ID
+	}
+	_, err = c.DriftAct(r.ctx, pid, sid, method, drift, note, a.lists["resolved-by"])
+	var q *core.Queued
+	if errors.As(err, &q) && !q.Hard() { // recorded: it waits behind earlier signals, never sent ahead of them
+		r.printf("%s %s: %s\n", done, drift, q.Error())
+		return 0
+	}
+	if err != nil {
 		return r.failErr(err)
 	}
 	r.printf("%s %s\n", done, drift)
