@@ -12,52 +12,31 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// answer is the first golden answer of method that want accepts (a whole {"result": …} or {"error": …}).
-func answer(t *testing.T, method string, want func(resp string) bool) string {
+// golden is the answer a selector names (see goldenPath).
+func golden(t *testing.T, sel string) string {
 	t.Helper()
-	files, _ := filepath.Glob(filepath.Join(goldenDir, method+".*.json"))
-	num := func(f string) int {
-		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), method+"."), ".json"))
-		return n
+	b, err := os.ReadFile(goldenPath(t, sel))
+	if err != nil {
+		t.Fatal(err)
 	}
-	sort.Slice(files, func(i, j int) bool { return num(files[i]) < num(files[j]) })
-	for _, f := range files {
-		if num(f) == 0 {
-			continue
-		}
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var g struct {
-			Response json.RawMessage `json:"response"`
-		}
-		if err := json.Unmarshal(b, &g); err != nil {
-			t.Fatal(err)
-		}
-		if want(string(g.Response)) {
-			return string(g.Response)
-		}
+	var g struct {
+		Response json.RawMessage `json:"response"`
 	}
-	t.Fatalf("no golden %s answer fits", method)
-	return ""
+	if err := json.Unmarshal(b, &g); err != nil {
+		t.Fatal(err)
+	}
+	return string(g.Response)
 }
 
-func okAnswer(t *testing.T, method string) string {
-	return answer(t, method, func(r string) bool { return strings.Contains(r, `"result"`) })
-}
+func okAnswer(t *testing.T, method string) string { return golden(t, method) }
 
-func refusedAnswer(t *testing.T, method, reason string) string {
-	return answer(t, method, func(r string) bool { return strings.Contains(r, `"reason": "`+reason+`"`) })
-}
+func refusedAnswer(t *testing.T, method, reason string) string { return golden(t, method+"!"+reason) }
 
 // ------------------------------------------------------------------ drift resolve | dismiss
 
@@ -145,7 +124,7 @@ func TestDeliverablesArchiveDeleteHistory(t *testing.T) {
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "UNKNOWN_REF")
 
-	m.srv.on("deliverables.history", answer(t, "deliverables.history", func(s string) bool { return strings.Contains(s, `"version": 1`) }))
+	m.srv.on("deliverables.history", golden(t, `deliverables.history~"version":1`))
 	r = m.run("", "deliverables", "history", "--project", P)
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "v1\t")
@@ -169,7 +148,7 @@ func TestProjectCommands(t *testing.T) {
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "no member 'Zed'")
 
-	m.srv.on("project.get", "project.get.1")
+	m.srv.on("project.get", pricingGet)
 	m.srv.on("project.remove_member", okAnswer(t, "project.remove_member"))
 	r = m.run("", "project", "remove-member", "huy", "--project", P)
 	wantCode(t, r, 1)
@@ -209,7 +188,7 @@ func TestProjectCommands(t *testing.T) {
 
 func TestOrgTitle(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("org.members", "org.members.1")
+	m.srv.on("org.members", "org.members")
 	m.srv.on("org.set_title", okAnswer(t, "org.set_title"))
 	r := m.run("", "org", "title", "Acme", "huy@acme.test", "Engineer")
 	wantCode(t, r, 0)
@@ -225,7 +204,7 @@ func TestOrgTitle(t *testing.T) {
 
 func TestProfile(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("account.me", "account.me.1")
+	m.srv.on("account.me", lanMe)
 	r := m.run("", "profile")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "name: lan")

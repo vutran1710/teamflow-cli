@@ -41,9 +41,9 @@ func TestStop(t *testing.T) {
 func approvalReplica(t *testing.T, m *machine) {
 	m.key()
 	m.project()
-	m.seed(goldenEvent(t, "event.signal.accepted.2"))
+	m.seed(goldenEvent(t, `event.signal.accepted~"PENDING"`))
 	m.names(map[string]string{M1: "huy", M2: "lan"})
-	m.srv.on("member.me", "member.me.1")
+	m.srv.on("member.me", huyMember)
 }
 
 const accepted = `{"result": {"signal": "sg_00000000000000000000000077", "accepted": true, "reason": null, "message": "", "seq": 9, "received_at": "2026-01-15T09:00:01Z", "state": "IN_FORCE"}}`
@@ -186,7 +186,7 @@ func TestVerdictSadPaths(t *testing.T) {
 		{"approve nothing", []string{"approve"}, "", 2, "err", "usage: teamflow approve"},
 		{"unknown signal", []string{"approve", S9}, "", 1, "err", "no signal " + S9 + " in your projects"},
 		{"refused", []string{"approve", S1}, refused, 1, "err", "refused: NOT_ALLOWED you are not an approver"},
-		{"upgrade", []string{"approve", S1}, "signal.emit.4", 1, "err", updateText},
+		{"upgrade", []string{"approve", S1}, "signal.emit!UPGRADE_REQUIRED", 1, "err", updateText},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -299,7 +299,7 @@ func TestFindSessionLogsAStoreErrorOnce(t *testing.T) {
 
 func TestTeamStatusAndStop(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("account.me", "account.me.1")
+	m.srv.on("account.me", lanMe)
 	m.inSession("s1", P, nil)
 	r := m.run("", "team", "--relay")
 	wantCode(t, r, 0)
@@ -335,7 +335,7 @@ func TestTeamApprovals(t *testing.T) {
 
 func TestTeamProjectMenu(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("account.projects", "account.projects.1")
+	m.srv.on("account.projects", "account.projects")
 	m.inSession("s1", "", nil)
 	r := m.run("", "team", "--relay", "project")
 	wantCode(t, r, 0)
@@ -350,10 +350,10 @@ func TestTeamProjectMenu(t *testing.T) {
 
 func TestTeamProjectJoins(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("account.projects", "account.projects.1")
-	m.srv.on("key.fetch", "key.fetch.1")
-	m.srv.on("project.get", "project.get.1")
-	m.srv.on("member.me", "member.me.1")
+	m.srv.on("account.projects", "account.projects")
+	m.srv.on("key.fetch", "key.fetch")
+	m.srv.on("project.get", pricingGet)
+	m.srv.on("member.me", huyMember)
 	m.inSession("s1", "", nil)
 	r := m.run("", "team", "--relay", "project pricing rounding")
 	wantCode(t, r, 0)
@@ -382,19 +382,19 @@ func TestTeamProjectJoins(t *testing.T) {
 
 func TestTeamProjectSadPaths(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("account.projects", "account.projects.1")
+	m.srv.on("account.projects", "account.projects")
 	m.inSession("s1", "", nil)
 	r := m.run("", "team", "--relay", "project Nope")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "Teamflow refused: not joined: which project? none is called 'Nope'; yours: Acme/Pricing")
 
-	m.srv.on("key.fetch", "key.fetch.1")
-	m.srv.on("project.get", "project.get.1")
-	m.srv.on("member.me", "member.me.1")
+	m.srv.on("key.fetch", "key.fetch")
+	m.srv.on("project.get", pricingGet)
+	m.srv.on("member.me", huyMember)
 	r = m.run("", "team", "--relay", "project Pricing Taxes")
 	contains(t, "stdout", r.out, "Teamflow refused: not joined: no topic 'Taxes' in Pricing; topics: Rounding, Currency")
 
-	m.srv.on("key.fetch", "key.fetch.3")
+	m.srv.on("key.fetch", "key.fetch!NOT_A_MEMBER")
 	r = m.run("", "team", "--relay", "project Pricing")
 	contains(t, "stdout", r.out, "Teamflow refused: not joined: NOT_A_MEMBER")
 
@@ -415,9 +415,9 @@ func TestLoginElsewhereForgetsProjectKeys(t *testing.T) {
 		answer string
 		kept   bool
 	}{
-		{"the same account again", func(m *machine, _ *fakeServer) []string { return []string{"-e", "LAN@acme.test"} }, "auth.login.1", true},
+		{"the same account again", func(m *machine, _ *fakeServer) []string { return []string{"-e", "LAN@acme.test"} }, "auth.login", true},
 		{"another account", func(m *machine, _ *fakeServer) []string { return []string{"-e", "mai@acme.test"} }, other, false},
-		{"another server", func(m *machine, srv2 *fakeServer) []string { return []string{"-s", srv2.URL(), "-e", "lan@acme.test"} }, "auth.login.1", false},
+		{"another server", func(m *machine, srv2 *fakeServer) []string { return []string{"-s", srv2.URL(), "-e", "lan@acme.test"} }, "auth.login", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -440,7 +440,7 @@ func TestLoginElsewhereForgetsProjectKeys(t *testing.T) {
 	m := newMachine(t, true)
 	m.key()
 	srv2 := newServer(t)
-	srv2.on("auth.login", "auth.login.1")
+	srv2.on("auth.login", "auth.login")
 	m.run("pw\n", "login", "-s", srv2.URL(), "-e", "lan@acme.test", "--password-stdin")
 	if _, _, _, _, ok := m.store().ProjectKey(m.binding(), P); ok {
 		t.Fatal("a key of the old server is kept")
@@ -453,8 +453,8 @@ func TestLoginElsewhereForgetsProjectKeys(t *testing.T) {
 func TestTopicDelete(t *testing.T) {
 	m := newMachine(t, true)
 	m.key()
-	m.srv.on("project.get", "project.get.1")
-	m.srv.on("topic.delete", "topic.delete.1")
+	m.srv.on("project.get", pricingGet)
+	m.srv.on("topic.delete", "topic.delete")
 	r := m.run("", "topic", "delete", P, "Rounding", "--yes")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "deleted 'Rounding': 2 signal(s), 0 drift(s)")
@@ -467,8 +467,8 @@ func TestTopicDelete(t *testing.T) {
 func TestTopicDeleteConfirms(t *testing.T) {
 	m := newMachine(t, true)
 	m.key()
-	m.srv.on("project.get", "project.get.1")
-	m.srv.on("topic.delete", "topic.delete.1")
+	m.srv.on("project.get", pricingGet)
+	m.srv.on("topic.delete", "topic.delete")
 	r := m.run("", "topic", "delete", P, T1) // not a terminal, no --yes
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "--yes")
@@ -488,12 +488,12 @@ func TestTopicDeleteConfirms(t *testing.T) {
 func TestTopicDeleteSadPaths(t *testing.T) {
 	m := newMachine(t, true)
 	m.key()
-	m.srv.on("project.get", "project.get.1")
+	m.srv.on("project.get", pricingGet)
 	r := m.run("", "topic", "delete", P, "Nope", "--yes")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "no topic 'Nope' in Pricing")
-	for _, tc := range []struct{ answer, want string }{{"topic.delete.2", "NOT_ALLOWED: only the project's initiator can do this"},
-		{"topic.delete.4", "TOPIC_HAS_ACTIONS"}} {
+	for _, tc := range []struct{ answer, want string }{{"topic.delete!NOT_ALLOWED", "NOT_ALLOWED: only the project's initiator can do this"},
+		{"topic.delete!TOPIC_HAS_ACTIONS", "TOPIC_HAS_ACTIONS"}} {
 		m.srv.on("topic.delete", tc.answer)
 		r = m.run("", "topic", "delete", P, "Rounding", "--yes")
 		wantCode(t, r, 1)
@@ -516,7 +516,7 @@ func TestArtifactWrite(t *testing.T) {
 	if err := os.WriteFile("spec.md", []byte("# Pricing\nv1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m.srv.on("artifact.write", "artifact.write.1")
+	m.srv.on("artifact.write", "artifact.write")
 	r := m.run("", "artifact", "write", "spec.md", "--topic", "rounding", "--summary", "How prices round",
 		"--point", "half up", "--point", "0.05", "--project", P)
 	wantCode(t, r, 0)
@@ -647,11 +647,11 @@ func TestArtifactPullSadPaths(t *testing.T) {
 	r := m.run("", "artifact", "pull", S9)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "no artifact "+S9+" in your projects")
-	m.srv.on("artifact.get", "artifact.get.5")
+	m.srv.on("artifact.get", "artifact.get!UNKNOWN_REF")
 	r = m.run("", "artifact", "pull", S1, "-o", "x.md")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "UNKNOWN_REF")
-	m.srv.on("artifact.get", "artifact.get.3") // its content does not match its SHA-256
+	m.srv.on("artifact.get", `artifact.get~"id":"sg_00000000000000000000000002"`) // its content does not match its SHA-256
 	r = m.run("", "artifact", "pull", S1, "-o", "x.md")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "does not match")
@@ -659,20 +659,20 @@ func TestArtifactPullSadPaths(t *testing.T) {
 
 func TestArtifactArchive(t *testing.T) {
 	m := artifactMachine(t)
-	m.srv.on("artifact.archive", "artifact.archive.1")
+	m.srv.on("artifact.archive", `artifact.archive~"archived":true`)
 	r := m.run("", "artifact", "archive", S1, "--note", "replaced by the wiki")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "archived "+S1+"\tspec.md")
 	if p := params(t, onlyCall(t, m.srv, "artifact.archive")); p["archived"] != true || p["note"] != "replaced by the wiki" {
 		t.Fatalf("params %v", p)
 	}
-	m.srv.on("artifact.archive", "artifact.archive.2")
+	m.srv.on("artifact.archive", `artifact.archive~"archived":false`)
 	r = m.run("", "artifact", "archive", S1, "--unarchive")
 	if p := params(t, m.srv.sent("artifact.archive")[1]); p["archived"] != false {
 		t.Fatalf("params %v", p)
 	}
 	contains(t, "stdout", r.out, "restored "+S1)
-	m.srv.on("artifact.archive", "artifact.archive.4")
+	m.srv.on("artifact.archive", "artifact.archive!NOT_ALLOWED")
 	r = m.run("", "artifact", "archive", S1)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "NOT_ALLOWED: only the project's initiator can do this")
@@ -683,7 +683,7 @@ func TestArtifactArchive(t *testing.T) {
 
 func TestArtifactList(t *testing.T) {
 	m := artifactMachine(t)
-	m.srv.on("artifact.list", "artifact.list.1")
+	m.srv.on("artifact.list", "artifact.list")
 	r := m.run("", "artifact", "list", "--project", P)
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, S1+"\tspec.md\tTEXT\tv")
@@ -695,7 +695,7 @@ func TestArtifactList(t *testing.T) {
 	if p := params(t, m.srv.sent("artifact.list")[1]); p["topic"] != T1 || p["include_archived"] != true {
 		t.Fatalf("params %v", p)
 	}
-	m.srv.on("artifact.list", "artifact.list.4")
+	m.srv.on("artifact.list", "artifact.list!NOT_A_MEMBER")
 	r = m.run("", "artifact", "list", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "NOT_A_MEMBER")
@@ -708,7 +708,7 @@ func TestDeliverables(t *testing.T) {
 	m.key()
 	m.replica()
 	m.names(map[string]string{M1: "lan", M2: "huy"})
-	m.srv.on("deliverables.get", "deliverables.get.2")
+	m.srv.on("deliverables.get", `deliverables.get~"version":1,`)
 	r := m.run("", "deliverables", "--project", P)
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out,
@@ -721,7 +721,7 @@ func TestDeliverables(t *testing.T) {
 	r = m.run("", "deliverables", "--project", P)
 	contains(t, "stdout", r.out, "This project has no Deliverables yet (or they are archived). Agents publish them from the plan.")
 
-	m.srv.on("deliverables.get", "deliverables.get.5")
+	m.srv.on("deliverables.get", "deliverables.get!NOT_A_MEMBER")
 	r = m.run("", "deliverables", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "NOT_A_MEMBER")
@@ -787,7 +787,7 @@ func TestDeliverablesValidate(t *testing.T) {
 
 func TestOrg(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("org.members", "org.members.1")
+	m.srv.on("org.members", "org.members")
 	r := m.run("", "org", "members", "Acme")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "lan\tlan@acme.test\t"+M1+"\n", "huy\thuy@acme.test\t"+M2+"\n")
@@ -795,22 +795,22 @@ func TestOrg(t *testing.T) {
 		t.Fatalf("org.members %v", c)
 	}
 
-	m.srv.on("org.add_member", "org.add_member.1")
+	m.srv.on("org.add_member", "org.add_member")
 	r = m.run("", "org", "add-member", "Acme", "new@acme.test", "--title", "Designer")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "added Newcomer <new@acme.test> to Acme")
 	if p := params(t, onlyCall(t, m.srv, "org.add_member")); p["email"] != "new@acme.test" || p["title"] != "Designer" {
 		t.Fatalf("params %v", p)
 	}
-	for _, tc := range []struct{ answer, want string }{{"org.add_member.3", "not added: NOT_ALLOWED: only the org's admin can do this"},
-		{"org.add_member.4", "not added: UNKNOWN_REF"}} {
+	for _, tc := range []struct{ answer, want string }{{"org.add_member!NOT_ALLOWED", "not added: NOT_ALLOWED: only the org's admin can do this"},
+		{"org.add_member!UNKNOWN_REF", "not added: UNKNOWN_REF"}} {
 		m.srv.on("org.add_member", tc.answer)
 		r = m.run("", "org", "add-member", "Acme", "ghost@acme.test")
 		wantCode(t, r, 1)
 		contains(t, "stderr", r.err, tc.want)
 	}
 
-	m.srv.on("org.remove_member", "org.remove_member.1")
+	m.srv.on("org.remove_member", "org.remove_member")
 	r = m.run("", "org", "remove-member", "Acme", "HUY@acme.test", "--yes")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "removed HUY@acme.test from Acme")
@@ -823,7 +823,7 @@ func TestOrg(t *testing.T) {
 	r = m.run("", "org", "remove-member", "Acme", "huy@acme.test") // no terminal to confirm on
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "--yes")
-	m.srv.on("org.members", "org.members.2")
+	m.srv.on("org.members", "org.members!NOT_ALLOWED")
 	r = m.run("", "org", "members", "Elsewhere")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "NOT_ALLOWED: you are not in an org 'Elsewhere'")
@@ -835,7 +835,7 @@ func TestLog(t *testing.T) {
 	m := newMachine(t, true)
 	m.key()
 	gone := `{"error": {"code": -32000, "message": "you are no longer in this org", "data": {"reason": "NOT_A_MEMBER"}}}`
-	m.srv.on("sync.poll", "sync.poll.2", gone)
+	m.srv.on("sync.poll", `sync.poll~"ARTIFACT"`, gone)
 	r := m.run("", "log", "--all", "--project", P)
 	wantCode(t, r, 1) // it ends only when the server refuses
 	contains(t, "stdout", r.out,
@@ -858,7 +858,7 @@ func TestLogSkipsToNow(t *testing.T) {
 	m.key()
 	gone := `{"error": {"code": -32000, "message": "you are no longer in this org", "data": {"reason": "NOT_A_MEMBER"}}}`
 	empty := `{"result": {"events": [], "cursors": {"` + P + `": 9}, "reset": []}}`
-	m.srv.on("sync.poll", "sync.poll.2", empty, gone)
+	m.srv.on("sync.poll", `sync.poll~"ARTIFACT"`, empty, gone)
 	r := m.run("", "log", "--project", P)
 	wantCode(t, r, 1)
 	if r.out != "" {
@@ -919,7 +919,7 @@ func TestInstallSignsInThenSetsUpEachAgent(t *testing.T) {
 	t.Cleanup(adapters.Reset)
 
 	m := newMachine(t, false)
-	m.srv.on("auth.login", "auth.login.1")
+	m.srv.on("auth.login", "auth.login")
 	r := m.run("pw\n", "install", "-a", "claude-code", "--agent", "cursor", "-e", "lan@acme.test", "-s", m.srv.URL(),
 		"--password-stdin")
 	wantCode(t, r, 0)
@@ -978,7 +978,7 @@ func TestInstallSignsInThenSetsUpEachAgent(t *testing.T) {
 
 	// status lists the agents.
 	cc.installed = true
-	m.srv.on("account.me", "account.me.1")
+	m.srv.on("account.me", lanMe)
 	r = m.run("", "status")
 	contains(t, "stdout", r.out, "claude-code: installed\n", "cursor: not installed\n")
 }
@@ -988,7 +988,7 @@ func TestInstallSignInRefused(t *testing.T) {
 	adapters.Register(cc)
 	t.Cleanup(adapters.Reset)
 	m := newMachine(t, false)
-	m.srv.on("auth.login", "auth.login.2")
+	m.srv.on("auth.login", "auth.login!NOT_ALLOWED")
 	r := m.run("bad\n", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL(), "--password-stdin")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "not signed in: wrong email or password")
@@ -1017,7 +1017,7 @@ func TestUninstallPurge(t *testing.T) {
 // name is known, nothing more is asked.
 func TestNamesRefreshedAfterPull(t *testing.T) {
 	m := artifactMachine(t)
-	m.srv.on("artifact.list", "artifact.list.1")
+	m.srv.on("artifact.list", "artifact.list")
 	r := m.run("", "artifact", "list", "--project", P)
 	wantCode(t, r, 0)
 	onlyCall(t, m.srv, "member.list")
@@ -1032,8 +1032,8 @@ func TestNamesRefreshedAfterPull(t *testing.T) {
 // A project whose key the server no longer takes (NOT_A_MEMBER) is forgotten at the next sync.
 func TestSyncDropsARefusedKey(t *testing.T) {
 	m := artifactMachine(t)
-	m.srv.on("sync.poll", "sync.poll.6")
-	m.srv.on("key.fetch", "key.fetch.3")
+	m.srv.on("sync.poll", "sync.poll!NOT_A_MEMBER")
+	m.srv.on("key.fetch", "key.fetch!NOT_A_MEMBER")
 	r := m.run("", "artifact", "list", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "NOT_A_MEMBER")

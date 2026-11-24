@@ -118,11 +118,33 @@ func refused(t *testing.T, method, reason string) string {
 	})
 }
 
-// resultHas is a golden whose result holds s.
+// pricing is the golden project.get of Pricing with its two members, Lan (the initiator) and Huy.
+func pricing(t *testing.T) string {
+	return resultHas(t, "project.get", `"names":{"mb_00000000000000000000000001":"lan","mb_00000000000000000000000002":"huy"}`)
+}
+
+// lanMe is the golden account.me of Lan in Acme; memberMe the golden member.me of M1.
+func lanMe(t *testing.T) string {
+	return resultHas(t, "account.me", `"email":"lan@acme.test"~"orgs":[{`)
+}
+
+func memberMe(t *testing.T) string { return resultHas(t, "member.me", `"name":"huy"`) }
+
+// resultHas is a golden whose result holds s (as written, or without whitespace; several terms split by ~).
 func resultHas(t *testing.T, method, s string) string {
 	t.Helper()
 	return golden(t, method, "holding "+s, func(g rpcGolden) bool {
-		return g.Response.Error == nil && strings.Contains(string(g.Response.Result), s)
+		var b bytes.Buffer
+		_ = json.Compact(&b, g.Response.Result)
+		if g.Response.Error != nil {
+			return false
+		}
+		for _, term := range strings.Split(s, "~") {
+			if !strings.Contains(b.String(), term) && !strings.Contains(string(g.Response.Result), term) {
+				return false
+			}
+		}
+		return true
 	})
 }
 
@@ -333,7 +355,7 @@ func (m *machine) withStore(fn func(st *store.Store) error) {
 func (m *machine) replica() {
 	m.t.Helper()
 	var view protocol.ProjectView
-	result(m.t, ok(m.t, "project.get"), &view)
+	result(m.t, pricing(m.t), &view)
 	m.withStore(func(st *store.Store) error {
 		return st.Tx(func(tx *store.Tx) error {
 			if err := tx.PutProject(view.Project); err != nil {

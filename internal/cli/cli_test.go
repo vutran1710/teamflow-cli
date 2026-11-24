@@ -23,6 +23,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -77,7 +79,7 @@ func newServer(t *testing.T) *fakeServer {
 
 func (f *fakeServer) URL() string { return f.srv.URL }
 
-// on sets a method's answers, in turn: a golden name ("auth.login.1"), or a raw {"result": …} / {"error": …}.
+// on sets a method's answers, in turn: a golden selector (see goldenPath), or a raw {"result": …} / {"error": …}.
 func (f *fakeServer) on(method string, answers ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -108,8 +110,8 @@ func (f *fakeServer) methods() []string {
 
 var defaults = map[string]string{
 	"sync.poll":   `{"result": {"events": [], "cursors": {}, "reset": []}}`,
-	"member.list": "member.list.1",
-	"auth.logout": "auth.logout.1",
+	"member.list": "member.list",
+	"auth.logout": "auth.logout",
 }
 
 func (f *fakeServer) answer(method string) json.RawMessage {
@@ -135,7 +137,7 @@ func (f *fakeServer) answer(method string) json.RawMessage {
 	var g struct {
 		Response json.RawMessage `json:"response"`
 	}
-	b, err := os.ReadFile(filepath.Join(goldenDir, a+".json"))
+	b, err := os.ReadFile(goldenPath(f.t, a))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -256,9 +258,96 @@ func (m *machine) key() {
 	}
 }
 
+// holds says whether s holds every ~-separated term of text.
+func holds(s, text string) bool {
+	for _, term := range strings.Split(text, "~") {
+		if !strings.Contains(s, term) {
+			return false
+		}
+	}
+	return true
+}
+
+// lanMe is the golden account.me of Lan, in Acme; huyMember the golden member.me naming M1 "huy".
+const (
+	lanMe     = `account.me~"email":"lan@acme.test"~"orgs":[{`
+	huyMember = `member.me~"name":"huy"`
+)
+
+// pricingGet is the golden project.get of Pricing with its two members, Lan (the initiator) and Huy.
+const pricingGet = `project.get~"names":{"mb_00000000000000000000000001":"lan","mb_00000000000000000000000002":"huy"}`
+
+// goldenPath is the golden file a selector names, picked by what it holds, never by its number (a new server test
+// that records earlier renumbers them): "method" is its first answer that is a result (an event: its first golden),
+// "method!REASON" its first refusal for REASON, "method~TEXT[~TEXT…]" its first result (or event) holding every TEXT, written without whitespace (`"archived":false`).
+func goldenPath(t *testing.T, sel string) string {
+	t.Helper()
+	method, reason, text := sel, "", ""
+	if i := strings.IndexAny(sel, "!~"); i >= 0 {
+		method = sel[:i]
+		if sel[i] == '!' {
+			reason = sel[i+1:]
+		} else {
+			text = sel[i+1:]
+		}
+	}
+	if last := method[strings.LastIndex(method, ".")+1:]; last != "" && strings.Trim(last, "0123456789") == "" {
+		t.Fatalf("golden %q is named by its number: pick it by what it holds", sel)
+	}
+	files, _ := filepath.Glob(filepath.Join(goldenDir, method+".*.json"))
+	num := func(f string) int {
+		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), method+"."), ".json"))
+		return n
+	}
+	sort.Slice(files, func(i, j int) bool { return num(files[i]) < num(files[j]) })
+	for _, f := range files {
+		if num(f) == 0 {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var g struct {
+			Event    json.RawMessage `json:"event"`
+			Response *struct {
+				Result json.RawMessage `json:"result"`
+				Error  *struct {
+					Data struct {
+						Reason string `json:"reason"`
+					} `json:"data"`
+				} `json:"error"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(b, &g); err != nil {
+			t.Fatal(err)
+		}
+		compact := func(raw json.RawMessage) string { // matched without whitespace: "a":1
+			var b bytes.Buffer
+			_ = json.Compact(&b, raw)
+			return b.String()
+		}
+		switch {
+		case g.Event != nil:
+			if holds(compact(g.Event), text) {
+				return f
+			}
+		case g.Response == nil:
+		case reason != "":
+			if g.Response.Error != nil && g.Response.Error.Data.Reason == reason {
+				return f
+			}
+		case g.Response.Error == nil && holds(compact(g.Response.Result), text):
+			return f
+		}
+	}
+	t.Fatalf("no golden fits %q: re-export the protocol, or the server tests changed", sel)
+	return ""
+}
+
 func goldenEvent(t *testing.T, name string) protocol.SyncEvent {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(goldenDir, name+".json"))
+	b, err := os.ReadFile(goldenPath(t, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +367,7 @@ func goldenEvent(t *testing.T, name string) protocol.SyncEvent {
 // pollEvents are the events of a golden sync.poll answer.
 func pollEvents(t *testing.T, name string) []protocol.SyncEvent {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(goldenDir, name+".json"))
+	b, err := os.ReadFile(goldenPath(t, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,13 +399,13 @@ func (m *machine) seed(evs ...protocol.SyncEvent) {
 	}
 }
 
-// replica is project P with its topics (Rounding, Currency, Plan) as project.get.1 has them, and three artifacts
-// (sg_…1 and its second version sg_…2, and sg_…3) from sync.poll.2.
+// replica is project P with its topics (Rounding, Currency, Plan) as the golden project.get has them, and three
+// artifacts (sg_…1 and its second version sg_…2, and sg_…3) from the golden sync.poll that holds them.
 func (m *machine) replica() {
 	m.t.Helper()
 	m.project()
 	var evs []protocol.SyncEvent
-	for _, ev := range pollEvents(m.t, "sync.poll.2") {
+	for _, ev := range pollEvents(m.t, `sync.poll~"ARTIFACT"`) {
 		switch ev.(type) {
 		case protocol.SignalAccepted, protocol.SignalStateChanged, protocol.ArtifactArchivedEvent:
 			evs = append(evs, ev)
@@ -325,10 +414,10 @@ func (m *machine) replica() {
 	m.seed(evs...)
 }
 
-// project puts project P and its topics in the replica, as project.get.1 has them.
+// project puts project P and its topics in the replica, as the golden project.get has them.
 func (m *machine) project() {
 	m.t.Helper()
-	b, err := os.ReadFile(filepath.Join(goldenDir, "project.get.1.json"))
+	b, err := os.ReadFile(goldenPath(m.t, pricingGet))
 	if err != nil {
 		m.t.Fatal(err)
 	}
@@ -505,7 +594,7 @@ func TestHelpPerCommand(t *testing.T) {
 
 func TestPasswordNeverInArgv(t *testing.T) {
 	m := newMachine(t, false)
-	m.srv.on("auth.login", "auth.login.1")
+	m.srv.on("auth.login", "auth.login")
 
 	// No command takes a password as an argument.
 	for _, args := range [][]string{
@@ -555,10 +644,10 @@ func TestLogin(t *testing.T) {
 		out     string
 		errText string
 	}{
-		{"signs in", "auth.login.1", 0, "signed in as lan <lan@acme.test> until 2026-01-15", ""},
-		{"wrong password", "auth.login.2", 1, "", "not signed in: wrong email or password"},
-		{"empty password", "auth.login.3", 1, "", "not signed in: password: String should have at least 1 character"},
-		{"upgrade required", "auth.login.4", 1, "", updateText},
+		{"signs in", "auth.login", 0, "signed in as lan <lan@acme.test> until 2026-01-15", ""},
+		{"wrong password", "auth.login!NOT_ALLOWED", 1, "", "not signed in: wrong email or password"},
+		{"empty password", "auth.login!SCHEMA_VIOLATION", 1, "", "not signed in: password: String should have at least 1 character"},
+		{"upgrade required", "auth.login!UPGRADE_REQUIRED", 1, "", updateText},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -596,7 +685,7 @@ func TestLogin(t *testing.T) {
 
 func TestLoginUsesTheConfiguredServerElseTheDefault(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("auth.login", "auth.login.1")
+	m.srv.on("auth.login", "auth.login")
 	r := m.run("pw\n", "login", "-e", "lan@acme.test", "--password-stdin")
 	wantCode(t, r, 0)
 	onlyCall(t, m.srv, "auth.login")
@@ -662,7 +751,7 @@ func TestLogoutOfflineStillForgetsLocally(t *testing.T) {
 
 func TestProjects(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("account.projects", "account.projects.1")
+	m.srv.on("account.projects", "account.projects")
 	r := m.run("", "projects")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "Acme\tPricing\t"+P+"\n")
@@ -727,7 +816,7 @@ func TestSadPathsEverywhere(t *testing.T) {
 
 // A non-member and an unknown project, for the commands that fetch a project key.
 func TestNonMemberAndUnknownProject(t *testing.T) {
-	for _, tc := range []struct{ answer, reason string }{{"key.fetch.3", "NOT_A_MEMBER"}, {"key.fetch.4", "UNKNOWN_PROJECT"}} {
+	for _, tc := range []struct{ answer, reason string }{{"key.fetch!NOT_A_MEMBER", "NOT_A_MEMBER"}, {"key.fetch!UNKNOWN_PROJECT", "UNKNOWN_PROJECT"}} {
 		for _, args := range [][]string{
 			{"topic", "delete", P, "Rounding", "--yes"},
 			{"artifact", "list", "--project", P},
@@ -753,7 +842,7 @@ func TestNonMemberAndUnknownProject(t *testing.T) {
 func TestStatus(t *testing.T) {
 	m := newMachine(t, true)
 	m.key()
-	m.srv.on("account.me", "account.me.1")
+	m.srv.on("account.me", lanMe)
 	m.inSession("s1", P, nil)
 	r := m.run("", "status")
 	wantCode(t, r, 0)
@@ -794,7 +883,7 @@ func TestStatusSadPaths(t *testing.T) {
 	contains(t, "stdout", r.out, "signed out: run `teamflow login`")
 
 	m = newMachine(t, true)
-	m.srv.on("account.me", "account.me.4")
+	m.srv.on("account.me", "account.me!NOT_ALLOWED")
 	r = m.run("", "status")
 	contains(t, "stdout", r.out, "sign-in: refused (NOT_ALLOWED); run `teamflow login` again")
 

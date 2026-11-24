@@ -117,7 +117,7 @@ func TestNoSession(t *testing.T) {
 	wantErr(t, m.call("inbox", nil), "could not look up the agent session: database is locked")
 	// A project named outright needs no session.
 	m.find.err = nil
-	m.srv.on("project.get", ok(t, "project.get"))
+	m.srv.on("project.get", pricing(t))
 	if o := m.call("project_get", map[string]any{"project": P}).obj(t); o["id"] != P {
 		t.Fatalf("project_get by id without a session: %v", o)
 	}
@@ -175,8 +175,8 @@ func TestOffline(t *testing.T) {
 	// Back online, in a new server process (a restart): the next call flushes the spool, each signal once.
 	m.srv.offline(false)
 	m.srv.on("signal.emit", acceptedEmit)
-	m.srv.on("account.me", ok(t, "account.me"))
-	m.srv.on("member.me", ok(t, "member.me"))
+	m.srv.on("account.me", lanMe(t))
+	m.srv.on("member.me", memberMe(t))
 	m.cs = nil
 	m.call("whoami", nil).obj(t)
 	m.withStore(func(st *store.Store) error {
@@ -220,7 +220,7 @@ func TestRefusedKeysAndOldClients(t *testing.T) {
 
 	m2 := newMachine(t, true)
 	m2.srv.on("member.me", refused(t, "member.me", "UPGRADE_REQUIRED"))
-	m2.srv.on("account.me", ok(t, "account.me"))
+	m2.srv.on("account.me", lanMe(t))
 	wantErr(t, m2.call("whoami", nil), "update teamflow")
 	m2.srv.on("signal.emit", refused(t, "signal.emit", "UPGRADE_REQUIRED"))
 	wantErr(t, m2.call("signal_emit", args["signal_emit"]), "update teamflow")
@@ -240,9 +240,9 @@ func TestSignInIsReadAtEachCall(t *testing.T) {
 	if err := config.Save(m.dir, config.Config{Server: m.srv.srv.URL, AuthKey: auth, Email: email}); err != nil {
 		t.Fatal(err)
 	}
-	m.srv.on("account.me", ok(t, "account.me"))
+	m.srv.on("account.me", lanMe(t))
 	m.srv.on("key.fetch", ok(t, "key.fetch"))
-	m.srv.on("member.me", ok(t, "member.me"))
+	m.srv.on("member.me", memberMe(t))
 	if o := m.call("whoami", nil).obj(t); o["account"] != "lan" || o["member"] != M1 {
 		t.Fatalf("whoami after a sign-in elsewhere %v", o)
 	}
