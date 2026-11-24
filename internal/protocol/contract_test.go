@@ -425,10 +425,9 @@ func TestEveryGoldenFileRoundTrips(t *testing.T) {
 		for _, p := range pieces(t, f, methods) {
 			raw := mustJSON(p.raw)
 			if p.def == "" && strings.Contains(p.where, "invalid_request") && strings.Contains(p.where, "request") {
-				// Deliberately broken calls (a method that is not a string): they need not decode.
-				if _, _, err := roundTrip("", raw); err != nil {
-					continue
-				}
+				// Deliberately broken calls (no or a wrong jsonrpc, a method that is not a string): the server's
+				// refusals of what this client never sends. Request always encodes "jsonrpc":"2.0".
+				continue
 			}
 			enc, v, err := roundTrip(p.def, raw)
 			if err != nil {
@@ -533,6 +532,11 @@ func (c comparer) inject(node map[string]any, v any) any {
 		if branches, ok := node[key].([]any); ok {
 			for _, b := range branches {
 				if bn := c.resolve(b); c.fits(bn, v) {
+					if lacksTag(bn, v) {
+						// Without its tag a value is picked by exact shape, so an unknown field makes it
+						// unknown (kept as sent): TestATaglessSignalBodyIsPickedOnlyWhenItsShapeIsExact.
+						return c.injectBelow(bn, v)
+					}
 					return c.inject(bn, v)
 				}
 			}
@@ -558,6 +562,33 @@ func (c comparer) inject(node map[string]any, v any) any {
 	default:
 		return v
 	}
+}
+
+// lacksTag: v is an object without the const field its schema branch names it by.
+func lacksTag(node map[string]any, v any) bool {
+	obj, ok := v.(map[string]any)
+	props, _ := node["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	for k, p := range props {
+		if _, isConst := p.(map[string]any)["const"]; isConst {
+			if _, present := obj[k]; !present {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// injectBelow injects into v's fields but not into v itself.
+func (c comparer) injectBelow(node map[string]any, v any) any {
+	obj := v.(map[string]any)
+	out := map[string]any{}
+	for k, val := range obj {
+		out[k] = c.inject(c.fieldNode(node, k), val)
+	}
+	return out
 }
 
 // fits: the branch of a union that v belongs to (its const tags match, its required fields are present).
@@ -873,6 +904,122 @@ func TestGeneratedCodeIsUpToDate(t *testing.T) {
 		}
 		if !bytes.Equal(want, got) {
 			t.Errorf("%s is out of date: run `go run ./tools/gen`", filepath.Base(f))
+		}
+	}
+}
+
+func TestATaglessSignalBodyIsPickedOnlyWhenItsShapeIsExact(t *testing.T) {
+	cases := map[string]struct {
+		raw  string
+		want any
+	}{
+		"key points": {`{"summary":"s","points":["p"],"why":"w"}`, KeyPointsBody{}},
+		"artifact with points": {`{"name":"a.md","kind":"markdown","summary":"s","points":["p"],"sha256":"` +
+			strings.Repeat("0", 64) + `","size":1,"media_type":"text/markdown"}`, ArtifactBody{}},
+		"action result with points": {`{"action":"ai_00000000000000000000000001","outcome":"done","summary":"s","points":["p"]}`,
+			ActionResultBody{}},
+		"comment":                     {`{"text":"hello"}`, CommentBody{}},
+		"no variant has all its keys": {`{"summary":"s","points":["p"],"bogus":1}`, UnknownSignalBody{}},
+		"required fields missing":     {`{"why":"w"}`, UnknownSignalBody{}},
+	}
+	for name, c := range cases {
+		b, err := DecodeSignalBody([]byte(c.raw))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if reflect.TypeOf(b) != reflect.TypeOf(c.want) {
+			t.Errorf("%s: decoded to %T, want %T", name, b, c.want)
+			continue
+		}
+		if _, unknown := b.(UnknownSignalBody); unknown {
+			if enc := mustJSON(b); !bytes.Equal(enc, []byte(c.raw)) {
+				t.Errorf("%s: an unknown body must re-encode as sent, got %s", name, enc)
+			}
+			continue
+		}
+		// Nothing the body held is lost: every key sent comes back with its value.
+		sent := parse([]byte(c.raw)).(map[string]any)
+		got := parse(mustJSON(b)).(map[string]any)
+		for k, v := range sent {
+			if !reflect.DeepEqual(got[k], v) {
+				t.Errorf("%s: %s = %v after the round trip, sent %v", name, k, got[k], v)
+			}
+		}
+	}
+}
+
+func TestConstructorsCarryTheSchemaDefaults(t *testing.T) {
+	s := loadSchema(t)
+	c := comparer{s.Defs}
+	checked := 0
+	for name, d := range s.Defs {
+		node := c.resolve(d)
+		props, ok := node["properties"].(map[string]any)
+		if !ok || node["type"] != "object" {
+			continue
+		}
+		v := newDef(name)
+		if v == nil {
+			t.Errorf("%s: no constructor", name)
+			continue
+		}
+		enc, _ := parse(mustJSON(v)).(map[string]any)
+		for key, p := range props {
+			def, has := p.(map[string]any)["default"]
+			if !has {
+				continue
+			}
+			checked++
+			if d := c.diff(name+"."+key, c.resolve(p), def, enc[key]); len(d) > 0 {
+				t.Errorf("New%s() does not carry the default: %v", name, d)
+			}
+		}
+	}
+	if checked < 100 {
+		t.Errorf("only %d defaults checked", checked)
+	}
+	// The cases that change meaning when left at Go's zero value.
+	if !NewArtifactArchive().Archived {
+		t.Error("NewArtifactArchive().Archived must default to true (an archive, not an un-archive)")
+	}
+	if NewSignalList().Limit < 1 {
+		t.Errorf("NewSignalList().Limit = %d", NewSignalList().Limit)
+	}
+}
+
+func TestARequestAlwaysSaysJSONRPC20(t *testing.T) {
+	enc := parse(mustJSON(Request{ID: json.RawMessage("1"), Method: "account.me"})).(map[string]any)
+	if enc["jsonrpc"] != "2.0" {
+		t.Errorf("encoded %v", enc)
+	}
+	enc = parse(mustJSON(&Request{Method: "account.me"})).(map[string]any)
+	if enc["jsonrpc"] != "2.0" {
+		t.Errorf("encoded through a pointer: %v", enc)
+	}
+	if _, hasID := enc["id"]; hasID {
+		t.Errorf("a notification has no id: %v", enc)
+	}
+}
+
+func TestAValueThatFitsSeveralShapesIsUnknown(t *testing.T) {
+	shapes := []shape{
+		{tag: "a.v1", required: []string{"x"}, fields: []string{"type", "x", "y"}, closed: true},
+		{tag: "b.v1", required: []string{"x"}, fields: []string{"type", "x", "z"}, closed: true},
+		{tag: "c.v1", required: []string{"w"}, fields: []string{"w"}},
+	}
+	for raw, want := range map[string]string{
+		`{"x":1}`:         "", // a and b both fit: never a guess
+		`{"x":1,"y":2}`:   "a.v1",
+		`{"x":1,"z":2}`:   "b.v1",
+		`{"x":1,"q":2}`:   "", // closed variants: an unknown field fits none
+		`{"w":1,"any":2}`: "c.v1",
+		`{}`:              "",
+		`[1]`:             "",
+		`null`:            "",
+	} {
+		if got := pickByShape([]byte(raw), shapes); got != want {
+			t.Errorf("pickByShape(%s) = %q, want %q", raw, got, want)
 		}
 	}
 }

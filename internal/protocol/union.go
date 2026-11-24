@@ -78,12 +78,51 @@ func decodeList[T any](raw json.RawMessage, decode func(json.RawMessage) (T, err
 	return out, nil
 }
 
-// hasAll: every name is a field of the object.
-func hasAll(fields map[string]json.RawMessage, names ...string) bool {
-	for _, n := range names {
-		if _, ok := fields[n]; !ok {
+// shape is one variant of a union whose tag may be left out: its required fields and all its fields.
+type shape struct {
+	tag              string
+	required, fields []string
+	closed           bool // the variant allows no other field
+}
+
+func (s shape) fits(present map[string]json.RawMessage) bool {
+	for _, r := range s.required {
+		if _, ok := present[r]; !ok {
+			return false
+		}
+	}
+	if !s.closed {
+		return true
+	}
+	for k := range present {
+		known := false
+		for _, f := range s.fields {
+			if f == k {
+				known = true
+				break
+			}
+		}
+		if !known {
 			return false
 		}
 	}
 	return true
+}
+
+// pickByShape gives the tag of the one variant raw fits, or "" when it fits none or several.
+func pickByShape(raw json.RawMessage, shapes []shape) string {
+	present, err := unionFields(raw)
+	if err != nil {
+		return ""
+	}
+	pick, n := "", 0
+	for _, s := range shapes {
+		if s.fits(present) {
+			pick, n = s.tag, n+1
+		}
+	}
+	if n != 1 {
+		return ""
+	}
+	return pick
 }

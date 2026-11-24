@@ -55,6 +55,19 @@ What stays on your machine:
 `go test ./...` decodes and re-encodes every golden message through the Go types, so a protocol change the client
 does not follow fails the build.
 
+## Developer notes
+
+- **Build values to send with their constructors.** Every protocol type has `protocol.New<Type>()`, which holds
+  the schema's defaults. A field left at Go's zero value is sent as that value, not as the server's default, so
+  `protocol.ArtifactArchive{Artifact: id}` would send `"archived": false` (an un-archive), while
+  `a := protocol.NewArtifactArchive(); a.Artifact = id` sends `"archived": true`. Decoding fills missing fields
+  with their defaults by itself.
+- **Unknown input is tolerated.** Unknown fields are ignored, and a union variant this client does not know (an
+  event type from a newer server) decodes to its `Unknown*` type, never an error. A signal body sent without its
+  `type` is matched only when exactly one variant fits its fields; otherwise it stays unknown.
+- `protocol.Request` always encodes `"jsonrpc": "2.0"`.
+- After changing `protocol/`, run `go run ./tools/gen`; CI fails if the generated code is stale.
+
 ## License
 
 MIT; see [LICENSE](LICENSE).

@@ -11,7 +11,9 @@
 //   - a union (oneOf/anyOf of several $defs, or one with a discriminator) becomes an interface with a Decode
 //     function. The variant is picked by the discriminator, else by a const field every variant has, else by a
 //     required field only that variant has. A variant this client doesn't know decodes to Unknown<Union> holding
-//     the raw JSON; it is never an error.
+//     the raw JSON; it is never an error. A value missing its const tag is picked by shape only when exactly one
+//     variant fits it exactly (closed variants: no field it doesn't have); otherwise it is unknown.
+//   - every struct gets New<Def>(), holding the schema's defaults: the way to build a value to send.
 //   - unknown JSON fields are ignored everywhere.
 package protocolgen
 
@@ -330,6 +332,7 @@ func (g *gen) types() (string, error) {
 	}
 	var enums, structs strings.Builder
 	var factories []string
+	isStruct := map[string]bool{}
 	for _, name := range sortedDefs {
 		d, _ := g.def(name)
 		switch {
@@ -343,6 +346,7 @@ func (g *gen) types() (string, error) {
 			if err := g.emitStruct(&structs, name, d); err != nil {
 				return "", fmt.Errorf("$def %s: %w", name, err)
 			}
+			isStruct[name] = true
 		default:
 			return "", fmt.Errorf("$def %s: unsupported (type %v)", name, d.get("type"))
 		}
@@ -362,10 +366,14 @@ func (g *gen) types() (string, error) {
 	body.WriteString(enums.String())
 	body.WriteString(unions.String())
 	body.WriteString(structs.String())
-	body.WriteString("// newDef gives a new value of the Go type of a $def (unions excepted), or nil.\n")
+	body.WriteString("// newDef gives a new value of the Go type of a $def (unions excepted), holding its defaults, or nil.\n")
 	body.WriteString("func newDef(name string) any {\n\tswitch name {\n")
 	for _, n := range factories {
-		fmt.Fprintf(&body, "\tcase %q:\n\t\treturn new(%s)\n", n, n)
+		if isStruct[n] {
+			fmt.Fprintf(&body, "\tcase %q:\n\t\tv := New%s()\n\t\treturn &v\n", n, n)
+		} else {
+			fmt.Fprintf(&body, "\tcase %q:\n\t\treturn new(%s)\n", n, n)
+		}
 	}
 	body.WriteString("\t}\n\treturn nil\n}\n")
 
@@ -801,14 +809,17 @@ func (g *gen) emitStruct(b *strings.Builder, name string, d *object) error {
 			return fmt.Errorf("field %s: unsupported nesting of a union", f.key)
 		}
 	}
+	fmt.Fprintf(b, "// New%s gives a %s holding the schema's defaults. Build values to send with it: a field left at\n"+
+		"// Go's zero value is sent as that value, not as the server's default.\n", name, name)
+	fmt.Fprintf(b, "func New%s() %s {\n\treturn %s{%s}\n}\n\n", name, name, name, strings.Join(defaults, ", "))
 	if len(defaults) > 0 || len(unionFields) > 0 {
 		fmt.Fprintf(b, "func (v *%s) UnmarshalJSON(data []byte) error {\n\ttype plain %s\n", name, name)
 		if len(unionFields) == 0 {
-			fmt.Fprintf(b, "\tw := plain{%s}\n\tif err := json.Unmarshal(data, &w); err != nil {\n\t\treturn err\n\t}\n\t*v = %s(w)\n\treturn nil\n}\n\n",
-				strings.Join(defaults, ", "), name)
+			fmt.Fprintf(b, "\tw := plain(New%s())\n\tif err := json.Unmarshal(data, &w); err != nil {\n\t\treturn err\n\t}\n\t*v = %s(w)\n\treturn nil\n}\n\n",
+				name, name)
 		} else {
 			fmt.Fprintf(b, "\tvar w struct {\n\t\tplain\n%s\n\t}\n", strings.Join(unionFields, "\n"))
-			fmt.Fprintf(b, "\tw.plain = plain{%s}\n", strings.Join(defaults, ", "))
+			fmt.Fprintf(b, "\tw.plain = plain(New%s())\n", name)
 			fmt.Fprintf(b, "\tif err := json.Unmarshal(data, &w); err != nil {\n\t\treturn err\n\t}\n\t*v = %s(w.plain)\n\tvar err error\n", name)
 			b.WriteString(strings.Join(unionDecodes, ""))
 			b.WriteString("\treturn nil\n}\n\n")
@@ -860,28 +871,39 @@ func (g *gen) emitUnion(b *strings.Builder, u *union) {
 	}
 	fmt.Fprintf(b, "// MarshalJSON gives back the JSON as it was received.\nfunc (u %s) MarshalJSON() ([]byte, error) { return rawOrNull(u.Raw), nil }\n\n", n.unknown)
 
+	if u.byShape {
+		fmt.Fprintf(b, "// shapes%s: without its tag, a value is the one variant it fits exactly (all its required\n"+
+			"// fields, and only fields that variant has); several or none is unknown, never a guess.\n", u.name)
+		fmt.Fprintf(b, "var shapes%s = []shape{\n", u.name)
+		for _, v := range u.variants {
+			d, _ := g.def(v)
+			var req, props []string
+			for _, r := range requiredOf(d) {
+				req = append(req, strconv.Quote(r))
+			}
+			if po, ok := d.get("properties").(*object); ok {
+				for _, k := range po.keys {
+					props = append(props, strconv.Quote(k))
+				}
+			}
+			closed := d.get("additionalProperties") == false
+			fmt.Fprintf(b, "\t{tag: %q, required: []string{%s}, fields: []string{%s}, closed: %t},\n",
+				u.tags[v], strings.Join(req, ", "), strings.Join(props, ", "), closed)
+		}
+		b.WriteString("}\n\n")
+	}
 	fmt.Fprintf(b, "// Decode%s decodes one %s; a variant this client does not know is a %s.\n", u.name, u.name, n.unknown)
 	fmt.Fprintf(b, "func Decode%s(raw json.RawMessage) (%s, error) {\n", u.name, u.name)
 	if u.tagProp != "" {
-		fmt.Fprintf(b, "\ttag, err := unionTag(raw, %q)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"%s: %%w\", err)\n\t}\n\tswitch tag {\n", u.tagProp, u.name)
+		fmt.Fprintf(b, "\ttag, err := unionTag(raw, %q)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"%s: %%w\", err)\n\t}\n", u.tagProp, u.name)
+		if u.byShape {
+			fmt.Fprintf(b, "\tif tag == \"\" {\n\t\ttag = pickByShape(raw, shapes%s)\n\t}\n", u.name)
+		}
+		b.WriteString("\tswitch tag {\n")
 		for _, v := range u.variants {
 			fmt.Fprintf(b, "\tcase %q:\n%s", u.tags[v], decodeVariant(v, u.name+" "+u.tags[v]))
 		}
 		b.WriteString("\t}\n")
-		if u.byShape {
-			// No tag: the field's default names the variant, so pick it by shape (pydantic's smart union).
-			b.WriteString("\tif tag == \"\" {\n\t\tfields, _ := unionFields(raw)\n")
-			for _, v := range u.variants {
-				d, _ := g.def(v)
-				var req []string
-				for _, r := range requiredOf(d) {
-					req = append(req, strconv.Quote(r))
-				}
-				fmt.Fprintf(b, "\t\tif hasAll(fields, %s) {\n%s\t\t}\n", strings.Join(req, ", "),
-					indent(decodeVariant(v, u.name+" "+u.tags[v])))
-			}
-			b.WriteString("\t}\n")
-		}
 		fmt.Fprintf(b, "\treturn %s{%s: tag, Raw: cloneRaw(raw)}, nil\n}\n\n", n.unknown, n.tagField)
 		return
 	}

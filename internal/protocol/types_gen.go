@@ -344,11 +344,24 @@ func (UnknownSignalBody) isSignalBody() {}
 // MarshalJSON gives back the JSON as it was received.
 func (u UnknownSignalBody) MarshalJSON() ([]byte, error) { return rawOrNull(u.Raw), nil }
 
+// shapesSignalBody: without its tag, a value is the one variant it fits exactly (all its required
+// fields, and only fields that variant has); several or none is unknown, never a guess.
+var shapesSignalBody = []shape{
+	{tag: "key_points.v1", required: []string{"summary", "points"}, fields: []string{"type", "summary", "points", "why"}, closed: true},
+	{tag: "comment.v1", required: []string{"text"}, fields: []string{"type", "text"}, closed: true},
+	{tag: "artifact.v1", required: []string{"name", "kind", "summary"}, fields: []string{"type", "name", "kind", "summary", "points", "stored", "url", "media_type", "size", "sha256"}, closed: true},
+	{tag: "action_result.v1", required: []string{"action", "outcome", "summary"}, fields: []string{"type", "action", "outcome", "summary", "points", "blocker"}, closed: true},
+	{tag: "action_revoke.v1", required: []string{"action", "reason"}, fields: []string{"type", "action", "reason"}, closed: true},
+}
+
 // DecodeSignalBody decodes one SignalBody; a variant this client does not know is a UnknownSignalBody.
 func DecodeSignalBody(raw json.RawMessage) (SignalBody, error) {
 	tag, err := unionTag(raw, "type")
 	if err != nil {
 		return nil, fmt.Errorf("SignalBody: %w", err)
+	}
+	if tag == "" {
+		tag = pickByShape(raw, shapesSignalBody)
 	}
 	switch tag {
 	case "key_points.v1":
@@ -381,44 +394,6 @@ func DecodeSignalBody(raw json.RawMessage) (SignalBody, error) {
 			return nil, fmt.Errorf("SignalBody action_revoke.v1: %w", err)
 		}
 		return v, nil
-	}
-	if tag == "" {
-		fields, _ := unionFields(raw)
-		if hasAll(fields, "summary", "points") {
-			var v KeyPointsBody
-			if err := json.Unmarshal(raw, &v); err != nil {
-				return nil, fmt.Errorf("SignalBody key_points.v1: %w", err)
-			}
-			return v, nil
-		}
-		if hasAll(fields, "text") {
-			var v CommentBody
-			if err := json.Unmarshal(raw, &v); err != nil {
-				return nil, fmt.Errorf("SignalBody comment.v1: %w", err)
-			}
-			return v, nil
-		}
-		if hasAll(fields, "name", "kind", "summary") {
-			var v ArtifactBody
-			if err := json.Unmarshal(raw, &v); err != nil {
-				return nil, fmt.Errorf("SignalBody artifact.v1: %w", err)
-			}
-			return v, nil
-		}
-		if hasAll(fields, "action", "outcome", "summary") {
-			var v ActionResultBody
-			if err := json.Unmarshal(raw, &v); err != nil {
-				return nil, fmt.Errorf("SignalBody action_result.v1: %w", err)
-			}
-			return v, nil
-		}
-		if hasAll(fields, "action", "reason") {
-			var v ActionRevokeBody
-			if err := json.Unmarshal(raw, &v); err != nil {
-				return nil, fmt.Errorf("SignalBody action_revoke.v1: %w", err)
-			}
-			return v, nil
-		}
 	}
 	return UnknownSignalBody{Tag: tag, Raw: cloneRaw(raw)}, nil
 }
@@ -612,9 +587,21 @@ type AboutDocument struct {
 	Quote    string `json:"quote"`
 }
 
+// NewAboutDocument gives a AboutDocument holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAboutDocument() AboutDocument {
+	return AboutDocument{}
+}
+
 // AboutDrift: The signal is part of the discussion of a drift.
 type AboutDrift struct {
 	Drift string `json:"drift"`
+}
+
+// NewAboutDrift gives a AboutDrift holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAboutDrift() AboutDrift {
+	return AboutDrift{}
 }
 
 // Account: A person: email + password (the hash never leaves the server). Inserted by the server admin. The person
@@ -629,11 +616,23 @@ type Account struct {
 	DisabledAt *string `json:"disabled_at"`
 }
 
+// NewAccount gives a Account holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAccount() Account {
+	return Account{}
+}
+
 // AccountProjects: Every project you are a member of, across your orgs.
 type AccountProjects struct {
 	Projects  []ProjectView             `json:"projects"`
 	Orgs      map[string]string         `json:"orgs"`
 	Summaries map[string]ProjectSummary `json:"summaries"`
+}
+
+// NewAccountProjects gives a AccountProjects holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAccountProjects() AccountProjects {
+	return AccountProjects{}
 }
 
 func (v AccountProjects) MarshalJSON() ([]byte, error) {
@@ -658,9 +657,15 @@ type AccountView struct {
 	MinClientProtocol int64     `json:"min_client_protocol"`
 }
 
+// NewAccountView gives a AccountView holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAccountView() AccountView {
+	return AccountView{Protocol: 1, MinClientProtocol: 1}
+}
+
 func (v *AccountView) UnmarshalJSON(data []byte) error {
 	type plain AccountView
-	w := plain{Protocol: 1, MinClientProtocol: 1}
+	w := plain(NewAccountView())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -691,6 +696,12 @@ type Action struct {
 	DoneSignal *string  `json:"done_signal"`
 }
 
+// NewAction gives a Action holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAction() Action {
+	return Action{}
+}
+
 func (v Action) MarshalJSON() ([]byte, error) {
 	type plain Action
 	p := plain(v)
@@ -710,9 +721,15 @@ type ActionResultBody struct {
 	Blocker string        `json:"blocker"`
 }
 
+// NewActionResultBody gives a ActionResultBody holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewActionResultBody() ActionResultBody {
+	return ActionResultBody{Type: "action_result.v1"}
+}
+
 func (v *ActionResultBody) UnmarshalJSON(data []byte) error {
 	type plain ActionResultBody
-	w := plain{Type: "action_result.v1"}
+	w := plain(NewActionResultBody())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -739,9 +756,15 @@ type ActionRevokeBody struct {
 	Reason string `json:"reason"`
 }
 
+// NewActionRevokeBody gives a ActionRevokeBody holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewActionRevokeBody() ActionRevokeBody {
+	return ActionRevokeBody{Type: "action_revoke.v1"}
+}
+
 func (v *ActionRevokeBody) UnmarshalJSON(data []byte) error {
 	type plain ActionRevokeBody
-	w := plain{Type: "action_revoke.v1"}
+	w := plain(NewActionRevokeBody())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -768,6 +791,12 @@ type ActionSpec struct {
 	After []string `json:"after"`
 }
 
+// NewActionSpec gives a ActionSpec holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewActionSpec() ActionSpec {
+	return ActionSpec{}
+}
+
 func (v ActionSpec) MarshalJSON() ([]byte, error) {
 	type plain ActionSpec
 	p := plain(v)
@@ -783,6 +812,12 @@ type AddMembers struct {
 	ExpectedVersion int64             `json:"expected_version"`
 	Members         []string          `json:"members"`
 	Titles          map[string]string `json:"titles"`
+}
+
+// NewAddMembers gives a AddMembers holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAddMembers() AddMembers {
+	return AddMembers{}
 }
 
 func (v AddMembers) MarshalJSON() ([]byte, error) {
@@ -804,10 +839,22 @@ type AdminAccount struct {
 	Disabled bool   `json:"disabled"`
 }
 
+// NewAdminAccount gives a AdminAccount holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminAccount() AdminAccount {
+	return AdminAccount{}
+}
+
 type AdminAccountAdd struct {
 	Email    string `json:"email"`
 	Name     string `json:"name"`
 	Password string `json:"password"`
+}
+
+// NewAdminAccountAdd gives a AdminAccountAdd holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminAccountAdd() AdminAccountAdd {
+	return AdminAccountAdd{}
 }
 
 type AdminAccountPassword struct {
@@ -815,12 +862,30 @@ type AdminAccountPassword struct {
 	Password string `json:"password"`
 }
 
+// NewAdminAccountPassword gives a AdminAccountPassword holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminAccountPassword() AdminAccountPassword {
+	return AdminAccountPassword{}
+}
+
 type AdminAccountRef struct {
 	Email string `json:"email"`
 }
 
+// NewAdminAccountRef gives a AdminAccountRef holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminAccountRef() AdminAccountRef {
+	return AdminAccountRef{}
+}
+
 type AdminAccounts struct {
 	Accounts []AdminAccount `json:"accounts"`
+}
+
+// NewAdminAccounts gives a AdminAccounts holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminAccounts() AdminAccounts {
+	return AdminAccounts{}
 }
 
 func (v AdminAccounts) MarshalJSON() ([]byte, error) {
@@ -840,9 +905,15 @@ type AdminExport struct {
 	Limit int64   `json:"limit"`
 }
 
+// NewAdminExport gives a AdminExport holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminExport() AdminExport {
+	return AdminExport{Limit: 100}
+}
+
 func (v *AdminExport) UnmarshalJSON(data []byte) error {
 	type plain AdminExport
-	w := plain{Limit: 100}
+	w := plain(NewAdminExport())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -854,10 +925,22 @@ type AdminImported struct {
 	Rows int64 `json:"rows"`
 }
 
+// NewAdminImported gives a AdminImported holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminImported() AdminImported {
+	return AdminImported{}
+}
+
 type AdminMember struct {
 	Member string `json:"member"`
 	Org    string `json:"org"`
 	Email  string `json:"email"`
+}
+
+// NewAdminMember gives a AdminMember holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminMember() AdminMember {
+	return AdminMember{}
 }
 
 type AdminOrg struct {
@@ -867,15 +950,33 @@ type AdminOrg struct {
 	Members int64  `json:"members"`
 }
 
+// NewAdminOrg gives a AdminOrg holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminOrg() AdminOrg {
+	return AdminOrg{}
+}
+
 type AdminOrgAdd struct {
 	Name  string `json:"name"`
 	Admin string `json:"admin"`
+}
+
+// NewAdminOrgAdd gives a AdminOrgAdd holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminOrgAdd() AdminOrgAdd {
+	return AdminOrgAdd{}
 }
 
 type AdminOrgAddMember struct {
 	Org   string `json:"org"`
 	Email string `json:"email"`
 	Title string `json:"title"`
+}
+
+// NewAdminOrgAddMember gives a AdminOrgAddMember holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminOrgAddMember() AdminOrgAddMember {
+	return AdminOrgAddMember{}
 }
 
 // AdminOrgImport: admin.org_import: into the org's own storage (the org must be in the directory: import that first).
@@ -885,6 +986,12 @@ type AdminOrgImport struct {
 	Rows   []map[string]any `json:"rows"`
 	Resume bool             `json:"resume"`
 	Org    string           `json:"org"`
+}
+
+// NewAdminOrgImport gives a AdminOrgImport holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminOrgImport() AdminOrgImport {
+	return AdminOrgImport{}
 }
 
 func (v AdminOrgImport) MarshalJSON() ([]byte, error) {
@@ -901,8 +1008,20 @@ type AdminOrgSetAdmin struct {
 	Email string `json:"email"`
 }
 
+// NewAdminOrgSetAdmin gives a AdminOrgSetAdmin holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminOrgSetAdmin() AdminOrgSetAdmin {
+	return AdminOrgSetAdmin{}
+}
+
 type AdminOrgs struct {
 	Orgs []AdminOrg `json:"orgs"`
+}
+
+// NewAdminOrgs gives a AdminOrgs holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminOrgs() AdminOrgs {
+	return AdminOrgs{}
 }
 
 func (v AdminOrgs) MarshalJSON() ([]byte, error) {
@@ -922,6 +1041,12 @@ type AdminRepaired struct {
 	Failed   []string `json:"failed"`
 }
 
+// NewAdminRepaired gives a AdminRepaired holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminRepaired() AdminRepaired {
+	return AdminRepaired{}
+}
+
 func (v AdminRepaired) MarshalJSON() ([]byte, error) {
 	type plain AdminRepaired
 	p := plain(v)
@@ -933,6 +1058,12 @@ func (v AdminRepaired) MarshalJSON() ([]byte, error) {
 
 type AdminRows struct {
 	Rows []map[string]any `json:"rows"`
+}
+
+// NewAdminRows gives a AdminRows holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAdminRows() AdminRows {
+	return AdminRows{}
 }
 
 func (v AdminRows) MarshalJSON() ([]byte, error) {
@@ -951,6 +1082,12 @@ type ApprovalRequest struct {
 	Note      string   `json:"note"`
 }
 
+// NewApprovalRequest gives a ApprovalRequest holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewApprovalRequest() ApprovalRequest {
+	return ApprovalRequest{}
+}
+
 func (v ApprovalRequest) MarshalJSON() ([]byte, error) {
 	type plain ApprovalRequest
 	p := plain(v)
@@ -967,9 +1104,15 @@ type ArtifactArchive struct {
 	Note     string `json:"note"`
 }
 
+// NewArtifactArchive gives a ArtifactArchive holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactArchive() ArtifactArchive {
+	return ArtifactArchive{Archived: true}
+}
+
 func (v *ArtifactArchive) UnmarshalJSON(data []byte) error {
 	type plain ArtifactArchive
-	w := plain{Archived: true}
+	w := plain(NewArtifactArchive())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -988,9 +1131,15 @@ type ArtifactArchivedEvent struct {
 	By       string `json:"by"`
 }
 
+// NewArtifactArchivedEvent gives a ArtifactArchivedEvent holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactArchivedEvent() ArtifactArchivedEvent {
+	return ArtifactArchivedEvent{Type: "artifact.archived"}
+}
+
 func (v *ArtifactArchivedEvent) UnmarshalJSON(data []byte) error {
 	type plain ArtifactArchivedEvent
-	w := plain{Type: "artifact.archived"}
+	w := plain(NewArtifactArchivedEvent())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1024,9 +1173,15 @@ type ArtifactBody struct {
 	Sha256    *string      `json:"sha256"`
 }
 
+// NewArtifactBody gives a ArtifactBody holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactBody() ArtifactBody {
+	return ArtifactBody{Type: "artifact.v1"}
+}
+
 func (v *ArtifactBody) UnmarshalJSON(data []byte) error {
 	type plain ArtifactBody
-	w := plain{Type: "artifact.v1"}
+	w := plain(NewArtifactBody())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1053,6 +1208,12 @@ type ArtifactContent struct {
 	ContentB64 *string      `json:"content_b64"`
 }
 
+// NewArtifactContent gives a ArtifactContent holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactContent() ArtifactContent {
+	return ArtifactContent{}
+}
+
 // ArtifactGet: One version by its sg_ id, or an artifact by its chain id (its version now in force, else its newest).
 type ArtifactGet struct {
 	Version        *string `json:"version"`
@@ -1060,9 +1221,15 @@ type ArtifactGet struct {
 	IncludeContent bool    `json:"include_content"`
 }
 
+// NewArtifactGet gives a ArtifactGet holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactGet() ArtifactGet {
+	return ArtifactGet{IncludeContent: true}
+}
+
 func (v *ArtifactGet) UnmarshalJSON(data []byte) error {
 	type plain ArtifactGet
-	w := plain{IncludeContent: true}
+	w := plain(NewArtifactGet())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1074,6 +1241,12 @@ type ArtifactList struct {
 	Project         string  `json:"project"`
 	Topic           *string `json:"topic"`
 	IncludeArchived bool    `json:"include_archived"`
+}
+
+// NewArtifactList gives a ArtifactList holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactList() ArtifactList {
+	return ArtifactList{}
 }
 
 // ArtifactResult: artifact.write's answer: the signal's result and where the content went.
@@ -1088,6 +1261,12 @@ type ArtifactResult struct {
 	Stored     *StoredRef    `json:"stored"`
 }
 
+// NewArtifactResult gives a ArtifactResult holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactResult() ArtifactResult {
+	return ArtifactResult{}
+}
+
 type ArtifactSummary struct {
 	Artifact string       `json:"artifact"`
 	Name     string       `json:"name"`
@@ -1098,6 +1277,12 @@ type ArtifactSummary struct {
 	Versions int64        `json:"versions"`
 	Archived bool         `json:"archived"`
 	Note     string       `json:"note"`
+}
+
+// NewArtifactSummary gives a ArtifactSummary holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactSummary() ArtifactSummary {
+	return ArtifactSummary{}
 }
 
 // ArtifactWrite: artifact.write: the server stores the content (any type, at most 5 MB) in its file store and
@@ -1112,8 +1297,20 @@ type ArtifactWrite struct {
 	Size           *int64 `json:"size"`
 }
 
+// NewArtifactWrite gives a ArtifactWrite holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifactWrite() ArtifactWrite {
+	return ArtifactWrite{}
+}
+
 type Artifacts struct {
 	Artifacts []ArtifactSummary `json:"artifacts"`
+}
+
+// NewArtifacts gives a Artifacts holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewArtifacts() Artifacts {
+	return Artifacts{}
 }
 
 func (v Artifacts) MarshalJSON() ([]byte, error) {
@@ -1132,6 +1329,12 @@ type Author struct {
 	Actor         Actor  `json:"actor"`
 }
 
+// NewAuthor gives a Author holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAuthor() Author {
+	return Author{}
+}
+
 type AvatarContent struct {
 	Account    string `json:"account"`
 	MediaType  string `json:"media_type"`
@@ -1139,8 +1342,20 @@ type AvatarContent struct {
 	ContentB64 string `json:"content_b64"`
 }
 
+// NewAvatarContent gives a AvatarContent holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAvatarContent() AvatarContent {
+	return AvatarContent{}
+}
+
 type AvatarGet struct {
 	Account string `json:"account"`
+}
+
+// NewAvatarGet gives a AvatarGet holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAvatarGet() AvatarGet {
+	return AvatarGet{}
 }
 
 // AvatarSet: account.set_avatar: a small square image (the web app crops and shrinks it first).
@@ -1149,15 +1364,27 @@ type AvatarSet struct {
 	ContentB64 string `json:"content_b64"`
 }
 
+// NewAvatarSet gives a AvatarSet holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewAvatarSet() AvatarSet {
+	return AvatarSet{}
+}
+
 // CommentBody: A comment typed by a person in the web app: free text; its first line is the signal's title.
 type CommentBody struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
 
+// NewCommentBody gives a CommentBody holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewCommentBody() CommentBody {
+	return CommentBody{Type: "comment.v1"}
+}
+
 func (v *CommentBody) UnmarshalJSON(data []byte) error {
 	type plain CommentBody
-	w := plain{Type: "comment.v1"}
+	w := plain(NewCommentBody())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1188,6 +1415,12 @@ type Deliverables struct {
 	MilestonesTotal int64       `json:"milestones_total"`
 }
 
+// NewDeliverables gives a Deliverables holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverables() Deliverables {
+	return Deliverables{}
+}
+
 func (v Deliverables) MarshalJSON() ([]byte, error) {
 	type plain Deliverables
 	p := plain(v)
@@ -1204,6 +1437,12 @@ type DeliverablesArchive struct {
 	Note     string `json:"note"`
 }
 
+// NewDeliverablesArchive gives a DeliverablesArchive holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesArchive() DeliverablesArchive {
+	return DeliverablesArchive{}
+}
+
 type DeliverablesArchived struct {
 	Project  string `json:"project"`
 	Seq      int64  `json:"seq"`
@@ -1214,9 +1453,15 @@ type DeliverablesArchived struct {
 	By       string `json:"by"`
 }
 
+// NewDeliverablesArchived gives a DeliverablesArchived holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesArchived() DeliverablesArchived {
+	return DeliverablesArchived{Type: "deliverables.archived"}
+}
+
 func (v *DeliverablesArchived) UnmarshalJSON(data []byte) error {
 	type plain DeliverablesArchived
-	w := plain{Type: "deliverables.archived"}
+	w := plain(NewDeliverablesArchived())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1238,6 +1483,12 @@ type DeliverablesDelete struct {
 	Project string `json:"project"`
 }
 
+// NewDeliverablesDelete gives a DeliverablesDelete holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesDelete() DeliverablesDelete {
+	return DeliverablesDelete{}
+}
+
 type DeliverablesDeleted struct {
 	Project string `json:"project"`
 	Seq     int64  `json:"seq"`
@@ -1246,9 +1497,15 @@ type DeliverablesDeleted struct {
 	By      string `json:"by"`
 }
 
+// NewDeliverablesDeleted gives a DeliverablesDeleted holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesDeleted() DeliverablesDeleted {
+	return DeliverablesDeleted{Type: "deliverables.deleted"}
+}
+
 func (v *DeliverablesDeleted) UnmarshalJSON(data []byte) error {
 	type plain DeliverablesDeleted
-	w := plain{Type: "deliverables.deleted"}
+	w := plain(NewDeliverablesDeleted())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1269,9 +1526,21 @@ type DeliverablesGet struct {
 	Project string `json:"project"`
 }
 
+// NewDeliverablesGet gives a DeliverablesGet holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesGet() DeliverablesGet {
+	return DeliverablesGet{}
+}
+
 // DeliverablesHistory: deliverables.history: every version still kept, newest first (the current one included).
 type DeliverablesHistory struct {
 	Project string `json:"project"`
+}
+
+// NewDeliverablesHistory gives a DeliverablesHistory holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesHistory() DeliverablesHistory {
+	return DeliverablesHistory{}
 }
 
 // DeliverablesPublish: deliverables.publish: the whole structure, as a new version.
@@ -1279,6 +1548,12 @@ type DeliverablesPublish struct {
 	Project     string          `json:"project"`
 	BaseVersion *int64          `json:"base_version"`
 	Milestones  []MilestoneSpec `json:"milestones"`
+}
+
+// NewDeliverablesPublish gives a DeliverablesPublish holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesPublish() DeliverablesPublish {
+	return DeliverablesPublish{}
 }
 
 func (v DeliverablesPublish) MarshalJSON() ([]byte, error) {
@@ -1298,9 +1573,15 @@ type DeliverablesPublished struct {
 	Deliverables Deliverables `json:"deliverables"`
 }
 
+// NewDeliverablesPublished gives a DeliverablesPublished holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesPublished() DeliverablesPublished {
+	return DeliverablesPublished{Type: "deliverables.published"}
+}
+
 func (v *DeliverablesPublished) UnmarshalJSON(data []byte) error {
 	type plain DeliverablesPublished
-	w := plain{Type: "deliverables.published"}
+	w := plain(NewDeliverablesPublished())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1324,6 +1605,12 @@ type DeliverablesRename struct {
 	Names       map[string]string `json:"names"`
 }
 
+// NewDeliverablesRename gives a DeliverablesRename holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesRename() DeliverablesRename {
+	return DeliverablesRename{}
+}
+
 func (v DeliverablesRename) MarshalJSON() ([]byte, error) {
 	type plain DeliverablesRename
 	p := plain(v)
@@ -1340,12 +1627,24 @@ type DeliverablesSummary struct {
 	Archived        bool  `json:"archived"`
 }
 
+// NewDeliverablesSummary gives a DeliverablesSummary holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesSummary() DeliverablesSummary {
+	return DeliverablesSummary{}
+}
+
 // DeliverablesUpdateMilestone: deliverables.update_milestone: one milestone with all its actions; the rest is kept as it is. Moving an
 // action between milestones needs a whole publish.
 type DeliverablesUpdateMilestone struct {
 	Project     string        `json:"project"`
 	BaseVersion int64         `json:"base_version"`
 	Milestone   MilestoneSpec `json:"milestone"`
+}
+
+// NewDeliverablesUpdateMilestone gives a DeliverablesUpdateMilestone holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesUpdateMilestone() DeliverablesUpdateMilestone {
+	return DeliverablesUpdateMilestone{}
 }
 
 // DeliverablesVersion: One version in the Deliverables' history: who published it and when (deliverables.history).
@@ -1355,9 +1654,21 @@ type DeliverablesVersion struct {
 	PublishedAt string  `json:"published_at"`
 }
 
+// NewDeliverablesVersion gives a DeliverablesVersion holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesVersion() DeliverablesVersion {
+	return DeliverablesVersion{}
+}
+
 // DeliverablesVersions: Newest first; none when there are no Deliverables, or they are archived and you are not the initiator.
 type DeliverablesVersions struct {
 	Versions []DeliverablesVersion `json:"versions"`
+}
+
+// NewDeliverablesVersions gives a DeliverablesVersions holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesVersions() DeliverablesVersions {
+	return DeliverablesVersions{}
 }
 
 func (v DeliverablesVersions) MarshalJSON() ([]byte, error) {
@@ -1374,6 +1685,12 @@ type DeliverablesView struct {
 	Deliverables *Deliverables           `json:"deliverables"`
 	Statuses     map[string]ActionStatus `json:"statuses"`
 	Late         []string                `json:"late"`
+}
+
+// NewDeliverablesView gives a DeliverablesView holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDeliverablesView() DeliverablesView {
+	return DeliverablesView{}
 }
 
 func (v DeliverablesView) MarshalJSON() ([]byte, error) {
@@ -1404,6 +1721,12 @@ type Drift struct {
 	ResolvedAt *string     `json:"resolved_at"`
 }
 
+// NewDrift gives a Drift holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDrift() Drift {
+	return Drift{}
+}
+
 func (v Drift) MarshalJSON() ([]byte, error) {
 	type plain Drift
 	p := plain(v)
@@ -1421,10 +1744,22 @@ type DriftDismiss struct {
 	Note  string `json:"note"`
 }
 
+// NewDriftDismiss gives a DriftDismiss holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDriftDismiss() DriftDismiss {
+	return DriftDismiss{}
+}
+
 type DriftFinding struct {
 	Kind    DriftKind `json:"kind"`
 	Summary string    `json:"summary"`
 	Signals []string  `json:"signals"`
+}
+
+// NewDriftFinding gives a DriftFinding holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDriftFinding() DriftFinding {
+	return DriftFinding{}
 }
 
 func (v DriftFinding) MarshalJSON() ([]byte, error) {
@@ -1444,9 +1779,15 @@ type DriftFound struct {
 	Drift   Drift  `json:"drift"`
 }
 
+// NewDriftFound gives a DriftFound holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDriftFound() DriftFound {
+	return DriftFound{Type: "drift.found"}
+}
+
 func (v *DriftFound) UnmarshalJSON(data []byte) error {
 	type plain DriftFound
-	w := plain{Type: "drift.found"}
+	w := plain(NewDriftFound())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1468,11 +1809,23 @@ type DriftList struct {
 	Status  *DriftStatus `json:"status"`
 }
 
+// NewDriftList gives a DriftList holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDriftList() DriftList {
+	return DriftList{}
+}
+
 type DriftResolution struct {
 	Drift      string   `json:"drift"`
 	Outcome    string   `json:"outcome"`
 	Note       string   `json:"note"`
 	ResolvedBy []string `json:"resolved_by"`
+}
+
+// NewDriftResolution gives a DriftResolution holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDriftResolution() DriftResolution {
+	return DriftResolution{}
 }
 
 func (v DriftResolution) MarshalJSON() ([]byte, error) {
@@ -1489,6 +1842,12 @@ type DriftResolve struct {
 	Drift      string   `json:"drift"`
 	Note       string   `json:"note"`
 	ResolvedBy []string `json:"resolved_by"`
+}
+
+// NewDriftResolve gives a DriftResolve holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDriftResolve() DriftResolve {
+	return DriftResolve{}
 }
 
 func (v DriftResolve) MarshalJSON() ([]byte, error) {
@@ -1508,9 +1867,15 @@ type DriftResolved struct {
 	Drift   Drift  `json:"drift"`
 }
 
+// NewDriftResolved gives a DriftResolved holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDriftResolved() DriftResolved {
+	return DriftResolved{Type: "drift.resolved"}
+}
+
 func (v *DriftResolved) UnmarshalJSON(data []byte) error {
 	type plain DriftResolved
-	w := plain{Type: "drift.resolved"}
+	w := plain(NewDriftResolved())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1531,6 +1896,12 @@ type Drifts struct {
 	Drifts []Drift `json:"drifts"`
 }
 
+// NewDrifts gives a Drifts holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewDrifts() Drifts {
+	return Drifts{}
+}
+
 func (v Drifts) MarshalJSON() ([]byte, error) {
 	type plain Drifts
 	p := plain(v)
@@ -1544,6 +1915,12 @@ func (v Drifts) MarshalJSON() ([]byte, error) {
 type Empty struct {
 }
 
+// NewEmpty gives a Empty holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewEmpty() Empty {
+	return Empty{}
+}
+
 // Event: One row of the append-only event log; seq counts per project.
 type Event struct {
 	Project string         `json:"project"`
@@ -1551,6 +1928,12 @@ type Event struct {
 	Type    EventType      `json:"type"`
 	Payload map[string]any `json:"payload"`
 	At      string         `json:"at"`
+}
+
+// NewEvent gives a Event holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewEvent() Event {
+	return Event{}
 }
 
 func (v Event) MarshalJSON() ([]byte, error) {
@@ -1573,6 +1956,12 @@ type ImportPage struct {
 	Resume bool             `json:"resume"`
 }
 
+// NewImportPage gives a ImportPage holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewImportPage() ImportPage {
+	return ImportPage{}
+}
+
 func (v ImportPage) MarshalJSON() ([]byte, error) {
 	type plain ImportPage
 	p := plain(v)
@@ -1586,6 +1975,12 @@ type KeyFetch struct {
 	Project string `json:"project"`
 }
 
+// NewKeyFetch gives a KeyFetch holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewKeyFetch() KeyFetch {
+	return KeyFetch{}
+}
+
 type KeyPointsBody struct {
 	Type    string   `json:"type"`
 	Summary string   `json:"summary"`
@@ -1593,9 +1988,15 @@ type KeyPointsBody struct {
 	Why     string   `json:"why"`
 }
 
+// NewKeyPointsBody gives a KeyPointsBody holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewKeyPointsBody() KeyPointsBody {
+	return KeyPointsBody{Type: "key_points.v1"}
+}
+
 func (v *KeyPointsBody) UnmarshalJSON(data []byte) error {
 	type plain KeyPointsBody
-	w := plain{Type: "key_points.v1"}
+	w := plain(NewKeyPointsBody())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1622,9 +2023,15 @@ type LiveClosed struct {
 	Message string       `json:"message"`
 }
 
+// NewLiveClosed gives a LiveClosed holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewLiveClosed() LiveClosed {
+	return LiveClosed{Type: "closed"}
+}
+
 func (v *LiveClosed) UnmarshalJSON(data []byte) error {
 	type plain LiveClosed
-	w := plain{Type: "closed"}
+	w := plain(NewLiveClosed())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1651,13 +2058,19 @@ type LiveEvents struct {
 	Reset  bool        `json:"reset"`
 }
 
+// NewLiveEvents gives a LiveEvents holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewLiveEvents() LiveEvents {
+	return LiveEvents{Type: "events"}
+}
+
 func (v *LiveEvents) UnmarshalJSON(data []byte) error {
 	type plain LiveEvents
 	var w struct {
 		plain
 		Events json.RawMessage `json:"events"`
 	}
-	w.plain = plain{Type: "events"}
+	w.plain = plain(NewLiveEvents())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1688,9 +2101,15 @@ type LiveHello struct {
 	Cursor int64  `json:"cursor"`
 }
 
+// NewLiveHello gives a LiveHello holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewLiveHello() LiveHello {
+	return LiveHello{Type: "hello"}
+}
+
 func (v *LiveHello) UnmarshalJSON(data []byte) error {
 	type plain LiveHello
-	w := plain{Type: "hello"}
+	w := plain(NewLiveHello())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1716,15 +2135,33 @@ type LiveTicket struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+// NewLiveTicket gives a LiveTicket holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewLiveTicket() LiveTicket {
+	return LiveTicket{}
+}
+
 type Login struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+// NewLogin gives a Login holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewLogin() Login {
+	return Login{}
 }
 
 type LoginResult struct {
 	AuthKey   string  `json:"auth_key"`
 	Account   Account `json:"account"`
 	ExpiresAt string  `json:"expires_at"`
+}
+
+// NewLoginResult gives a LoginResult holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewLoginResult() LoginResult {
+	return LoginResult{}
 }
 
 // Member: A person in one org. Signals, projects and approvals name members, never accounts.
@@ -1742,9 +2179,15 @@ type Member struct {
 	MinClientProtocol int64   `json:"min_client_protocol"`
 }
 
+// NewMember gives a Member holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewMember() Member {
+	return Member{Protocol: 1, MinClientProtocol: 1}
+}
+
 func (v *Member) UnmarshalJSON(data []byte) error {
 	type plain Member
-	w := plain{Protocol: 1, MinClientProtocol: 1}
+	w := plain(NewMember())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -1754,6 +2197,12 @@ func (v *Member) UnmarshalJSON(data []byte) error {
 
 type Members struct {
 	Members []Member `json:"members"`
+}
+
+// NewMembers gives a Members holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewMembers() Members {
+	return Members{}
 }
 
 func (v Members) MarshalJSON() ([]byte, error) {
@@ -1774,6 +2223,12 @@ type Milestone struct {
 	Total   int64    `json:"total"`
 }
 
+// NewMilestone gives a Milestone holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewMilestone() Milestone {
+	return Milestone{}
+}
+
 func (v Milestone) MarshalJSON() ([]byte, error) {
 	type plain Milestone
 	p := plain(v)
@@ -1788,6 +2243,12 @@ type MilestoneSpec struct {
 	Name    string       `json:"name"`
 	Due     string       `json:"due"`
 	Actions []ActionSpec `json:"actions"`
+}
+
+// NewMilestoneSpec gives a MilestoneSpec holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewMilestoneSpec() MilestoneSpec {
+	return MilestoneSpec{}
 }
 
 func (v MilestoneSpec) MarshalJSON() ([]byte, error) {
@@ -1808,19 +2269,43 @@ type Org struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// NewOrg gives a Org holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewOrg() Org {
+	return Org{}
+}
+
 type OrgAddMember struct {
 	Org   string `json:"org"`
 	Email string `json:"email"`
 	Title string `json:"title"`
 }
 
+// NewOrgAddMember gives a OrgAddMember holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewOrgAddMember() OrgAddMember {
+	return OrgAddMember{}
+}
+
 type OrgRef struct {
 	Org string `json:"org"`
+}
+
+// NewOrgRef gives a OrgRef holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewOrgRef() OrgRef {
+	return OrgRef{}
 }
 
 type OrgRemoveMember struct {
 	Org    string `json:"org"`
 	Member string `json:"member"`
+}
+
+// NewOrgRemoveMember gives a OrgRemoveMember holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewOrgRemoveMember() OrgRemoveMember {
+	return OrgRemoveMember{}
 }
 
 // OrgSetTitle: org.set_title: the org's admin sets a member's title in the org.
@@ -1830,10 +2315,22 @@ type OrgSetTitle struct {
 	Title  string `json:"title"`
 }
 
+// NewOrgSetTitle gives a OrgSetTitle holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewOrgSetTitle() OrgSetTitle {
+	return OrgSetTitle{}
+}
+
 type OrgView struct {
 	Org    Org    `json:"org"`
 	Member string `json:"member"`
 	Admin  bool   `json:"admin"`
+}
+
+// NewOrgView gives a OrgView holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewOrgView() OrgView {
+	return OrgView{}
 }
 
 // Person: How a project member is shown: their name and alias (one per person), their avatar's hash, and their titles
@@ -1847,10 +2344,22 @@ type Person struct {
 	ProjectTitle string  `json:"project_title"`
 }
 
+// NewPerson gives a Person holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewPerson() Person {
+	return Person{}
+}
+
 // ProfileUpdate: account.update_profile: the person's own name and alias (the same in every org).
 type ProfileUpdate struct {
 	Name  *string `json:"name"`
 	Alias *string `json:"alias"`
+}
+
+// NewProfileUpdate gives a ProfileUpdate holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProfileUpdate() ProfileUpdate {
+	return ProfileUpdate{}
 }
 
 // Project: One row per project, updated in place; topics live in their own table.
@@ -1864,6 +2373,12 @@ type Project struct {
 	Version   int64             `json:"version"`
 	CreatedAt string            `json:"created_at"`
 	UpdatedAt string            `json:"updated_at"`
+}
+
+// NewProject gives a Project holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProject() Project {
+	return Project{}
 }
 
 func (v Project) MarshalJSON() ([]byte, error) {
@@ -1888,6 +2403,12 @@ type ProjectCreate struct {
 	Titles      map[string]string `json:"titles"`
 }
 
+// NewProjectCreate gives a ProjectCreate holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectCreate() ProjectCreate {
+	return ProjectCreate{}
+}
+
 func (v ProjectCreate) MarshalJSON() ([]byte, error) {
 	type plain ProjectCreate
 	p := plain(v)
@@ -1908,8 +2429,20 @@ type ProjectGet struct {
 	StateVersion *int64 `json:"state_version"`
 }
 
+// NewProjectGet gives a ProjectGet holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectGet() ProjectGet {
+	return ProjectGet{}
+}
+
 type ProjectHistory struct {
 	States []ProjectState `json:"states"`
+}
+
+// NewProjectHistory gives a ProjectHistory holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectHistory() ProjectHistory {
+	return ProjectHistory{}
 }
 
 func (v ProjectHistory) MarshalJSON() ([]byte, error) {
@@ -1930,8 +2463,20 @@ type ProjectKey struct {
 	Name    string `json:"name"`
 }
 
+// NewProjectKey gives a ProjectKey holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectKey() ProjectKey {
+	return ProjectKey{}
+}
+
 type ProjectList struct {
 	Projects []ProjectView `json:"projects"`
+}
+
+// NewProjectList gives a ProjectList holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectList() ProjectList {
+	return ProjectList{}
 }
 
 func (v ProjectList) MarshalJSON() ([]byte, error) {
@@ -1947,11 +2492,23 @@ type ProjectRef struct {
 	Project string `json:"project"`
 }
 
+// NewProjectRef gives a ProjectRef holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectRef() ProjectRef {
+	return ProjectRef{}
+}
+
 // ProjectSetTitle: project.set_title: the initiator sets a member's title in the project.
 type ProjectSetTitle struct {
 	Project string `json:"project"`
 	Member  string `json:"member"`
 	Title   string `json:"title"`
+}
+
+// NewProjectSetTitle gives a ProjectSetTitle holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectSetTitle() ProjectSetTitle {
+	return ProjectSetTitle{}
 }
 
 // ProjectState: Rolling, append-only: every change inserts a new row; the latest is current.
@@ -1968,6 +2525,12 @@ type ProjectState struct {
 	LedBy         []string      `json:"led_by"`
 	Author        Author        `json:"author"`
 	CreatedAt     string        `json:"created_at"`
+}
+
+// NewProjectState gives a ProjectState holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectState() ProjectState {
+	return ProjectState{}
 }
 
 func (v ProjectState) MarshalJSON() ([]byte, error) {
@@ -1989,6 +2552,12 @@ type ProjectSummary struct {
 	Deliverables *DeliverablesSummary `json:"deliverables"`
 }
 
+// NewProjectSummary gives a ProjectSummary holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectSummary() ProjectSummary {
+	return ProjectSummary{}
+}
+
 type ProjectUpdated struct {
 	Project string        `json:"project"`
 	Seq     int64         `json:"seq"`
@@ -1998,9 +2567,15 @@ type ProjectUpdated struct {
 	State   *ProjectState `json:"state"`
 }
 
+// NewProjectUpdated gives a ProjectUpdated holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectUpdated() ProjectUpdated {
+	return ProjectUpdated{Type: "project.updated"}
+}
+
 func (v *ProjectUpdated) UnmarshalJSON(data []byte) error {
 	type plain ProjectUpdated
-	w := plain{Type: "project.updated"}
+	w := plain(NewProjectUpdated())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2027,6 +2602,12 @@ type ProjectView struct {
 	Deliverables  *DeliverablesSummary `json:"deliverables"`
 }
 
+// NewProjectView gives a ProjectView holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProjectView() ProjectView {
+	return ProjectView{}
+}
+
 func (v ProjectView) MarshalJSON() ([]byte, error) {
 	type plain ProjectView
 	p := plain(v)
@@ -2046,6 +2627,12 @@ type Provenance struct {
 	States []ProjectState `json:"states"`
 }
 
+// NewProvenance gives a Provenance holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewProvenance() Provenance {
+	return Provenance{}
+}
+
 func (v Provenance) MarshalJSON() ([]byte, error) {
 	type plain Provenance
 	p := plain(v)
@@ -2062,9 +2649,21 @@ type RemoveMember struct {
 	Member          string `json:"member"`
 }
 
+// NewRemoveMember gives a RemoveMember holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewRemoveMember() RemoveMember {
+	return RemoveMember{}
+}
+
 type RequestUpdate struct {
 	Project string `json:"project"`
 	Note    string `json:"note"`
+}
+
+// NewRequestUpdate gives a RequestUpdate holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewRequestUpdate() RequestUpdate {
+	return RequestUpdate{}
 }
 
 // RollingUpdateInput: What a ROLLING_UPDATE_PROJECT task covers.
@@ -2076,9 +2675,15 @@ type RollingUpdateInput struct {
 	Note        string `json:"note"`
 }
 
+// NewRollingUpdateInput gives a RollingUpdateInput holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewRollingUpdateInput() RollingUpdateInput {
+	return RollingUpdateInput{Kind: "ROLLING_UPDATE_PROJECT"}
+}
+
 func (v *RollingUpdateInput) UnmarshalJSON(data []byte) error {
 	type plain RollingUpdateInput
-	w := plain{Kind: "ROLLING_UPDATE_PROJECT"}
+	w := plain(NewRollingUpdateInput())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2104,9 +2709,15 @@ type RollingUpdateOutput struct {
 	ResolvedDrifts []DriftResolution `json:"resolved_drifts"`
 }
 
+// NewRollingUpdateOutput gives a RollingUpdateOutput holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewRollingUpdateOutput() RollingUpdateOutput {
+	return RollingUpdateOutput{Kind: "ROLLING_UPDATE_PROJECT"}
+}
+
 func (v *RollingUpdateOutput) UnmarshalJSON(data []byte) error {
 	type plain RollingUpdateOutput
-	w := plain{Kind: "ROLLING_UPDATE_PROJECT"}
+	w := plain(NewRollingUpdateOutput())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2137,9 +2748,15 @@ type RollingUpdateResult struct {
 	StateVersion int64  `json:"state_version"`
 }
 
+// NewRollingUpdateResult gives a RollingUpdateResult holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewRollingUpdateResult() RollingUpdateResult {
+	return RollingUpdateResult{Kind: "ROLLING_UPDATE_PROJECT"}
+}
+
 func (v *RollingUpdateResult) UnmarshalJSON(data []byte) error {
 	type plain RollingUpdateResult
-	w := plain{Kind: "ROLLING_UPDATE_PROJECT"}
+	w := plain(NewRollingUpdateResult())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2163,6 +2780,12 @@ type RpcError struct {
 	Data    map[string]any `json:"data,omitempty"`
 }
 
+// NewRpcError gives a RpcError holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewRpcError() RpcError {
+	return RpcError{}
+}
+
 // RunnerComplete: runner.complete: the attempt's output, or why it failed.
 type RunnerComplete struct {
 	Org     string               `json:"org"`
@@ -2172,13 +2795,19 @@ type RunnerComplete struct {
 	Error   string               `json:"error"`
 }
 
+// NewRunnerComplete gives a RunnerComplete holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewRunnerComplete() RunnerComplete {
+	return RunnerComplete{}
+}
+
 func (v *RunnerComplete) UnmarshalJSON(data []byte) error {
 	type plain RunnerComplete
 	var w struct {
 		plain
 		Output json.RawMessage `json:"output"`
 	}
-	w.plain = plain{}
+	w.plain = plain(NewRunnerComplete())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2197,6 +2826,12 @@ type RunnerStarted struct {
 	Attempt int64  `json:"attempt"`
 }
 
+// NewRunnerStarted gives a RunnerStarted holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewRunnerStarted() RunnerStarted {
+	return RunnerStarted{}
+}
+
 // Signal: As sent by the client; never changed once stored.
 type Signal struct {
 	ID                 string           `json:"id"`
@@ -2213,6 +2848,12 @@ type Signal struct {
 	EmittedAt          string           `json:"emitted_at"`
 }
 
+// NewSignal gives a Signal holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSignal() Signal {
+	return Signal{}
+}
+
 func (v *Signal) UnmarshalJSON(data []byte) error {
 	type plain Signal
 	var w struct {
@@ -2220,7 +2861,7 @@ func (v *Signal) UnmarshalJSON(data []byte) error {
 		Body  json.RawMessage `json:"body"`
 		About json.RawMessage `json:"about"`
 	}
-	w.plain = plain{}
+	w.plain = plain(NewSignal())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2252,9 +2893,15 @@ type SignalAccepted struct {
 	Signal  StoredSignal `json:"signal"`
 }
 
+// NewSignalAccepted gives a SignalAccepted holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSignalAccepted() SignalAccepted {
+	return SignalAccepted{Type: "signal.accepted"}
+}
+
 func (v *SignalAccepted) UnmarshalJSON(data []byte) error {
 	type plain SignalAccepted
-	w := plain{Type: "signal.accepted"}
+	w := plain(NewSignalAccepted())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2278,6 +2925,12 @@ type SignalEmit struct {
 	Signal         Signal `json:"signal"`
 }
 
+// NewSignalEmit gives a SignalEmit holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSignalEmit() SignalEmit {
+	return SignalEmit{}
+}
+
 type SignalList struct {
 	Project     string       `json:"project"`
 	Topic       *string      `json:"topic"`
@@ -2289,9 +2942,15 @@ type SignalList struct {
 	Limit       int64        `json:"limit"`
 }
 
+// NewSignalList gives a SignalList holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSignalList() SignalList {
+	return SignalList{Limit: 50}
+}
+
 func (v *SignalList) UnmarshalJSON(data []byte) error {
 	type plain SignalList
-	w := plain{Limit: 50}
+	w := plain(NewSignalList())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2302,6 +2961,12 @@ func (v *SignalList) UnmarshalJSON(data []byte) error {
 type SignalPage struct {
 	Signals   []StoredSignal `json:"signals"`
 	NextAfter *int64         `json:"next_after"`
+}
+
+// NewSignalPage gives a SignalPage holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSignalPage() SignalPage {
+	return SignalPage{}
 }
 
 func (v SignalPage) MarshalJSON() ([]byte, error) {
@@ -2317,6 +2982,12 @@ type SignalRef struct {
 	Signal string `json:"signal"`
 }
 
+// NewSignalRef gives a SignalRef holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSignalRef() SignalRef {
+	return SignalRef{}
+}
+
 // SignalResult: signal.emit always answers with one of these; a rejection is never a JSON-RPC error.
 type SignalResult struct {
 	Signal     string        `json:"signal"`
@@ -2326,6 +2997,12 @@ type SignalResult struct {
 	Seq        *int64        `json:"seq"`
 	ReceivedAt *string       `json:"received_at"`
 	State      *SignalState  `json:"state"`
+}
+
+// NewSignalResult gives a SignalResult holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSignalResult() SignalResult {
+	return SignalResult{}
 }
 
 type SignalStateChanged struct {
@@ -2339,9 +3016,15 @@ type SignalStateChanged struct {
 	InForce *string     `json:"in_force"`
 }
 
+// NewSignalStateChanged gives a SignalStateChanged holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSignalStateChanged() SignalStateChanged {
+	return SignalStateChanged{Type: "signal.state_changed"}
+}
+
 func (v *SignalStateChanged) UnmarshalJSON(data []byte) error {
 	type plain SignalStateChanged
-	w := plain{Type: "signal.state_changed"}
+	w := plain(NewSignalStateChanged())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2366,6 +3049,12 @@ type StoredRef struct {
 	Size      int64  `json:"size"`
 }
 
+// NewStoredRef gives a StoredRef holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewStoredRef() StoredRef {
+	return StoredRef{}
+}
+
 // StoredSignal: A signal plus what the server added.
 type StoredSignal struct {
 	Signal       Signal      `json:"signal"`
@@ -2378,6 +3067,12 @@ type StoredSignal struct {
 	ContentHash  string      `json:"content_hash"`
 }
 
+// NewStoredSignal gives a StoredSignal holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewStoredSignal() StoredSignal {
+	return StoredSignal{}
+}
+
 // SyncBatch: `reset` lists each project whose cursor was beyond its head (the sync.poll rule, tf_models.live): no events
 // for it, its cursor is the head, and the client drops what it holds of the project and pulls it again from 0.
 type SyncBatch struct {
@@ -2386,13 +3081,19 @@ type SyncBatch struct {
 	Reset   []string         `json:"reset"`
 }
 
+// NewSyncBatch gives a SyncBatch holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSyncBatch() SyncBatch {
+	return SyncBatch{}
+}
+
 func (v *SyncBatch) UnmarshalJSON(data []byte) error {
 	type plain SyncBatch
 	var w struct {
 		plain
 		Events json.RawMessage `json:"events"`
 	}
-	w.plain = plain{}
+	w.plain = plain(NewSyncBatch())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2424,6 +3125,12 @@ type SyncPoll struct {
 	Wait    float64          `json:"wait"`
 }
 
+// NewSyncPoll gives a SyncPoll holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewSyncPoll() SyncPoll {
+	return SyncPoll{}
+}
+
 func (v SyncPoll) MarshalJSON() ([]byte, error) {
 	type plain SyncPoll
 	p := plain(v)
@@ -2448,6 +3155,12 @@ type Task struct {
 	FinishedAt  *string    `json:"finished_at"`
 }
 
+// NewTask gives a Task holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTask() Task {
+	return Task{}
+}
+
 func (v *Task) UnmarshalJSON(data []byte) error {
 	type plain Task
 	var w struct {
@@ -2455,7 +3168,7 @@ func (v *Task) UnmarshalJSON(data []byte) error {
 		Input  json.RawMessage `json:"input"`
 		Result json.RawMessage `json:"result"`
 	}
-	w.plain = plain{}
+	w.plain = plain(NewTask())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2484,14 +3197,32 @@ type TaskAttempt struct {
 	Error      string       `json:"error"`
 }
 
+// NewTaskAttempt gives a TaskAttempt holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTaskAttempt() TaskAttempt {
+	return TaskAttempt{}
+}
+
 type TaskList struct {
 	Project string     `json:"project"`
 	Kind    *TaskKind  `json:"kind"`
 	State   *TaskState `json:"state"`
 }
 
+// NewTaskList gives a TaskList holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTaskList() TaskList {
+	return TaskList{}
+}
+
 type TaskRef struct {
 	Task string `json:"task"`
+}
+
+// NewTaskRef gives a TaskRef holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTaskRef() TaskRef {
+	return TaskRef{}
 }
 
 type TaskUpdatedEvent struct {
@@ -2503,9 +3234,15 @@ type TaskUpdatedEvent struct {
 	Attempt TaskAttempt `json:"attempt"`
 }
 
+// NewTaskUpdatedEvent gives a TaskUpdatedEvent holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTaskUpdatedEvent() TaskUpdatedEvent {
+	return TaskUpdatedEvent{Type: "task.updated"}
+}
+
 func (v *TaskUpdatedEvent) UnmarshalJSON(data []byte) error {
 	type plain TaskUpdatedEvent
-	w := plain{Type: "task.updated"}
+	w := plain(NewTaskUpdatedEvent())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2527,6 +3264,12 @@ type TaskView struct {
 	Attempts []TaskAttempt `json:"attempts"`
 }
 
+// NewTaskView gives a TaskView holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTaskView() TaskView {
+	return TaskView{}
+}
+
 func (v TaskView) MarshalJSON() ([]byte, error) {
 	type plain TaskView
 	p := plain(v)
@@ -2538,6 +3281,12 @@ func (v TaskView) MarshalJSON() ([]byte, error) {
 
 type Tasks struct {
 	Tasks []TaskView `json:"tasks"`
+}
+
+// NewTasks gives a Tasks holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTasks() Tasks {
+	return Tasks{}
 }
 
 func (v Tasks) MarshalJSON() ([]byte, error) {
@@ -2560,11 +3309,23 @@ type Topic struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
+// NewTopic gives a Topic holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTopic() Topic {
+	return Topic{}
+}
+
 type TopicCreate struct {
 	Project         string `json:"project"`
 	ExpectedVersion int64  `json:"expected_version"`
 	Name            string `json:"name"`
 	Description     string `json:"description"`
+}
+
+// NewTopicCreate gives a TopicCreate holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTopicCreate() TopicCreate {
+	return TopicCreate{}
 }
 
 type TopicDelete struct {
@@ -2573,9 +3334,21 @@ type TopicDelete struct {
 	Topic           string `json:"topic"`
 }
 
+// NewTopicDelete gives a TopicDelete holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTopicDelete() TopicDelete {
+	return TopicDelete{}
+}
+
 type TopicDeleted struct {
 	SignalsDeleted int64 `json:"signals_deleted"`
 	DriftsDeleted  int64 `json:"drifts_deleted"`
+}
+
+// NewTopicDeleted gives a TopicDeleted holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTopicDeleted() TopicDeleted {
+	return TopicDeleted{}
 }
 
 type TopicDeletedEvent struct {
@@ -2589,9 +3362,15 @@ type TopicDeletedEvent struct {
 	Drifts  []string `json:"drifts"`
 }
 
+// NewTopicDeletedEvent gives a TopicDeletedEvent holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTopicDeletedEvent() TopicDeletedEvent {
+	return TopicDeletedEvent{Type: "topic.deleted"}
+}
+
 func (v *TopicDeletedEvent) UnmarshalJSON(data []byte) error {
 	type plain TopicDeletedEvent
-	w := plain{Type: "topic.deleted"}
+	w := plain(NewTopicDeletedEvent())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2620,6 +3399,12 @@ type TopicSpec struct {
 	Description string `json:"description"`
 }
 
+// NewTopicSpec gives a TopicSpec holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTopicSpec() TopicSpec {
+	return TopicSpec{}
+}
+
 type TopicUpdate struct {
 	Project         string  `json:"project"`
 	ExpectedVersion int64   `json:"expected_version"`
@@ -2627,6 +3412,12 @@ type TopicUpdate struct {
 	Name            *string `json:"name"`
 	Description     *string `json:"description"`
 	Closed          *bool   `json:"closed"`
+}
+
+// NewTopicUpdate gives a TopicUpdate holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTopicUpdate() TopicUpdate {
+	return TopicUpdate{}
 }
 
 type TopicUpdatedEvent struct {
@@ -2637,9 +3428,15 @@ type TopicUpdatedEvent struct {
 	Topic   Topic  `json:"topic"`
 }
 
+// NewTopicUpdatedEvent gives a TopicUpdatedEvent holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewTopicUpdatedEvent() TopicUpdatedEvent {
+	return TopicUpdatedEvent{Type: "topic.updated"}
+}
+
 func (v *TopicUpdatedEvent) UnmarshalJSON(data []byte) error {
 	type plain TopicUpdatedEvent
-	w := plain{Type: "topic.updated"}
+	w := plain(NewTopicUpdatedEvent())
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
@@ -2663,6 +3460,12 @@ type UpdateSignal struct {
 	Signal       string `json:"signal"`
 }
 
+// NewUpdateSignal gives a UpdateSignal holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewUpdateSignal() UpdateSignal {
+	return UpdateSignal{}
+}
+
 // WriteState: project.write_state: the initiator writes a new plan and instruction version by hand.
 type WriteState struct {
 	Project     string `json:"project"`
@@ -2671,317 +3474,462 @@ type WriteState struct {
 	Instruction string `json:"instruction"`
 }
 
-// newDef gives a new value of the Go type of a $def (unions excepted), or nil.
+// NewWriteState gives a WriteState holding the schema's defaults. Build values to send with it: a field left at
+// Go's zero value is sent as that value, not as the server's default.
+func NewWriteState() WriteState {
+	return WriteState{}
+}
+
+// newDef gives a new value of the Go type of a $def (unions excepted), holding its defaults, or nil.
 func newDef(name string) any {
 	switch name {
 	case "AboutDocument":
-		return new(AboutDocument)
+		v := NewAboutDocument()
+		return &v
 	case "AboutDrift":
-		return new(AboutDrift)
+		v := NewAboutDrift()
+		return &v
 	case "Account":
-		return new(Account)
+		v := NewAccount()
+		return &v
 	case "AccountProjects":
-		return new(AccountProjects)
+		v := NewAccountProjects()
+		return &v
 	case "AccountView":
-		return new(AccountView)
+		v := NewAccountView()
+		return &v
 	case "Action":
-		return new(Action)
+		v := NewAction()
+		return &v
 	case "ActionOutcome":
 		return new(ActionOutcome)
 	case "ActionResultBody":
-		return new(ActionResultBody)
+		v := NewActionResultBody()
+		return &v
 	case "ActionRevokeBody":
-		return new(ActionRevokeBody)
+		v := NewActionRevokeBody()
+		return &v
 	case "ActionSpec":
-		return new(ActionSpec)
+		v := NewActionSpec()
+		return &v
 	case "ActionStatus":
 		return new(ActionStatus)
 	case "Actor":
 		return new(Actor)
 	case "AddMembers":
-		return new(AddMembers)
+		v := NewAddMembers()
+		return &v
 	case "AdminAccount":
-		return new(AdminAccount)
+		v := NewAdminAccount()
+		return &v
 	case "AdminAccountAdd":
-		return new(AdminAccountAdd)
+		v := NewAdminAccountAdd()
+		return &v
 	case "AdminAccountPassword":
-		return new(AdminAccountPassword)
+		v := NewAdminAccountPassword()
+		return &v
 	case "AdminAccountRef":
-		return new(AdminAccountRef)
+		v := NewAdminAccountRef()
+		return &v
 	case "AdminAccounts":
-		return new(AdminAccounts)
+		v := NewAdminAccounts()
+		return &v
 	case "AdminExport":
-		return new(AdminExport)
+		v := NewAdminExport()
+		return &v
 	case "AdminImported":
-		return new(AdminImported)
+		v := NewAdminImported()
+		return &v
 	case "AdminMember":
-		return new(AdminMember)
+		v := NewAdminMember()
+		return &v
 	case "AdminOrg":
-		return new(AdminOrg)
+		v := NewAdminOrg()
+		return &v
 	case "AdminOrgAdd":
-		return new(AdminOrgAdd)
+		v := NewAdminOrgAdd()
+		return &v
 	case "AdminOrgAddMember":
-		return new(AdminOrgAddMember)
+		v := NewAdminOrgAddMember()
+		return &v
 	case "AdminOrgImport":
-		return new(AdminOrgImport)
+		v := NewAdminOrgImport()
+		return &v
 	case "AdminOrgSetAdmin":
-		return new(AdminOrgSetAdmin)
+		v := NewAdminOrgSetAdmin()
+		return &v
 	case "AdminOrgs":
-		return new(AdminOrgs)
+		v := NewAdminOrgs()
+		return &v
 	case "AdminRepaired":
-		return new(AdminRepaired)
+		v := NewAdminRepaired()
+		return &v
 	case "AdminRows":
-		return new(AdminRows)
+		v := NewAdminRows()
+		return &v
 	case "ApprovalRequest":
-		return new(ApprovalRequest)
+		v := NewApprovalRequest()
+		return &v
 	case "ArtifactArchive":
-		return new(ArtifactArchive)
+		v := NewArtifactArchive()
+		return &v
 	case "ArtifactArchivedEvent":
-		return new(ArtifactArchivedEvent)
+		v := NewArtifactArchivedEvent()
+		return &v
 	case "ArtifactBody":
-		return new(ArtifactBody)
+		v := NewArtifactBody()
+		return &v
 	case "ArtifactContent":
-		return new(ArtifactContent)
+		v := NewArtifactContent()
+		return &v
 	case "ArtifactGet":
-		return new(ArtifactGet)
+		v := NewArtifactGet()
+		return &v
 	case "ArtifactKind":
 		return new(ArtifactKind)
 	case "ArtifactList":
-		return new(ArtifactList)
+		v := NewArtifactList()
+		return &v
 	case "ArtifactResult":
-		return new(ArtifactResult)
+		v := NewArtifactResult()
+		return &v
 	case "ArtifactSummary":
-		return new(ArtifactSummary)
+		v := NewArtifactSummary()
+		return &v
 	case "ArtifactWrite":
-		return new(ArtifactWrite)
+		v := NewArtifactWrite()
+		return &v
 	case "Artifacts":
-		return new(Artifacts)
+		v := NewArtifacts()
+		return &v
 	case "AttemptState":
 		return new(AttemptState)
 	case "Author":
-		return new(Author)
+		v := NewAuthor()
+		return &v
 	case "AvatarContent":
-		return new(AvatarContent)
+		v := NewAvatarContent()
+		return &v
 	case "AvatarGet":
-		return new(AvatarGet)
+		v := NewAvatarGet()
+		return &v
 	case "AvatarSet":
-		return new(AvatarSet)
+		v := NewAvatarSet()
+		return &v
 	case "CommentBody":
-		return new(CommentBody)
+		v := NewCommentBody()
+		return &v
 	case "Deliverables":
-		return new(Deliverables)
+		v := NewDeliverables()
+		return &v
 	case "DeliverablesArchive":
-		return new(DeliverablesArchive)
+		v := NewDeliverablesArchive()
+		return &v
 	case "DeliverablesArchived":
-		return new(DeliverablesArchived)
+		v := NewDeliverablesArchived()
+		return &v
 	case "DeliverablesDelete":
-		return new(DeliverablesDelete)
+		v := NewDeliverablesDelete()
+		return &v
 	case "DeliverablesDeleted":
-		return new(DeliverablesDeleted)
+		v := NewDeliverablesDeleted()
+		return &v
 	case "DeliverablesGet":
-		return new(DeliverablesGet)
+		v := NewDeliverablesGet()
+		return &v
 	case "DeliverablesHistory":
-		return new(DeliverablesHistory)
+		v := NewDeliverablesHistory()
+		return &v
 	case "DeliverablesPublish":
-		return new(DeliverablesPublish)
+		v := NewDeliverablesPublish()
+		return &v
 	case "DeliverablesPublished":
-		return new(DeliverablesPublished)
+		v := NewDeliverablesPublished()
+		return &v
 	case "DeliverablesRename":
-		return new(DeliverablesRename)
+		v := NewDeliverablesRename()
+		return &v
 	case "DeliverablesSummary":
-		return new(DeliverablesSummary)
+		v := NewDeliverablesSummary()
+		return &v
 	case "DeliverablesUpdateMilestone":
-		return new(DeliverablesUpdateMilestone)
+		v := NewDeliverablesUpdateMilestone()
+		return &v
 	case "DeliverablesVersion":
-		return new(DeliverablesVersion)
+		v := NewDeliverablesVersion()
+		return &v
 	case "DeliverablesVersions":
-		return new(DeliverablesVersions)
+		v := NewDeliverablesVersions()
+		return &v
 	case "DeliverablesView":
-		return new(DeliverablesView)
+		v := NewDeliverablesView()
+		return &v
 	case "Drift":
-		return new(Drift)
+		v := NewDrift()
+		return &v
 	case "DriftDismiss":
-		return new(DriftDismiss)
+		v := NewDriftDismiss()
+		return &v
 	case "DriftFinding":
-		return new(DriftFinding)
+		v := NewDriftFinding()
+		return &v
 	case "DriftFound":
-		return new(DriftFound)
+		v := NewDriftFound()
+		return &v
 	case "DriftKind":
 		return new(DriftKind)
 	case "DriftList":
-		return new(DriftList)
+		v := NewDriftList()
+		return &v
 	case "DriftResolution":
-		return new(DriftResolution)
+		v := NewDriftResolution()
+		return &v
 	case "DriftResolve":
-		return new(DriftResolve)
+		v := NewDriftResolve()
+		return &v
 	case "DriftResolved":
-		return new(DriftResolved)
+		v := NewDriftResolved()
+		return &v
 	case "DriftStatus":
 		return new(DriftStatus)
 	case "Drifts":
-		return new(Drifts)
+		v := NewDrifts()
+		return &v
 	case "Empty":
-		return new(Empty)
+		v := NewEmpty()
+		return &v
 	case "Event":
-		return new(Event)
+		v := NewEvent()
+		return &v
 	case "EventType":
 		return new(EventType)
 	case "ImportPage":
-		return new(ImportPage)
+		v := NewImportPage()
+		return &v
 	case "KeyFetch":
-		return new(KeyFetch)
+		v := NewKeyFetch()
+		return &v
 	case "KeyPointsBody":
-		return new(KeyPointsBody)
+		v := NewKeyPointsBody()
+		return &v
 	case "LiveClosed":
-		return new(LiveClosed)
+		v := NewLiveClosed()
+		return &v
 	case "LiveEvents":
-		return new(LiveEvents)
+		v := NewLiveEvents()
+		return &v
 	case "LiveHello":
-		return new(LiveHello)
+		v := NewLiveHello()
+		return &v
 	case "LiveTicket":
-		return new(LiveTicket)
+		v := NewLiveTicket()
+		return &v
 	case "Login":
-		return new(Login)
+		v := NewLogin()
+		return &v
 	case "LoginResult":
-		return new(LoginResult)
+		v := NewLoginResult()
+		return &v
 	case "Member":
-		return new(Member)
+		v := NewMember()
+		return &v
 	case "Members":
-		return new(Members)
+		v := NewMembers()
+		return &v
 	case "Milestone":
-		return new(Milestone)
+		v := NewMilestone()
+		return &v
 	case "MilestoneSpec":
-		return new(MilestoneSpec)
+		v := NewMilestoneSpec()
+		return &v
 	case "NoticeType":
 		return new(NoticeType)
 	case "Org":
-		return new(Org)
+		v := NewOrg()
+		return &v
 	case "OrgAddMember":
-		return new(OrgAddMember)
+		v := NewOrgAddMember()
+		return &v
 	case "OrgRef":
-		return new(OrgRef)
+		v := NewOrgRef()
+		return &v
 	case "OrgRemoveMember":
-		return new(OrgRemoveMember)
+		v := NewOrgRemoveMember()
+		return &v
 	case "OrgSetTitle":
-		return new(OrgSetTitle)
+		v := NewOrgSetTitle()
+		return &v
 	case "OrgView":
-		return new(OrgView)
+		v := NewOrgView()
+		return &v
 	case "Person":
-		return new(Person)
+		v := NewPerson()
+		return &v
 	case "ProfileUpdate":
-		return new(ProfileUpdate)
+		v := NewProfileUpdate()
+		return &v
 	case "Project":
-		return new(Project)
+		v := NewProject()
+		return &v
 	case "ProjectChange":
 		return new(ProjectChange)
 	case "ProjectCreate":
-		return new(ProjectCreate)
+		v := NewProjectCreate()
+		return &v
 	case "ProjectGet":
-		return new(ProjectGet)
+		v := NewProjectGet()
+		return &v
 	case "ProjectHistory":
-		return new(ProjectHistory)
+		v := NewProjectHistory()
+		return &v
 	case "ProjectKey":
-		return new(ProjectKey)
+		v := NewProjectKey()
+		return &v
 	case "ProjectList":
-		return new(ProjectList)
+		v := NewProjectList()
+		return &v
 	case "ProjectRef":
-		return new(ProjectRef)
+		v := NewProjectRef()
+		return &v
 	case "ProjectSetTitle":
-		return new(ProjectSetTitle)
+		v := NewProjectSetTitle()
+		return &v
 	case "ProjectState":
-		return new(ProjectState)
+		v := NewProjectState()
+		return &v
 	case "ProjectSummary":
-		return new(ProjectSummary)
+		v := NewProjectSummary()
+		return &v
 	case "ProjectUpdated":
-		return new(ProjectUpdated)
+		v := NewProjectUpdated()
+		return &v
 	case "ProjectView":
-		return new(ProjectView)
+		v := NewProjectView()
+		return &v
 	case "Provenance":
-		return new(Provenance)
+		v := NewProvenance()
+		return &v
 	case "RejectReason":
 		return new(RejectReason)
 	case "RemoveMember":
-		return new(RemoveMember)
+		v := NewRemoveMember()
+		return &v
 	case "RequestUpdate":
-		return new(RequestUpdate)
+		v := NewRequestUpdate()
+		return &v
 	case "RollingUpdateInput":
-		return new(RollingUpdateInput)
+		v := NewRollingUpdateInput()
+		return &v
 	case "RollingUpdateOutput":
-		return new(RollingUpdateOutput)
+		v := NewRollingUpdateOutput()
+		return &v
 	case "RollingUpdateResult":
-		return new(RollingUpdateResult)
+		v := NewRollingUpdateResult()
+		return &v
 	case "RpcError":
-		return new(RpcError)
+		v := NewRpcError()
+		return &v
 	case "RunnerComplete":
-		return new(RunnerComplete)
+		v := NewRunnerComplete()
+		return &v
 	case "RunnerStarted":
-		return new(RunnerStarted)
+		v := NewRunnerStarted()
+		return &v
 	case "Signal":
-		return new(Signal)
+		v := NewSignal()
+		return &v
 	case "SignalAccepted":
-		return new(SignalAccepted)
+		v := NewSignalAccepted()
+		return &v
 	case "SignalEmit":
-		return new(SignalEmit)
+		v := NewSignalEmit()
+		return &v
 	case "SignalKind":
 		return new(SignalKind)
 	case "SignalList":
-		return new(SignalList)
+		v := NewSignalList()
+		return &v
 	case "SignalPage":
-		return new(SignalPage)
+		v := NewSignalPage()
+		return &v
 	case "SignalRef":
-		return new(SignalRef)
+		v := NewSignalRef()
+		return &v
 	case "SignalResult":
-		return new(SignalResult)
+		v := NewSignalResult()
+		return &v
 	case "SignalState":
 		return new(SignalState)
 	case "SignalStateChanged":
-		return new(SignalStateChanged)
+		v := NewSignalStateChanged()
+		return &v
 	case "StoredRef":
-		return new(StoredRef)
+		v := NewStoredRef()
+		return &v
 	case "StoredSignal":
-		return new(StoredSignal)
+		v := NewStoredSignal()
+		return &v
 	case "SyncBatch":
-		return new(SyncBatch)
+		v := NewSyncBatch()
+		return &v
 	case "SyncPoll":
-		return new(SyncPoll)
+		v := NewSyncPoll()
+		return &v
 	case "Task":
-		return new(Task)
+		v := NewTask()
+		return &v
 	case "TaskAttempt":
-		return new(TaskAttempt)
+		v := NewTaskAttempt()
+		return &v
 	case "TaskKind":
 		return new(TaskKind)
 	case "TaskList":
-		return new(TaskList)
+		v := NewTaskList()
+		return &v
 	case "TaskRef":
-		return new(TaskRef)
+		v := NewTaskRef()
+		return &v
 	case "TaskState":
 		return new(TaskState)
 	case "TaskUpdatedEvent":
-		return new(TaskUpdatedEvent)
+		v := NewTaskUpdatedEvent()
+		return &v
 	case "TaskView":
-		return new(TaskView)
+		v := NewTaskView()
+		return &v
 	case "Tasks":
-		return new(Tasks)
+		v := NewTasks()
+		return &v
 	case "Topic":
-		return new(Topic)
+		v := NewTopic()
+		return &v
 	case "TopicCreate":
-		return new(TopicCreate)
+		v := NewTopicCreate()
+		return &v
 	case "TopicDelete":
-		return new(TopicDelete)
+		v := NewTopicDelete()
+		return &v
 	case "TopicDeleted":
-		return new(TopicDeleted)
+		v := NewTopicDeleted()
+		return &v
 	case "TopicDeletedEvent":
-		return new(TopicDeletedEvent)
+		v := NewTopicDeletedEvent()
+		return &v
 	case "TopicSpec":
-		return new(TopicSpec)
+		v := NewTopicSpec()
+		return &v
 	case "TopicUpdate":
-		return new(TopicUpdate)
+		v := NewTopicUpdate()
+		return &v
 	case "TopicUpdatedEvent":
-		return new(TopicUpdatedEvent)
+		v := NewTopicUpdatedEvent()
+		return &v
 	case "UpdateSignal":
-		return new(UpdateSignal)
+		v := NewUpdateSignal()
+		return &v
 	case "WriteState":
-		return new(WriteState)
+		v := NewWriteState()
+		return &v
 	}
 	return nil
 }
