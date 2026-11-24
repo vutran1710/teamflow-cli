@@ -3,15 +3,18 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
@@ -122,6 +125,10 @@ func TestInputSchemas(t *testing.T) {
 		t.Fatalf("mcp_tools.json has %d tools", len(python))
 	}
 	for _, p := range python {
+		if p.Name == "artifact_get" { // gains overwrite (save_to never replaces a file without it)
+			p.Schema["properties"].(map[string]any)["overwrite"] = map[string]any{"type": "boolean", "default": false,
+				"title": "Overwrite", "description": "Replace a file that already exists at save_to"}
+		}
 		if !reflect.DeepEqual(got[p.Name], p.Schema) {
 			a, _ := json.Marshal(got[p.Name])
 			b, _ := json.Marshal(p.Schema)
@@ -139,6 +146,11 @@ func TestInputSchemas(t *testing.T) {
 	if d := got["deliverables_archive"]["properties"].(map[string]any)["archived"].(map[string]any)["default"]; d != true {
 		t.Errorf("deliverables_archive archived default %v", d)
 	}
+	for _, name := range []string{"drift_resolve", "drift_dismiss", "deliverables_archive", "artifact_archive"} {
+		if n := got[name]["properties"].(map[string]any)["note"].(map[string]any)["maxLength"]; n != float64(240) {
+			t.Errorf("%s note maxLength %v", name, n)
+		}
+	}
 	for name, s := range got {
 		if s["type"] != "object" {
 			t.Errorf("%s: not an object schema", name)
@@ -151,7 +163,7 @@ func TestInputSchemas(t *testing.T) {
 func TestHumanActsAreSentAlone(t *testing.T) {
 	m := newMachine(t, true)
 	m.withStore(func(st *store.Store) error { return seedApproval(st) })
-	m.srv.on("member.me", ok(t, "member.me"))
+	m.srv.on("member.me", memberMe(t))
 	m.srv.on("signal.emit", resultHas(t, "signal.emit", `"accepted": true`))
 	r := m.call("verdict", map[string]any{"signal": S1, "verdict": "APPROVE", "note": "fine"})
 	if o := r.obj(t); o["accepted"] != true {
@@ -222,8 +234,8 @@ func TestRefreshingCarriesNotices(t *testing.T) {
 		}
 		return st.Notice("s1", protocol.NoticeTypeDriftFound, D1, "Drift found (PLAN_CONFLICT): x [dr_…]", now())
 	})
-	m.srv.on("account.me", ok(t, "account.me"))
-	m.srv.on("member.me", ok(t, "member.me"))
+	m.srv.on("account.me", lanMe(t))
+	m.srv.on("member.me", memberMe(t))
 	r := m.call("whoami", nil)
 	o := r.obj(t)
 	news, _ := o["approval_requests"].(string)
@@ -283,6 +295,8 @@ func TestMalformedArgumentsAndUnknownTools(t *testing.T) {
 		{"a verdict that is neither", "verdict", map[string]any{"signal": S1, "verdict": "MAYBE"}, "verdict"},
 		{"a note too long", "project_request_update", map[string]any{"note": strings.Repeat("x", 241)}, "note"},
 		{"an unknown argument to a new tool", "profile_update", map[string]any{"avatar": "x.png"}, "avatar"},
+		{"a drift note too long", "drift_resolve", map[string]any{"drift": D1, "note": strings.Repeat("x", 241)}, "note"},
+		{"an archive note too long", "artifact_archive", map[string]any{"artifact": S1, "note": strings.Repeat("x", 241)}, "note"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -296,4 +310,78 @@ func TestMalformedArgumentsAndUnknownTools(t *testing.T) {
 	t.Run("an unknown tool", func(t *testing.T) {
 		wantErr(t, m.call("approve_everything", nil), "approve_everything")
 	})
+}
+
+// The agent's calls run at once (the SDK serves tools/call concurrently, each call with its own store): what is new
+// reaches exactly one result, an error result included.
+func TestNewsReachesOneResultAcrossParallelCalls(t *testing.T) {
+	m := newMachine(t, true)
+	m.withStore(func(st *store.Store) error {
+		if err := seedApproval(st); err != nil {
+			return err
+		}
+		if err := st.Notice("s1", protocol.NoticeTypeDriftFound, D1, "notice-one", now()); err != nil {
+			return err
+		}
+		return st.Notice("s1", protocol.NoticeTypeTopicDeleted, T2, "notice-two", now())
+	})
+	m.srv.on("account.me", refused(t, "account.me", "NOT_ALLOWED")) // whoami fails: an error result
+	m.srv.on("account.projects", ok(t, "account.projects"))
+	m.connect()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var all []string
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			name := "project_list"
+			if i%2 == 0 {
+				name = "whoami"
+			}
+			r := m.call(name, nil)
+			mu.Lock()
+			all = append(all, r.text())
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	joined := strings.Join(all, "\n")
+	for _, want := range []string{"a new approval request arrived", `"notice-one"`, `"notice-two"`} {
+		if n := strings.Count(joined, want); n != 1 {
+			t.Errorf("%s reached %d results, want 1:\n%s", want, n, joined)
+		}
+	}
+}
+
+// A failing tool still tells the session what is new.
+func TestErrorResultsCarryNews(t *testing.T) {
+	m := newMachine(t, true)
+	m.withStore(func(st *store.Store) error { return seedApproval(st) })
+	m.srv.on("account.me", refused(t, "account.me", "NOT_ALLOWED"))
+	r := m.call("whoami", nil)
+	wantErr(t, r, "NOT_ALLOWED")
+	if !strings.Contains(r.text(), `"approval_requests"`) || !strings.Contains(r.text(), S1) {
+		t.Fatalf("an error result without the news: %s", r)
+	}
+	if again := m.call("whoami", nil); strings.Contains(again.text(), "approval_requests") {
+		t.Fatalf("raised twice: %s", again)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("pipe broken") }
+
+// Run ends cleanly only when the agent closes the pipe (EOF); any other failure is reported.
+func TestRunEndsCleanlyOnlyAtEOF(t *testing.T) {
+	newMachine(t, true)
+	var out strings.Builder
+	if err := Run(context.Background(), core.Open, &finder{}, "test", strings.NewReader(""), &out); err != nil {
+		t.Fatalf("EOF: %v", err)
+	}
+	if err := Run(context.Background(), core.Open, &finder{}, "test", failingReader{}, &out); err == nil ||
+		!strings.Contains(err.Error(), "pipe broken") {
+		t.Fatalf("a broken pipe: %v", err)
+	}
 }

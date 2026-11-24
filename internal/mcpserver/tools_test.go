@@ -21,7 +21,7 @@ const acceptedEmit = `{"result": {"signal": "sg_00000000000000000000000077", "ac
 
 func TestProjectTools(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("project.get", ok(t, "project.get"))
+	m.srv.on("project.get", pricing(t))
 	o := m.call("project_get", nil).obj(t)
 	if o["id"] != P || o["name"] != "Pricing" || o["initiator"] != "lan" || !reflect.DeepEqual(o["members"], []any{"lan", "huy"}) ||
 		o["state_version"] != float64(1) || len(o["topics"].([]any)) != 3 {
@@ -44,7 +44,7 @@ func TestProjectTools(t *testing.T) {
 		t.Fatalf("your projects go with the auth key: %q", c[0].Auth)
 	}
 
-	m.srv.on("account.me", ok(t, "account.me"))
+	m.srv.on("account.me", lanMe(t))
 	m.srv.on("org.members", ok(t, "org.members"))
 	m.srv.on("project.create", ok(t, "project.create"))
 	o = m.call("project_create", map[string]any{"name": "Billing", "topics": []any{map[string]any{"name": "Tax", "description": "VAT"}},
@@ -119,8 +119,8 @@ func TestSessionJoin(t *testing.T) {
 	m.session("s2", "", nil)
 	m.find.id = "s2"
 	m.srv.on("account.projects", ok(t, "account.projects"))
-	m.srv.on("project.get", ok(t, "project.get"))
-	m.srv.on("member.me", ok(t, "member.me"))
+	m.srv.on("project.get", pricing(t))
+	m.srv.on("member.me", memberMe(t))
 	wantText(t, m.call("session_join", map[string]any{"project": "pricing", "topics": []any{"rounding"}}),
 		`This session now works on "Pricing" (topics Rounding)`)
 	m.withStore(func(st *store.Store) error {
@@ -556,7 +556,7 @@ func TestProjectPeoplePlanAndTopicDelete(t *testing.T) {
 	}
 	wantErr(t, m.call("project_set_title", map[string]any{"member": "Zed", "title": "x"}), "no member 'Zed'")
 
-	m.srv.on("project.get", ok(t, "project.get"))
+	m.srv.on("project.get", pricing(t))
 	m.srv.on("project.remove_member", ok(t, "project.remove_member"))
 	o := m.call("project_remove_member", map[string]any{"member": "huy"}).obj(t)
 	if p := m.params("project.remove_member"); p["member"] != M2 || p["expected_version"] != float64(1) || o["members"] == nil {
@@ -585,7 +585,7 @@ func TestProjectPeoplePlanAndTopicDelete(t *testing.T) {
 
 func TestOrgAndProfileTools(t *testing.T) {
 	m := newMachine(t, true)
-	m.srv.on("account.me", ok(t, "account.me"))
+	m.srv.on("account.me", lanMe(t))
 	m.srv.on("org.members", ok(t, "org.members"))
 	m.srv.on("org.set_title", ok(t, "org.set_title"))
 	o := m.call("org_set_title", map[string]any{"member": "huy@acme.test", "title": "Engineer"}).obj(t)
@@ -621,4 +621,79 @@ func TestOrgAndProfileTools(t *testing.T) {
 	// More than one org (or none): which one?
 	m.srv.on("account.me", `{"result": {"account": {"id": "ac_1", "email": "lan@acme.test", "name": "lan", "alias": "", "avatar": null, "created_at": "2026-01-15T09:00:00Z", "disabled_at": null}, "orgs": [], "protocol": 1, "min_client_protocol": 1}}`)
 	wantErr(t, m.call("org_set_title", map[string]any{"member": "huy", "title": "x"}), "which org? you are in: none")
+}
+
+// artifact_get's save_to never writes into Teamflow's home (its keys): not through a link to a file there, a
+// linked folder, a case variant of its path, or a hard link to one of its files; and never over an existing file
+// unless overwrite says so.
+func TestSaveToNeverReachesTheHome(t *testing.T) {
+	m := newMachine(t, true)
+	m.withStore(func(st *store.Store) error { return seedArtifact(st) })
+	m.srv.on("artifact.get", resultHas(t, "artifact.get", `"content_b64": "`))
+	config := filepath.Join(m.dir, "config.json")
+	before, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	linkFile := filepath.Join(work, "out.json")
+	if err := os.Symlink(config, linkFile); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(work, "into-home")
+	if err := os.Symlink(m.dir, linkDir); err != nil {
+		t.Fatal(err)
+	}
+	hard := filepath.Join(work, "hard.json")
+	if err := os.Link(config, hard); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]map[string]any{
+		"a link to a file in the home":             {"id": S1, "save_to": linkFile, "overwrite": true},
+		"a new file through a linked folder":       {"id": S1, "save_to": filepath.Join(linkDir, "new.md")},
+		"an existing file through a linked folder": {"id": S1, "save_to": filepath.Join(linkDir, "config.json"), "overwrite": true},
+		"a hard link to a file in the home":        {"id": S1, "save_to": hard, "overwrite": true},
+		"the home itself":                          {"id": S1, "save_to": filepath.Join(m.dir, "x.md")},
+		"a folder made under a link":               {"id": S1, "save_to": filepath.Join(linkDir, "sub", "x.md")},
+	}
+	if upper := strings.ToUpper(m.dir); upper != m.dir {
+		if fi, err := os.Stat(upper); err == nil { // a case-insensitive file system (macOS)
+			if home, _ := os.Stat(m.dir); os.SameFile(fi, home) {
+				cases["a case variant of the home"] = map[string]any{"id": S1, "save_to": filepath.Join(upper, "y.md")}
+			}
+		}
+	}
+	for name, a := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := m.call("artifact_get", a)
+			if !r.err {
+				t.Fatalf("written: %s", r)
+			}
+		})
+	}
+	after, _ := os.ReadFile(config)
+	if string(after) != string(before) {
+		t.Fatal("config.json was changed")
+	}
+	for _, p := range []string{filepath.Join(m.dir, "new.md"), filepath.Join(m.dir, "x.md"), filepath.Join(m.dir, "sub")} {
+		if _, err := os.Stat(p); err == nil {
+			t.Fatalf("%s was made in the home", p)
+		}
+	}
+
+	// An existing file is kept unless overwrite says so; a plain new file is written.
+	existing := filepath.Join(work, "spec.md")
+	if err := os.WriteFile(existing, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wantErr(t, m.call("artifact_get", map[string]any{"id": S1, "save_to": existing}), "already exists")
+	if b, _ := os.ReadFile(existing); string(b) != "mine" {
+		t.Fatal("an existing file was replaced without overwrite")
+	}
+	if o := m.call("artifact_get", map[string]any{"id": S1, "save_to": existing, "overwrite": true}).obj(t); o["saved_to"] != existing {
+		t.Fatalf("overwrite %v", o)
+	}
+	if b, _ := os.ReadFile(existing); string(b) == "mine" {
+		t.Fatal("overwrite did not write")
+	}
 }

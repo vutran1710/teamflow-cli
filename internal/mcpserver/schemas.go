@@ -31,17 +31,38 @@ func enum(values ...string) *jsonschema.Schema {
 	return out
 }
 
+func values[T ~string](xs []T) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = string(x)
+	}
+	return out
+}
+
 var enums = map[reflect.Type]*jsonschema.Schema{
 	reflect.TypeFor[verdictKind](): enum(protocol.HumanActsVerdictSignalKinds...),
-	reflect.TypeFor[taskKind]():    enum(string(protocol.TaskKindRollingUpdateProject)),
-	reflect.TypeFor[taskState](): enum(string(protocol.TaskStateQueued), string(protocol.TaskStateRunning),
-		string(protocol.TaskStateDone), string(protocol.TaskStateFailed)),
+	reflect.TypeFor[taskKind]():    enum(values(protocol.TaskKindValues)...),
+	reflect.TypeFor[taskState]():   enum(values(protocol.TaskStateValues)...),
 }
 
 // defaults are the new tools' parameter defaults, shown in their schemas.
 var defaults = map[string]map[string]any{
 	"deliverables_archive": {"archived": true},
 	"artifact_archive":     {"archived": true},
+}
+
+// additions are parameters a Python tool gains here, added to its exported schema.
+var additions = map[string]map[string]any{
+	"artifact_get": {"overwrite": map[string]any{"type": "boolean", "default": false, "title": "Overwrite",
+		"description": "Replace a file that already exists at save_to"}},
+}
+
+// maxLengths are the new tools' text limits, as the server's models have them.
+var maxLengths = map[string]map[string]int{
+	"drift_resolve":        {"note": 240},
+	"drift_dismiss":        {"note": 240},
+	"deliverables_archive": {"note": 240},
+	"artifact_archive":     {"note": 240},
 }
 
 // inputSchema is the tool's input schema.
@@ -51,6 +72,12 @@ func inputSchema[In any](name string) (any, error) {
 		if err := json.Unmarshal([]byte(raw), &m); err != nil {
 			return nil, fmt.Errorf("the Python input schema of %s: %w", name, err)
 		}
+		if add := additions[name]; add != nil {
+			props, _ := m["properties"].(map[string]any)
+			for k, v := range add {
+				props[k] = v
+			}
+		}
 		return m, nil
 	}
 	s, err := jsonschema.For[In](&jsonschema.ForOptions{TypeSchemas: enums})
@@ -58,6 +85,9 @@ func inputSchema[In any](name string) (any, error) {
 		return nil, err
 	}
 	s.Title = name + "Arguments"
+	for prop, n := range maxLengths[name] {
+		s.Properties[prop].MaxLength = &n
+	}
 	for prop, v := range defaults[name] {
 		raw, _ := json.Marshal(v)
 		s.Properties[prop].Default = raw

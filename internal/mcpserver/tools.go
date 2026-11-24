@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/api"
@@ -761,6 +762,7 @@ type artifactGetIn struct {
 	ID           string  `json:"id"`
 	SaveTo       *string `json:"save_to"`
 	ExactVersion bool    `json:"exact_version"`
+	Overwrite    bool    `json:"overwrite"`
 }
 
 func artifactGet(k *call, in artifactGetIn) (any, error) {
@@ -790,7 +792,7 @@ func artifactGet(k *call, in artifactGetIn) (any, error) {
 		return append(info, ojson.KV{"note", "The stored content could not be read."}), nil
 	}
 	if in.SaveTo != nil && *in.SaveTo != "" {
-		target, err := k.saveTo(*in.SaveTo, data)
+		target, err := k.saveTo(*in.SaveTo, data, in.Overwrite)
 		if err != nil {
 			return nil, err
 		}
@@ -808,8 +810,12 @@ func artifactGet(k *call, in artifactGetIn) (any, error) {
 	return append(info, ojson.KV{"content", text}, ojson.KV{"note", dataNote}), nil
 }
 
-// saveTo writes an artifact's content where the agent asked (its folders made), never into the Teamflow home.
-func (k *call) saveTo(path string, data []byte) (string, error) {
+// saveTo writes an artifact's content where the agent asked (its folders made). Teamflow's home holds the
+// person's keys, so nothing is ever written there: the path is checked as given and once its links are resolved,
+// folders compared by identity (a case variant or a linked folder is still the home), the file itself is never
+// followed when it is a link, and an existing file is replaced only with overwrite, never when it is one of the
+// home's files under another name (a hard link).
+func (k *call) saveTo(path string, data []byte, overwrite bool) (string, error) {
 	target := path
 	if strings.HasPrefix(target, "~/") || target == "~" {
 		h, err := os.UserHomeDir()
@@ -822,16 +828,79 @@ func (k *call) saveTo(path string, data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if inside(abs, k.c.Dir) {
-		return "", bad("Teamflow's home holds the person's keys: save the artifact somewhere else")
+	refused := bad("Teamflow's home holds the person's keys: save the artifact somewhere else")
+	intoHome := func() bool { return inside(abs, k.c.Dir) || inside(resolved(abs), k.c.Dir) }
+	if intoHome() {
+		return "", refused
+	}
+	if fi, err := os.Lstat(abs); err == nil {
+		switch {
+		case fi.Mode()&os.ModeSymlink != 0:
+			return "", bad("%s is a link: save the artifact to a plain file", target)
+		case !fi.Mode().IsRegular():
+			return "", bad("%s is not a file", target)
+		case !overwrite:
+			return "", bad("%s already exists: pass overwrite to replace it, or choose another path", target)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	if intoHome() { // a folder swapped for a link while it was made
+		return "", refused
+	}
+	flags := os.O_WRONLY | os.O_CREATE | syscall.O_NOFOLLOW
+	if !overwrite {
+		flags |= os.O_EXCL
+	}
+	f, err := os.OpenFile(abs, flags, 0o644)
+	if err != nil {
+		return "", bad("cannot write %s: %v", target, errors.Unwrap(err))
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
 		return "", err
 	}
-	return target, nil
+	if homeFile(fi, k.c.Dir) { // checked on the open file, before anything is truncated
+		return "", refused
+	}
+	if err := f.Truncate(0); err != nil {
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		return "", err
+	}
+	return target, f.Close()
+}
+
+// resolved is p with the links of its deepest existing part resolved (the rest appended as written).
+func resolved(p string) string {
+	rest := ""
+	for q := filepath.Clean(p); ; q = filepath.Dir(q) {
+		if r, err := filepath.EvalSymlinks(q); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if q == filepath.Dir(q) {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(q), rest)
+	}
+}
+
+// homeFile says whether fi is one of the files in the home (by identity: a hard link to it is it).
+func homeFile(fi os.FileInfo, home string) bool {
+	found := false
+	_ = filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if hfi, err := os.Stat(p); err == nil && os.SameFile(hfi, fi) {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 // inside says whether p is dir or in it, comparing folders by identity (a case variant or a link is still dir).
@@ -841,7 +910,7 @@ func inside(p, dir string) bool {
 		return false
 	}
 	for q := filepath.Clean(p); ; q = filepath.Dir(q) {
-		if fi, err := os.Stat(q); err == nil && os.SameFile(fi, d) {
+		if fi, err := os.Stat(q); err == nil && fi.IsDir() && os.SameFile(fi, d) {
 			return true
 		}
 		if q == filepath.Dir(q) {
