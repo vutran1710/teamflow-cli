@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,7 +14,10 @@ import (
 	"testing"
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
+	"github.com/vutran1710/teamflow-cli/internal/adapters/antigravity"
 	"github.com/vutran1710/teamflow-cli/internal/adapters/claudecode"
+	"github.com/vutran1710/teamflow-cli/internal/adapters/copilot"
+	"github.com/vutran1710/teamflow-cli/internal/adapters/cursor"
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
@@ -898,6 +902,9 @@ func (f *fakeAdapter) Hook(string, []byte, *core.Core) ([]byte, error) { return 
 func (f *fakeAdapter) SessionID([]byte) (string, error)                { return "", nil }
 
 func TestInstallWithNoAdapterYet(t *testing.T) {
+	adapters.Reset() // a build with only the Claude Code adapter
+	adapters.Register(claudecode.New())
+	t.Cleanup(resetAdapters)
 	m := newMachine(t, false)
 	t.Setenv("PATH", t.TempDir()) // no agent found on this machine
 	r := m.run("pw\n", "install", "-a", "cursor", "-e", "lan@acme.test", "-s", m.srv.URL(), "--password-stdin")
@@ -1125,4 +1132,93 @@ func TestInstallClaudeCode(t *testing.T) {
 func resetAdapters() {
 	adapters.Reset()
 	adapters.Register(claudecode.New())
+	adapters.Register(cursor.New())
+	adapters.Register(antigravity.New())
+	adapters.Register(copilot.New())
+}
+
+// treeOf is every file under root: path → content.
+func treeOf(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	must(t, filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			out[p+"/"] = ""
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		out[p] = string(b)
+		return err
+	}))
+	return out
+}
+
+// `install -a all` on a machine with all four agents' folders sets up all four; `uninstall` takes all four out,
+// leaving every agent folder as it was. One agent refusing (its malformed hooks.json) leaves that agent untouched,
+// the other three set up, and the exit 1 names it; uninstall then removes the three and refuses the fourth again.
+func TestInstallAllAgents(t *testing.T) {
+	m := newMachine(t, true)
+	m.srv.on("account.me", lanMe)
+	t.Setenv("PATH", t.TempDir()) // found by their folders, not their binaries
+	user := os.Getenv("HOME")
+	for _, d := range []string{".claude", ".copilot", ".cursor", ".gemini/antigravity-cli"} {
+		must(t, os.MkdirAll(filepath.Join(user, d), 0o755))
+	}
+	must(t, os.WriteFile(filepath.Join(user, ".cursor", "mcp.json"), []byte(`{"mcpServers": {"mine": {"command": "x"}}}`), 0o644))
+	before := treeOf(t, user)
+
+	r := m.run("", "install", "-a", "all", "-e", "lan@acme.test", "-s", m.srv.URL())
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "claude-code:\n", "cursor:\n", "antigravity:\n", "copilot:\n",
+		"an allow rule for teamflow commands and deny rules for the Teamflow home in ~/.cursor/cli-config.json",
+		"hook 'teamflow' (SessionStart, PreInvocation, Stop) in ~/.gemini/config/hooks.json",
+		"/teamf skill at ~/.copilot/skills/teamf/SKILL.md")
+	r = m.run("", "status")
+	contains(t, "stdout", r.out, "claude-code: installed\n", "cursor: installed\n", "antigravity: installed\n", "copilot: installed\n")
+	r = m.run("", "uninstall")
+	wantCode(t, r, 0)
+	r = m.run("", "status")
+	contains(t, "stdout", r.out, "claude-code: not installed\n", "cursor: not installed\n", "antigravity: not installed\n", "copilot: not installed\n")
+	after := treeOf(t, user)
+	for p := range after { // Claude Code's adapter (Task 9a) leaves its settings.json and commands/ folder
+		if strings.HasPrefix(p, filepath.Join(user, ".claude")+"/") {
+			delete(after, p)
+		}
+	}
+	for p := range before {
+		if strings.HasPrefix(p, filepath.Join(user, ".claude")+"/") {
+			delete(before, p)
+		}
+	}
+	for p, c := range before {
+		if after[p] != c {
+			t.Fatalf("%s not as before: %q", p, after[p])
+		}
+	}
+	for p := range after {
+		if _, ok := before[p]; !ok {
+			t.Fatalf("left behind: %s", p)
+		}
+	}
+
+	// One agent refusing: the others are set up, it is left as it was, and the failure names it.
+	hooks := filepath.Join(user, ".cursor", "hooks.json")
+	must(t, os.WriteFile(hooks, []byte("{oops"), 0o644))
+	cursorBefore := treeOf(t, filepath.Join(user, ".cursor"))
+	r = m.run("", "install", "-a", "all", "-e", "lan@acme.test", "-s", m.srv.URL())
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "cursor: not set up", "not set up in cursor;")
+	r = m.run("", "status")
+	contains(t, "stdout", r.out, "claude-code: installed\n", "cursor: not installed\n", "antigravity: installed\n", "copilot: installed\n")
+	if got := treeOf(t, filepath.Join(user, ".cursor")); len(got) != len(cursorBefore) || got[hooks] != "{oops" {
+		t.Fatalf("the refusing agent was changed: %v", got)
+	}
+	r = m.run("", "uninstall", "-a", "all")
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "cursor: not removed", "not removed from cursor;")
+	r = m.run("", "status")
+	contains(t, "stdout", r.out, "claude-code: not installed\n", "antigravity: not installed\n", "copilot: not installed\n")
 }

@@ -14,7 +14,10 @@ import (
 	"golang.org/x/term"
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
-	_ "github.com/vutran1710/teamflow-cli/internal/adapters/claudecode" // the Claude Code adapter
+	_ "github.com/vutran1710/teamflow-cli/internal/adapters/antigravity" // the Antigravity CLI adapter
+	_ "github.com/vutran1710/teamflow-cli/internal/adapters/claudecode"  // the Claude Code adapter
+	_ "github.com/vutran1710/teamflow-cli/internal/adapters/copilot"     // the Copilot CLI adapter
+	_ "github.com/vutran1710/teamflow-cli/internal/adapters/cursor"      // the Cursor CLI adapter
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/store"

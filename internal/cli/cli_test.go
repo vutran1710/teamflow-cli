@@ -204,6 +204,7 @@ func newMachine(t *testing.T, signedIn bool) *machine {
 	// Never the person's own agent configs: every agent's config lives under a temp HOME.
 	t.Setenv("HOME", filepath.Join(filepath.Dir(dir), "user"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(filepath.Dir(dir), "user", ".claude"))
+	t.Setenv("COPILOT_HOME", "")
 	m := &machine{t: t, dir: dir, srv: newServer(t)}
 	if signedIn {
 		if err := config.Save(dir, config.Config{Server: m.srv.URL(), AuthKey: auth, Email: "lan@acme.test"}); err != nil {

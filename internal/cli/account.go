@@ -320,6 +320,9 @@ func runInstall(r *inv, a *parsed) int {
 		r.printf("signed in as %s\n", c.Cfg.Email)
 	}
 	bin := binary()
+	// Each agent on its own: one refusing (a malformed or read-only file of its own, checked before it writes
+	// anything) leaves it untouched and the others set up.
+	var failed []string
 	for _, ad := range chosen {
 		lines, err := ad.Install(bin)
 		r.printf("%s:\n", ad.Name())
@@ -327,8 +330,12 @@ func runInstall(r *inv, a *parsed) int {
 			r.printf("  %s\n", l)
 		}
 		if err != nil {
-			return r.fail(fmt.Sprintf("%s: not set up: %v", ad.Name(), err))
+			fmt.Fprintf(r.errw, "%s: not set up: %v\n", ad.Name(), err)
+			failed = append(failed, ad.Name())
 		}
+	}
+	if len(failed) > 0 {
+		return r.fail("not set up in " + strings.Join(failed, ", ") + "; fix what is said above, then run the install again")
 	}
 	if adapters.StartSync != nil {
 		if err := adapters.StartSync(); err != nil {
@@ -369,6 +376,7 @@ func runUninstall(r *inv, a *parsed) int {
 			}
 		}
 	}
+	var failed []string
 	for _, ad := range chosen {
 		lines, err := ad.Uninstall()
 		r.printf("%s:\n", ad.Name())
@@ -376,8 +384,12 @@ func runUninstall(r *inv, a *parsed) int {
 			r.printf("  %s\n", l)
 		}
 		if err != nil {
-			return r.fail(fmt.Sprintf("%s: not removed: %v", ad.Name(), err))
+			fmt.Fprintf(r.errw, "%s: not removed: %v\n", ad.Name(), err)
+			failed = append(failed, ad.Name())
 		}
+	}
+	if len(failed) > 0 {
+		return r.fail("not removed from " + strings.Join(failed, ", ") + "; fix what is said above, then run the uninstall again")
 	}
 	if a.has("purge") {
 		dir := home.Dir()

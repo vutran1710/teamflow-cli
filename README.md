@@ -90,6 +90,33 @@ apply to Claude Code's built-in tools and the shell commands it recognises, not 
 themselves. For a hard boundary use Claude Code's sandbox. The instruction text also tells every agent the home is
 not theirs.
 
+## Copilot CLI, Cursor CLI and Antigravity CLI
+
+These agents use the `teamflow` commands; no MCP server is registered for them. Each install writes only Teamflow's
+own entries or files, records what it added in `.teamflow-install.json` beside them (with a copy of each file it
+edited, mode 0600, so uninstall gives your file back byte for byte), refuses a malformed, read-only or wrongly
+shaped file before writing anything, and never fails your agent's step.
+
+- **Copilot CLI** (`$COPILOT_HOME`, else `~/.copilot`): `hooks/teamflow.json` (sessionStart, userPromptSubmitted,
+  preToolUse, postToolUse, agentStop, sessionEnd), `copilot-instructions.md` (the instruction block) and
+  `skills/teamf/SKILL.md` (`/teamf`, `allowed-tools: shell(teamflow:*)`). Copilot keeps no allow or deny rules in
+  your config, so the preToolUse hook answers: it allows one plain `teamflow …` command (nothing chained, piped,
+  redirected or expanded) without a prompt, and refuses tool calls that name the Teamflow home. Copilot's prompt
+  hook cannot add context, so news arrives at session start, after each tool, and at the turn's end.
+- **Cursor CLI** (`~/.cursor`): `hooks.json` (sessionStart, beforeSubmitPrompt, beforeShellExecution, postToolUse,
+  stop, sessionEnd, beside your own hooks), `cli-config.json` (`permissions.allow`: `Shell(teamflow)` and
+  `Shell(<binary>)`; `permissions.deny`: `Read(<home>)`, `Read(<home>/**)`, `Write(…)` the same),
+  `rules/teamflow.mdc` (the instruction text, `alwaysApply`; the sessionStart hook gives it too) and
+  `skills/teamf/SKILL.md`. Shell commands naming the home are refused by the beforeShellExecution hook.
+- **Antigravity CLI** (`~/.gemini`): `config/hooks.json` (a hook named `teamflow`: SessionStart, PreInvocation,
+  Stop), `config/AGENTS.md` (the instruction block), `config/skills/teamf/SKILL.md`, and
+  `antigravity-cli/settings.json` (`permissions.allow`: `command(teamflow)`, `command(<binary>)`;
+  `permissions.deny`: `read_file(<home>)`, `write_file(<home>)` and `command(regex:…)` rules for commands naming
+  the home).
+
+The same limits as Claude Code's deny rules apply: they stop what names the folder, not a command that reaches it
+another way.
+
 ## What it sends, and where
 
 The client talks to one place only: the Teamflow server you sign in to, over HTTPS (`/rpc`, JSON-RPC) and a
