@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "drift.resolve",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "d",
+    "error": {
+      "code": -32000,
+      "message": "a verdict is sent on its own, not in a batch",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

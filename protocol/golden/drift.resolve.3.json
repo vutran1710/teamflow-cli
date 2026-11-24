@@ -3,16 +3,16 @@
   "method": "drift.resolve",
   "params": {
     "drift": "dr_00000000000000000000000001",
-    "note": "again"
+    "note": "settled"
   },
   "response": {
     "jsonrpc": "2.0",
     "id": 1,
     "error": {
       "code": -32000,
-      "message": "drift is RESOLVED",
+      "message": "only the project's initiator can do this",
       "data": {
-        "reason": "DRIFT_CLOSED"
+        "reason": "NOT_ALLOWED"
       }
     }
   }

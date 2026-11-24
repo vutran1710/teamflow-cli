@@ -9,9 +9,9 @@
     "id": 1,
     "error": {
       "code": -32000,
-      "message": "you are no longer in this org",
+      "message": "no such project here: a project key reaches only its own project",
       "data": {
-        "reason": "NOT_A_MEMBER"
+        "reason": "NOT_ALLOWED"
       }
     }
   }

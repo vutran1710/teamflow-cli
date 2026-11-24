@@ -1,0 +1,21 @@
+{
+  "kind": "rpc",
+  "method": "project.write_state",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": 2,
+    "plan": "p",
+    "instruction": "i"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "a rolling update is running; edit after it finishes",
+      "data": {
+        "reason": "TASK_IN_PROGRESS"
+      }
+    }
+  }
+}

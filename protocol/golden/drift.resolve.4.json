@@ -1,14 +1,18 @@
 {
   "kind": "rpc",
   "method": "drift.resolve",
+  "params": {
+    "drift": "dr_00000000000000000000000001",
+    "note": "again"
+  },
   "response": {
     "jsonrpc": "2.0",
-    "id": "d",
+    "id": 1,
     "error": {
       "code": -32000,
-      "message": "a verdict is sent on its own, not in a batch",
+      "message": "drift is RESOLVED",
       "data": {
-        "reason": "NOT_ALLOWED"
+        "reason": "DRIFT_CLOSED"
       }
     }
   }

@@ -4,17 +4,17 @@
   "params": {
     "project": "pj_00000000000000000000000001",
     "base_version": 1,
-    "plan": "stale",
-    "instruction": ""
+    "plan": "x",
+    "instruction": "y"
   },
   "response": {
     "jsonrpc": "2.0",
     "id": 1,
     "error": {
       "code": -32000,
-      "message": "the plan and instruction are at v2 now, not v1",
+      "message": "only the project's initiator can do this",
       "data": {
-        "reason": "STALE_STATE_VERSION"
+        "reason": "NOT_ALLOWED"
       }
     }
   }

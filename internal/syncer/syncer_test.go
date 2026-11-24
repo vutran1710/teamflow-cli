@@ -41,8 +41,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -602,24 +600,6 @@ func TestPushOnAClosedStoreFails(t *testing.T) {
 
 // ------------------------------------------------------------------ pull
 
-func golden(t *testing.T, name string) json.RawMessage {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "protocol", "golden", name+".json"))
-	must(t, err)
-	var g struct {
-		Event json.RawMessage `json:"event"`
-	}
-	must(t, json.Unmarshal(b, &g))
-	return g.Event
-}
-
-func event(t *testing.T, name string) protocol.SyncEvent {
-	t.Helper()
-	ev, err := protocol.DecodeSyncEvent(golden(t, name))
-	must(t, err)
-	return ev
-}
-
 // page is a sync.poll answer with raw events.
 type page struct {
 	Events  []json.RawMessage `json:"events"`
@@ -630,7 +610,7 @@ type page struct {
 func TestPullAppliesEventsAndMovesCursors(t *testing.T) {
 	st := openStore(t)
 	f, srv := newFake(t)
-	evs := []json.RawMessage{golden(t, "event.project.updated.1"), golden(t, "event.topic.updated.1"), golden(t, "event.signal.accepted.1")}
+	evs := []json.RawMessage{golden(t, "project and state"), golden(t, "system topic"), golden(t, "signal in force")}
 	f.poll = func(p protocol.SyncPoll) any {
 		if p.Cursors[P] == 0 {
 			return page{Events: evs, Cursors: map[string]int64{P: 5}, Reset: []string{}}
@@ -662,9 +642,9 @@ func TestPullHonoursReset(t *testing.T) {
 	st := openStore(t)
 	f, srv := newFake(t)
 	// The server's project P: three events (head 3). Project P2 is left alone.
-	project := golden(t, "event.project.updated.1")
-	topic := golden(t, "event.topic.updated.1")
-	sig := golden(t, "event.signal.accepted.1")
+	project := golden(t, "project and state")
+	topic := golden(t, "system topic")
+	sig := golden(t, "signal in force")
 	head := int64(3)
 	var extra []json.RawMessage
 	f.poll = func(p protocol.SyncPoll) any {
@@ -730,7 +710,7 @@ func TestPullHonoursReset(t *testing.T) {
 		t.Fatalf("P2 touched: %+v", t2)
 	}
 	// After the reset a new event comes as usual, and pulling again changes nothing.
-	ev := json.RawMessage(strings.Replace(string(golden(t, "event.signal.accepted.1")), `"seq": 5`, `"seq": 4`, 1))
+	ev := json.RawMessage(strings.Replace(string(golden(t, "signal in force")), `"seq": 5`, `"seq": 4`, 1))
 	ev = json.RawMessage(strings.ReplaceAll(string(ev), S1, S2))
 	extra = append(extra, ev)
 	n, err = Pull(context.Background(), st, client(srv), time.Second)
@@ -760,7 +740,7 @@ func wrapPollWithout(poll func(protocol.SyncPoll) any, skip string) func(protoco
 func TestPullStopsAfterMaxPages(t *testing.T) {
 	st := openStore(t)
 	f, srv := newFake(t)
-	sig := golden(t, "event.signal.accepted.1")
+	sig := golden(t, "signal in force")
 	f.poll = func(p protocol.SyncPoll) any { // always one more event
 		return page{Events: []json.RawMessage{sig}, Cursors: map[string]int64{P: p.Cursors[P] + 1}, Reset: []string{}}
 	}
@@ -828,7 +808,7 @@ func TestPullSkipsAnUnknownEventAndMovesOn(t *testing.T) {
 	future := json.RawMessage(`{"project":"` + P + `","seq":1,"at":"2026-01-15T09:00:00Z","type":"future.thing","x":1}`)
 	f.poll = func(p protocol.SyncPoll) any {
 		if p.Cursors[P] == 0 {
-			return page{Events: []json.RawMessage{future, future, golden(t, "event.topic.updated.1")}, Cursors: map[string]int64{P: 3}, Reset: []string{}}
+			return page{Events: []json.RawMessage{future, future, golden(t, "system topic")}, Cursors: map[string]int64{P: 3}, Reset: []string{}}
 		}
 		return page{Events: []json.RawMessage{}, Cursors: map[string]int64{P: 3}, Reset: []string{}}
 	}
