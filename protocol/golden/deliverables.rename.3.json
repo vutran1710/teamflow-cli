@@ -1,0 +1,22 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.rename",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": 1,
+    "names": {
+      "ms_00000000000000000000000001": "x"
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "the Deliverables are at version 2, not version 1: get them again and resubmit",
+      "data": {
+        "reason": "STALE_DELIVERABLES_VERSION"
+      }
+    }
+  }
+}

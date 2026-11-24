@@ -1,0 +1,13 @@
+{
+  "kind": "envelope",
+  "case": "batch_refused",
+  "request": [],
+  "response": {
+    "jsonrpc": "2.0",
+    "id": null,
+    "error": {
+      "code": -32600,
+      "message": "empty batch"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "kind": "event",
+  "event": {
+    "project": "pj_00000000000000000000000001",
+    "seq": 9,
+    "at": "2026-01-15T09:00:00Z",
+    "type": "artifact.archived",
+    "artifact": "sg_00000000000000000000000001",
+    "archived": true,
+    "note": "replaced by the wiki",
+    "by": "mb_00000000000000000000000001"
+  }
+}

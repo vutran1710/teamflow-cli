@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "org.add_member",
+  "params": {
+    "org": "Acme",
+    "email": "ghost@acme.test"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "no account ghost@acme.test; the server admin creates accounts",
+      "data": {
+        "reason": "UNKNOWN_REF"
+      }
+    }
+  }
+}

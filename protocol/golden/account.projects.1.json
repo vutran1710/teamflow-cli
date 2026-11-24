@@ -1,0 +1,116 @@
+{
+  "kind": "rpc",
+  "method": "account.projects",
+  "params": {},
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "projects": [
+        {
+          "project": {
+            "id": "pj_00000000000000000000000001",
+            "org": "og_00000000000000000000000001",
+            "name": "Pricing",
+            "initiator": "mb_00000000000000000000000001",
+            "members": [
+              "mb_00000000000000000000000001",
+              "mb_00000000000000000000000002"
+            ],
+            "titles": {},
+            "version": 1,
+            "created_at": "2026-01-15T09:00:00Z",
+            "updated_at": "2026-01-15T09:00:00Z"
+          },
+          "topics": [
+            {
+              "id": "tp_00000000000000000000000001",
+              "project": "pj_00000000000000000000000001",
+              "name": "Rounding",
+              "description": "How prices round",
+              "closed": false,
+              "system": false,
+              "created_at": "2026-01-15T09:00:00Z",
+              "updated_at": "2026-01-15T09:00:00Z"
+            },
+            {
+              "id": "tp_00000000000000000000000002",
+              "project": "pj_00000000000000000000000001",
+              "name": "Currency",
+              "description": "Which currencies",
+              "closed": false,
+              "system": false,
+              "created_at": "2026-01-15T09:00:00Z",
+              "updated_at": "2026-01-15T09:00:00Z"
+            },
+            {
+              "id": "tp_00000000000000000000000003",
+              "project": "pj_00000000000000000000000001",
+              "name": "Plan",
+              "description": "Comments on the plan, the instruction and drifts",
+              "closed": false,
+              "system": true,
+              "created_at": "2026-01-15T09:00:00Z",
+              "updated_at": "2026-01-15T09:00:00Z"
+            }
+          ],
+          "state": {
+            "project": "pj_00000000000000000000000001",
+            "version": 1,
+            "plan": "Ship v1",
+            "instruction": "Be brief",
+            "change": "CREATED",
+            "based_on": null,
+            "checkpoint_seq": 0,
+            "checkpoint_at": "2026-01-15T09:00:00Z",
+            "task": null,
+            "led_by": [],
+            "author": {
+              "member": "mb_00000000000000000000000001",
+              "client_session": "",
+              "actor": "AGENT"
+            },
+            "created_at": "2026-01-15T09:00:00Z"
+          },
+          "names": {
+            "mb_00000000000000000000000001": "lan",
+            "mb_00000000000000000000000002": "huy"
+          },
+          "people": {
+            "mb_00000000000000000000000001": {
+              "name": "lan",
+              "alias": "",
+              "account": "ac_00000000000000000000000001",
+              "avatar": null,
+              "org_title": "",
+              "project_title": ""
+            },
+            "mb_00000000000000000000000002": {
+              "name": "huy",
+              "alias": "",
+              "account": "ac_00000000000000000000000002",
+              "avatar": null,
+              "org_title": "",
+              "project_title": ""
+            }
+          },
+          "artifact_count": 0,
+          "deliverables": null
+        }
+      ],
+      "orgs": {
+        "og_00000000000000000000000001": "Acme"
+      },
+      "summaries": {
+        "pj_00000000000000000000000001": {
+          "in_force": 0,
+          "pending": 0,
+          "rejected": 0,
+          "open_drifts": 0,
+          "last_activity": null,
+          "deliverables": null
+        }
+      }
+    }
+  }
+}

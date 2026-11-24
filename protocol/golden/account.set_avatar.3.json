@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "account.set_avatar",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "media_type: Input should be 'image/png', 'image/jpeg' or 'image/webp'",
+      "data": {
+        "reason": "SCHEMA_VIOLATION"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "kind": "rpc",
+  "method": "account.me",
+  "params": {},
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "a",
+    "error": {
+      "code": -32603,
+      "message": "the server could not answer this call; try again"
+    }
+  }
+}

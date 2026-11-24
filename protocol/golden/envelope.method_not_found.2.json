@@ -1,0 +1,17 @@
+{
+  "kind": "envelope",
+  "case": "method_not_found",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "nope.nope"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32601,
+      "message": "unknown method nope.nope"
+    }
+  }
+}

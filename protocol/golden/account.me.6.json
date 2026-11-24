@@ -1,0 +1,13 @@
+{
+  "kind": "rpc",
+  "method": "account.me",
+  "params": {},
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32600,
+      "message": "not a JSON-RPC 2.0 call"
+    }
+  }
+}

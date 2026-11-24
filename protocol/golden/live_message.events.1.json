@@ -1,0 +1,95 @@
+{
+  "kind": "live",
+  "message": {
+    "type": "events",
+    "events": [
+      {
+        "project": "pj_00000000000000000000000001",
+        "seq": 1,
+        "at": "2026-01-15T09:00:00Z",
+        "type": "project.updated",
+        "updated": {
+          "id": "pj_00000000000000000000000001",
+          "org": "og_00000000000000000000000001",
+          "name": "Pricing",
+          "initiator": "mb_00000000000000000000000001",
+          "members": [
+            "mb_00000000000000000000000001",
+            "mb_00000000000000000000000002"
+          ],
+          "titles": {},
+          "version": 1,
+          "created_at": "2026-01-15T09:00:00Z",
+          "updated_at": "2026-01-15T09:00:00Z"
+        },
+        "state": {
+          "project": "pj_00000000000000000000000001",
+          "version": 1,
+          "plan": "Ship v1",
+          "instruction": "Be brief",
+          "change": "CREATED",
+          "based_on": null,
+          "checkpoint_seq": 0,
+          "checkpoint_at": "2026-01-15T09:00:00Z",
+          "task": null,
+          "led_by": [],
+          "author": {
+            "member": "mb_00000000000000000000000001",
+            "client_session": "",
+            "actor": "AGENT"
+          },
+          "created_at": "2026-01-15T09:00:00Z"
+        }
+      },
+      {
+        "project": "pj_00000000000000000000000001",
+        "seq": 2,
+        "at": "2026-01-15T09:00:00Z",
+        "type": "topic.updated",
+        "topic": {
+          "id": "tp_00000000000000000000000001",
+          "project": "pj_00000000000000000000000001",
+          "name": "Plan",
+          "description": "Comments on the plan, the instruction and drifts",
+          "closed": false,
+          "system": true,
+          "created_at": "2026-01-15T09:00:00Z",
+          "updated_at": "2026-01-15T09:00:00Z"
+        }
+      },
+      {
+        "project": "pj_00000000000000000000000001",
+        "seq": 3,
+        "at": "2026-01-15T09:00:00Z",
+        "type": "topic.updated",
+        "topic": {
+          "id": "tp_00000000000000000000000002",
+          "project": "pj_00000000000000000000000001",
+          "name": "Rounding",
+          "description": "How prices round",
+          "closed": false,
+          "system": false,
+          "created_at": "2026-01-15T09:00:00Z",
+          "updated_at": "2026-01-15T09:00:00Z"
+        }
+      },
+      {
+        "project": "pj_00000000000000000000000001",
+        "seq": 4,
+        "at": "2026-01-15T09:00:00Z",
+        "type": "topic.updated",
+        "topic": {
+          "id": "tp_00000000000000000000000003",
+          "project": "pj_00000000000000000000000001",
+          "name": "Currency",
+          "description": "Which currencies",
+          "closed": false,
+          "system": false,
+          "created_at": "2026-01-15T09:00:00Z",
+          "updated_at": "2026-01-15T09:00:00Z"
+        }
+      }
+    ],
+    "cursor": 4
+  }
+}

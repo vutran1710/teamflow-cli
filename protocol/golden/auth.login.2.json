@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "auth.login",
+  "params": {
+    "email": "lan@acme.test",
+    "password": "wrong password"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "wrong email or password",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

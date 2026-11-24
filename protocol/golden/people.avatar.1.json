@@ -1,0 +1,17 @@
+{
+  "kind": "rpc",
+  "method": "people.avatar",
+  "params": {
+    "account": "ac_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "account": "ac_00000000000000000000000001",
+      "media_type": "image/png",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+      "content_b64": "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGMQUDCAIwbiOACaNAYBjjyKngAAAABJRU5ErkJggg=="
+    }
+  }
+}

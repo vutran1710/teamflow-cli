@@ -1,0 +1,63 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.publish",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": 1,
+    "milestones": [
+      {
+        "id": "ms_00000000000000000000000001",
+        "name": "Design",
+        "due": "2026-01-25",
+        "actions": [
+          {
+            "id": "ai_00000000000000000000000001",
+            "name": "Draft rounding rules",
+            "topic": "tp_00000000000000000000000001",
+            "due": "2026-01-20",
+            "owner": "mb_00000000000000000000000001",
+            "after": []
+          },
+          {
+            "id": "ai_00000000000000000000000002",
+            "name": "List currencies",
+            "topic": "tp_00000000000000000000000002",
+            "due": "2026-01-23",
+            "owner": null,
+            "after": [
+              "ai_00000000000000000000000001"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "ms_00000000000000000000000002",
+        "name": "Ship",
+        "due": "2026-02-04",
+        "actions": [
+          {
+            "id": "ai_00000000000000000000000003",
+            "name": "Implement rounding",
+            "topic": "tp_00000000000000000000000001",
+            "due": "2026-01-30",
+            "owner": "mb_00000000000000000000000002",
+            "after": [
+              "ai_00000000000000000000000002"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "the Deliverables are archived: nothing changes until the initiator restores them",
+      "data": {
+        "reason": "DELIVERABLES_ARCHIVED"
+      }
+    }
+  }
+}

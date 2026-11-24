@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "artifact.archive",
+  "params": {
+    "artifact": "sg_00000000000000000000000001",
+    "note": "old"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "only the project's initiator can do this",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

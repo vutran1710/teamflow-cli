@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "account.update_profile",
+  "params": {
+    "name": "Huy Nguyen"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32603,
+      "message": "the change is made, but not yet everywhere; try again (it will not be made twice)"
+    }
+  }
+}

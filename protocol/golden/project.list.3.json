@@ -1,0 +1,16 @@
+{
+  "kind": "rpc",
+  "method": "project.list",
+  "params": {},
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32000,
+      "message": "use a project key for this project",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

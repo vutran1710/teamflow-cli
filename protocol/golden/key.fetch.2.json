@@ -1,0 +1,18 @@
+{
+  "kind": "rpc",
+  "method": "key.fetch",
+  "params": {
+    "project": "pj_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "sign in first (a project key acts only on its project)",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

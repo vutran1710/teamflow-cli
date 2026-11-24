@@ -1,0 +1,126 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.publish",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": null,
+    "milestones": [
+      {
+        "name": "Design",
+        "due": "2026-01-25",
+        "actions": [
+          {
+            "name": "Draft rounding rules",
+            "topic": "Rounding",
+            "due": "2026-01-20",
+            "owner": "huy"
+          },
+          {
+            "name": "List currencies",
+            "topic": "Currency",
+            "due": "2026-01-23",
+            "owner": null,
+            "after": [
+              "Draft rounding rules"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Ship",
+        "due": "2026-02-04",
+        "actions": [
+          {
+            "name": "Implement rounding",
+            "topic": "rounding",
+            "due": "2026-01-30",
+            "owner": "Lan",
+            "after": [
+              "List currencies"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "deliverables": {
+        "project": "pj_00000000000000000000000001",
+        "version": 1,
+        "based_on_state": 1,
+        "published_by": "mb_00000000000000000000000001",
+        "published_at": "2026-01-15T09:00:00Z",
+        "archived": false,
+        "archive_note": "",
+        "milestones": [
+          {
+            "id": "ms_00000000000000000000000001",
+            "name": "Design",
+            "due": "2026-01-25",
+            "actions": [
+              {
+                "id": "ai_00000000000000000000000001",
+                "name": "Draft rounding rules",
+                "topic": "tp_00000000000000000000000001",
+                "due": "2026-01-20",
+                "owner": "mb_00000000000000000000000002",
+                "after": [],
+                "done_by": null,
+                "done_at": null,
+                "done_signal": null
+              },
+              {
+                "id": "ai_00000000000000000000000002",
+                "name": "List currencies",
+                "topic": "tp_00000000000000000000000002",
+                "due": "2026-01-23",
+                "owner": null,
+                "after": [
+                  "ai_00000000000000000000000001"
+                ],
+                "done_by": null,
+                "done_at": null,
+                "done_signal": null
+              }
+            ],
+            "done": 0,
+            "total": 2
+          },
+          {
+            "id": "ms_00000000000000000000000002",
+            "name": "Ship",
+            "due": "2026-02-04",
+            "actions": [
+              {
+                "id": "ai_00000000000000000000000003",
+                "name": "Implement rounding",
+                "topic": "tp_00000000000000000000000001",
+                "due": "2026-01-30",
+                "owner": "mb_00000000000000000000000001",
+                "after": [
+                  "ai_00000000000000000000000002"
+                ],
+                "done_by": null,
+                "done_at": null,
+                "done_signal": null
+              }
+            ],
+            "done": 0,
+            "total": 1
+          }
+        ],
+        "milestones_done": 0,
+        "milestones_total": 2
+      },
+      "statuses": {
+        "ai_00000000000000000000000001": "NOT_STARTED",
+        "ai_00000000000000000000000002": "NOT_STARTED",
+        "ai_00000000000000000000000003": "NOT_STARTED"
+      },
+      "late": []
+    }
+  }
+}

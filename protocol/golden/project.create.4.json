@@ -1,0 +1,25 @@
+{
+  "kind": "rpc",
+  "method": "project.create",
+  "params": {
+    "org": "Nowhere",
+    "name": "P",
+    "topics": [
+      {
+        "name": "T",
+        "description": "d"
+      }
+    ]
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "you are not in an org 'Nowhere'",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

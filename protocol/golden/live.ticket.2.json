@@ -1,0 +1,18 @@
+{
+  "kind": "rpc",
+  "method": "live.ticket",
+  "params": {
+    "project": "pj_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "this project key is for another project",
+      "data": {
+        "reason": "NOT_A_MEMBER"
+      }
+    }
+  }
+}

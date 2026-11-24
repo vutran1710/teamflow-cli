@@ -1,0 +1,8 @@
+{
+  "kind": "live",
+  "message": {
+    "type": "closed",
+    "reason": "REPLACED",
+    "message": "a newer live socket of yours on this project replaced this one"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "kind": "rpc",
+  "method": "artifact.get",
+  "params": {
+    "version": "sg_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "the content of sg_00000000000000000000000001 could not be read from the file store",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

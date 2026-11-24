@@ -1,0 +1,20 @@
+{
+  "kind": "rpc",
+  "method": "org.set_title",
+  "params": {
+    "org": "Acme",
+    "member": "mb_00000000000000000000000001",
+    "title": "CEO"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "only the org's admin can do this",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

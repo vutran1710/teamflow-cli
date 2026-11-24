@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "org.remove_member",
+  "params": {
+    "org": "Acme",
+    "member": "mb_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "the org's admin stays in the org",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

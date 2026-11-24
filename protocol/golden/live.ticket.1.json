@@ -1,0 +1,17 @@
+{
+  "kind": "rpc",
+  "method": "live.ticket",
+  "params": {
+    "project": "pj_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "ticket": "TICKET",
+      "org": "og_00000000000000000000000001",
+      "project": "pj_00000000000000000000000001",
+      "expires_at": "2026-01-15T09:00:00Z"
+    }
+  }
+}

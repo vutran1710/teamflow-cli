@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "auth.login",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "password: String should have at least 1 character",
+      "data": {
+        "reason": "SCHEMA_VIOLATION"
+      }
+    }
+  }
+}

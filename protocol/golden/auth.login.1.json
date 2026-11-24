@@ -1,0 +1,25 @@
+{
+  "kind": "rpc",
+  "method": "auth.login",
+  "params": {
+    "email": "lan@acme.test",
+    "password": "correct horse battery"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "auth_key": "tfa_example",
+      "account": {
+        "id": "ac_00000000000000000000000001",
+        "email": "lan@acme.test",
+        "name": "lan",
+        "alias": "",
+        "avatar": null,
+        "created_at": "2026-01-15T09:00:00Z",
+        "disabled_at": null
+      },
+      "expires_at": "2026-01-15T09:00:01Z"
+    }
+  }
+}

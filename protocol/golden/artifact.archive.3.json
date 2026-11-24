@@ -1,0 +1,66 @@
+{
+  "kind": "rpc",
+  "method": "artifact.archive",
+  "params": {
+    "artifact": "sg_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "artifact": "sg_00000000000000000000000001",
+      "name": "old.md",
+      "kind": "TEXT",
+      "topic": "tp_00000000000000000000000001",
+      "latest": {
+        "signal": {
+          "id": "sg_00000000000000000000000001",
+          "project": "pj_00000000000000000000000001",
+          "topic": "tp_00000000000000000000000001",
+          "kind": "ARTIFACT",
+          "title": "Artifact old.md",
+          "body": {
+            "type": "artifact.v1",
+            "name": "old.md",
+            "kind": "TEXT",
+            "summary": "The old.md",
+            "points": [
+              "One point"
+            ],
+            "stored": {
+              "key": "og_00000000000000000000000001/pj_00000000000000000000000001/sg_00000000000000000000000001/sg_00000000000000000000000001",
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+              "media_type": "text/markdown",
+              "size": 8
+            },
+            "url": null,
+            "media_type": null,
+            "size": null,
+            "sha256": null
+          },
+          "refs": [],
+          "supersedes": null,
+          "target": null,
+          "request_for_approval": null,
+          "about": null,
+          "emitted_at": "2026-01-15T09:00:00Z"
+        },
+        "author": {
+          "member": "mb_00000000000000000000000001",
+          "client_session": "s1",
+          "actor": "AGENT"
+        },
+        "received_at": "2026-01-15T09:00:01Z",
+        "seq": 10,
+        "chain": "sg_00000000000000000000000001",
+        "chain_version": 1,
+        "state": "IN_FORCE",
+        "content_hash": "0000000000000000000000000000000000000000000000000000000000000002"
+      },
+      "in_force": "sg_00000000000000000000000001",
+      "versions": 1,
+      "archived": true,
+      "note": ""
+    }
+  }
+}

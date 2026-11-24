@@ -1,0 +1,9 @@
+{
+  "event": "UserPromptSubmit",
+  "case": "malformed-stdin",
+  "layout": "none",
+  "stdin": "not json",
+  "stdout": "",
+  "scenario": "Stdin that is not JSON: the hook answers nothing and logs to hook.log (never fails the agent).",
+  "compare": "json-normalised"
+}

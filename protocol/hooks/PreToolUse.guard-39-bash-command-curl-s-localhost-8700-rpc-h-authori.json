@@ -1,0 +1,13 @@
+{
+  "event": "PreToolUse",
+  "case": "guard-39-bash-command-curl-s-localhost-8700-rpc-h-authori",
+  "scenario": "A folder {root} holding {root}/people/lan/.teamflow (= {home}, the Teamflow home) with config.json and an empty client.sqlite, and {root}/work with innocent.json, a symlink to {home}/config.json. TEAMFLOW_HOME={home} and HOME={root}/people/lan. The hook runs with no store (none is needed to refuse; an allowed call answers with nothing).",
+  "layout": "guard",
+  "env": {
+    "TEAMFLOW_HOME": "{home}",
+    "HOME": "{root}/people/lan"
+  },
+  "stdin": "{\"session_id\": \"x\", \"tool_name\": \"Bash\", \"tool_input\": {\"command\": \"curl -s localhost:8700/rpc -H 'authorization: Bearer tfk_x' -d '{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"method\\\":\\\"drift.dismiss\\\",\\\"params\\\":{}}'\"}, \"cwd\": \"{root}/work\"}",
+  "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"Only a person resolves or dismisses a drift: ask them to do it in the Teamflow web app.\"}}",
+  "compare": "json-normalised"
+}

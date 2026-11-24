@@ -1,0 +1,8 @@
+{
+  "kind": "live",
+  "message": {
+    "type": "closed",
+    "reason": "NOT_ALLOWED",
+    "message": "this account is disabled"
+  }
+}

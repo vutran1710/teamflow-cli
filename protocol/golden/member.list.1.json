@@ -1,0 +1,52 @@
+{
+  "kind": "rpc",
+  "method": "member.list",
+  "params": {},
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "members": [
+        {
+          "id": "mb_00000000000000000000000001",
+          "org": "og_00000000000000000000000001",
+          "account": "ac_00000000000000000000000001",
+          "name": "lan",
+          "email": "lan@acme.test",
+          "alias": "",
+          "avatar": null,
+          "title": "",
+          "revoked_at": null,
+          "protocol": 1,
+          "min_client_protocol": 1
+        },
+        {
+          "id": "mb_00000000000000000000000002",
+          "org": "og_00000000000000000000000001",
+          "account": "ac_00000000000000000000000002",
+          "name": "huy",
+          "email": "huy@acme.test",
+          "alias": "",
+          "avatar": null,
+          "title": "",
+          "revoked_at": null,
+          "protocol": 1,
+          "min_client_protocol": 1
+        },
+        {
+          "id": "mb_00000000000000000000000003",
+          "org": "og_00000000000000000000000001",
+          "account": "ac_00000000000000000000000003",
+          "name": "mai",
+          "email": "mai@acme.test",
+          "alias": "",
+          "avatar": null,
+          "title": "",
+          "revoked_at": null,
+          "protocol": 1,
+          "min_client_protocol": 1
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "kind": "live",
+  "message": {
+    "type": "events",
+    "events": [],
+    "cursor": 4
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "project.request_update",
+  "params": {
+    "project": "pj_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32603,
+      "message": "the server could not answer this call; try again"
+    }
+  }
+}

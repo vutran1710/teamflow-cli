@@ -1,0 +1,44 @@
+{
+  "kind": "envelope",
+  "case": "batch",
+  "request": [
+    {
+      "jsonrpc": "2.0",
+      "id": "a",
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": "b",
+      "method": "auth.logout"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": "c",
+      "method": "nope.nope"
+    }
+  ],
+  "response": [
+    {
+      "jsonrpc": "2.0",
+      "id": "a",
+      "error": {
+        "code": -32603,
+        "message": "the server could not answer this call; try again"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": "b",
+      "result": {}
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": "c",
+      "error": {
+        "code": -32601,
+        "message": "unknown method nope.nope"
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "kind": "rpc",
+  "method": "project.create",
+  "params": {
+    "org": "Acme",
+    "name": "P",
+    "topics": [
+      {
+        "name": "T",
+        "description": "d"
+      }
+    ],
+    "members": [
+      "mb_00000000000000000000000001"
+    ]
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "mb_00000000000000000000000001 is not a member of this project's org",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

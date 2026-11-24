@@ -1,0 +1,9 @@
+{
+  "event": "UserPromptSubmit",
+  "case": "nothing-new",
+  "layout": "shared",
+  "scenario": "Lan (lan@acme.test) and Huy (huy@acme.test) in org Acme, on Lan's project Pricing (topics Rounding and Currency, plan 'Ship pricing v1'); session lan-1 is Lan's and huy-1 Huy's, both shared with the project and Lan's first prompt already answered. Huy's next prompt with nothing new: nothing added.",
+  "stdin": "{\"session_id\": \"huy-1\", \"cwd\": \"\", \"prompt\": \"go on\"}",
+  "stdout": "",
+  "compare": "json-normalised"
+}

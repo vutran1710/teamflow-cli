@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "live.ticket",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "project: Field required",
+      "data": {
+        "reason": "SCHEMA_VIOLATION"
+      }
+    }
+  }
+}

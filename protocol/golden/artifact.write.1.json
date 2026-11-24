@@ -1,0 +1,47 @@
+{
+  "kind": "rpc",
+  "method": "artifact.write",
+  "params": {
+    "client_session": "s1",
+    "actor": "AGENT",
+    "project_version": 1,
+    "signal": {
+      "id": "sg_00000000000000000000000001",
+      "project": "pj_00000000000000000000000001",
+      "topic": "tp_00000000000000000000000001",
+      "kind": "ARTIFACT",
+      "title": "Artifact spec.md",
+      "body": {
+        "type": "artifact.v1",
+        "name": "spec.md",
+        "kind": "TEXT",
+        "summary": "The spec.md",
+        "points": [
+          "One point"
+        ]
+      },
+      "emitted_at": "2026-01-15T09:00:00Z"
+    },
+    "media_type": "text/markdown",
+    "content_b64": "IyBQcmljaW5nCnYxCg=="
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "signal": "sg_00000000000000000000000001",
+      "accepted": true,
+      "reason": null,
+      "message": "",
+      "seq": 5,
+      "received_at": "2026-01-15T09:00:01Z",
+      "state": "IN_FORCE",
+      "stored": {
+        "key": "og_00000000000000000000000001/pj_00000000000000000000000001/sg_00000000000000000000000001/sg_00000000000000000000000001",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+        "media_type": "text/markdown",
+        "size": 13
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "kind": "event",
+  "event": {
+    "project": "pj_00000000000000000000000001",
+    "seq": 8,
+    "at": "2026-01-15T09:00:00Z",
+    "type": "drift.found",
+    "drift": {
+      "id": "dr_00000000000000000000000001",
+      "project": "pj_00000000000000000000000001",
+      "kind": "UNANSWERED",
+      "summary": "Globex question",
+      "signals": [
+        "sg_00000000000000000000000001"
+      ],
+      "status": "OPEN",
+      "found_in": 2,
+      "resolved_in": null,
+      "resolution": "",
+      "resolved_by": [],
+      "created_at": "2026-01-15T09:00:00Z",
+      "resolved_at": null
+    }
+  }
+}

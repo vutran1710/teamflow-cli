@@ -1,0 +1,21 @@
+{
+  "kind": "rpc",
+  "method": "account.set_avatar",
+  "params": {
+    "media_type": "image/png",
+    "content_b64": "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGMQUDCAIwbiOACaNAYBjjyKngAAAABJRU5ErkJggg=="
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "id": "ac_00000000000000000000000001",
+      "email": "lan@acme.test",
+      "name": "lan",
+      "alias": "",
+      "avatar": "0000000000000000000000000000000000000000000000000000000000000001",
+      "created_at": "2026-01-15T09:00:00Z",
+      "disabled_at": null
+    }
+  }
+}

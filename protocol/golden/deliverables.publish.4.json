@@ -1,0 +1,60 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.publish",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": null,
+    "milestones": [
+      {
+        "name": "Design",
+        "due": "2026-01-25",
+        "actions": [
+          {
+            "name": "Draft rounding rules",
+            "topic": "Rounding",
+            "due": "2026-01-23",
+            "owner": "huy",
+            "after": [
+              "List currencies"
+            ]
+          },
+          {
+            "name": "List currencies",
+            "topic": "Currency",
+            "due": "2026-01-23",
+            "owner": null,
+            "after": [
+              "Draft rounding rules"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Ship",
+        "due": "2026-02-04",
+        "actions": [
+          {
+            "name": "Implement rounding",
+            "topic": "rounding",
+            "due": "2026-01-30",
+            "owner": "Lan",
+            "after": [
+              "List currencies"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "the dependencies form a cycle: Draft rounding rules -> List currencies -> Draft rounding rules",
+      "data": {
+        "reason": "DELIVERABLES_INVALID"
+      }
+    }
+  }
+}

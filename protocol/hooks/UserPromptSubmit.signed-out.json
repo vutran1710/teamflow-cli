@@ -1,0 +1,9 @@
+{
+  "event": "UserPromptSubmit",
+  "case": "signed-out",
+  "layout": "none",
+  "stdin": "{\"session_id\": \"s1\", \"cwd\": \"/home/user/path\", \"prompt\": \"hi\"}",
+  "stdout": "",
+  "scenario": "A Teamflow home with no sign-in (no config.json): every hook answers nothing.",
+  "compare": "json-normalised"
+}

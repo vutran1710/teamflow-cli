@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "signal.list",
+  "params": {
+    "project": "pj_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "signals": [],
+      "next_after": null
+    }
+  }
+}

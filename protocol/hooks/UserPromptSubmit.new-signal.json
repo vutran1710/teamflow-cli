@@ -1,0 +1,9 @@
+{
+  "event": "UserPromptSubmit",
+  "case": "new-signal",
+  "layout": "shared",
+  "scenario": "Lan (lan@acme.test) and Huy (huy@acme.test) in org Acme, on Lan's project Pricing (topics Rounding and Currency, plan 'Ship pricing v1'); session lan-1 is Lan's and huy-1 Huy's, both shared with the project and Lan's first prompt already answered. Lan emitted a DECISION in Rounding: Huy's next prompt carries it.",
+  "stdin": "{\"session_id\": \"huy-1\", \"cwd\": \"\", \"prompt\": \"anything new?\"}",
+  "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"## Teamflow update\\n\\nSignals new or changed since your last prompt:\\n\\nNEW [sg_00000000000000000000000001] DECISION \\u00b7 IN_FORCE \\u00b7 topic \\\"Rounding\\\" \\u00b7 v1 \\u00b7 by lan (agent)\\n  Round prices to 0.05\\n  Summary: All prices round to the nearest 0.05\\n  - Applies to every currency\\n  Why: Cash registers cannot give 0.01 change\"}}",
+  "compare": "json-normalised"
+}

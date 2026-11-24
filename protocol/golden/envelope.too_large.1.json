@@ -1,0 +1,14 @@
+{
+  "kind": "envelope",
+  "case": "too_large",
+  "http_status": 413,
+  "request_text": "<a body over MAX_BODY_BYTES (not kept)>",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": null,
+    "error": {
+      "code": -32600,
+      "message": "a request body has at most 8 MB"
+    }
+  }
+}

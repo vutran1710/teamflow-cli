@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "org.add_member",
+  "params": {
+    "org": "Acme",
+    "email": "new@acme.test"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "only the org's admin can do this",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "kind": "rpc",
+  "method": "auth.logout",
+  "params": {},
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {}
+  }
+}

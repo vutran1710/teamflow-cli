@@ -1,0 +1,50 @@
+{
+  "kind": "rpc",
+  "method": "task.get",
+  "params": {
+    "task": "tk_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "task": {
+        "id": "tk_00000000000000000000000001",
+        "kind": "ROLLING_UPDATE_PROJECT",
+        "project": "pj_00000000000000000000000001",
+        "input": {
+          "kind": "ROLLING_UPDATE_PROJECT",
+          "base_version": 1,
+          "from_seq": 0,
+          "to_seq": 4,
+          "note": ""
+        },
+        "state": "RUNNING",
+        "attempts": 1,
+        "result": null,
+        "error": "",
+        "requested_by": {
+          "member": "mb_00000000000000000000000001",
+          "client_session": "",
+          "actor": "MEMBER"
+        },
+        "requested_at": "2026-01-15T09:00:00Z",
+        "finished_at": null
+      },
+      "attempts": [
+        {
+          "task": "tk_00000000000000000000000001",
+          "attempt": 1,
+          "state": "RUNNING",
+          "external_id": "flow-1",
+          "deadline_at": "2026-01-15T09:00:03Z",
+          "queued_at": "2026-01-15T09:00:00Z",
+          "accepted_at": "2026-01-15T09:00:01Z",
+          "started_at": "2026-01-15T09:00:02Z",
+          "finished_at": null,
+          "error": ""
+        }
+      ]
+    }
+  }
+}

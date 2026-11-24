@@ -1,0 +1,35 @@
+{
+  "kind": "rpc",
+  "method": "signal.emit",
+  "params": {
+    "actor": "AGENT",
+    "project_version": 1,
+    "signal": {
+      "id": "sg_00000000000000000000000001",
+      "project": "pj_00000000000000000000000001",
+      "topic": "tp_00000000000000000000000001",
+      "kind": "DECISION",
+      "title": "Round prices to 0.05",
+      "body": {
+        "summary": "All prices round to the nearest 0.05",
+        "points": [
+          "Every currency"
+        ]
+      },
+      "emitted_at": "2026-01-15T09:00:00Z"
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "signal": "sg_00000000000000000000000001",
+      "accepted": true,
+      "reason": null,
+      "message": "",
+      "seq": 5,
+      "received_at": "2026-01-15T09:00:01Z",
+      "state": "IN_FORCE"
+    }
+  }
+}

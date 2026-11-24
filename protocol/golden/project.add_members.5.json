@@ -1,0 +1,22 @@
+{
+  "kind": "rpc",
+  "method": "project.add_members",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "expected_version": 7,
+    "members": [
+      "mb_00000000000000000000000001"
+    ]
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "project is at version 1, not 7",
+      "data": {
+        "reason": "STALE_PROJECT_VERSION"
+      }
+    }
+  }
+}

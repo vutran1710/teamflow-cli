@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "project.create",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "storage: Extra inputs are not permitted",
+      "data": {
+        "reason": "SCHEMA_VIOLATION"
+      }
+    }
+  }
+}

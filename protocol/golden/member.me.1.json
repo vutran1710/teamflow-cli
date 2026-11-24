@@ -1,0 +1,22 @@
+{
+  "kind": "rpc",
+  "method": "member.me",
+  "params": {},
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "id": "mb_00000000000000000000000001",
+      "org": "og_00000000000000000000000001",
+      "account": "ac_00000000000000000000000001",
+      "name": "huy",
+      "email": "huy@acme.test",
+      "alias": "",
+      "avatar": null,
+      "title": "",
+      "revoked_at": null,
+      "protocol": 1,
+      "min_client_protocol": 1
+    }
+  }
+}

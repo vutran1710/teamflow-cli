@@ -1,0 +1,36 @@
+{
+  "kind": "rpc",
+  "method": "artifact.write",
+  "params": {
+    "client_session": "s1",
+    "actor": "AGENT",
+    "signal": {
+      "id": "sg_00000000000000000000000001",
+      "project": "pj_00000000000000000000000001",
+      "topic": "tp_00000000000000000000000001",
+      "kind": "ARTIFACT",
+      "title": "Artifact spec.md",
+      "body": {
+        "type": "artifact.v1",
+        "name": "spec.md",
+        "kind": "TEXT",
+        "summary": "The spec.md",
+        "points": [
+          "One point"
+        ]
+      },
+      "emitted_at": "2026-01-15T09:00:00Z"
+    },
+    "media_type": "text/markdown",
+    "project_version": 1,
+    "content_b64": "eA=="
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32603,
+      "message": "the server could not answer this call; try again"
+    }
+  }
+}

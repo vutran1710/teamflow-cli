@@ -1,0 +1,43 @@
+{
+  "kind": "rpc",
+  "method": "signal.get",
+  "params": {
+    "signal": "sg_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "signal": {
+        "id": "sg_00000000000000000000000001",
+        "project": "pj_00000000000000000000000001",
+        "topic": "tp_00000000000000000000000001",
+        "kind": "ANSWER",
+        "title": "No: invoices keep full precision.",
+        "body": {
+          "type": "comment.v1",
+          "text": "No: invoices keep full precision.\nAccounting needs exact totals."
+        },
+        "refs": [
+          "sg_00000000000000000000000002"
+        ],
+        "supersedes": null,
+        "target": null,
+        "request_for_approval": null,
+        "about": null,
+        "emitted_at": "2026-01-15T09:00:01Z"
+      },
+      "author": {
+        "member": "mb_00000000000000000000000001",
+        "client_session": "",
+        "actor": "MEMBER"
+      },
+      "received_at": "2026-01-15T09:00:00Z",
+      "seq": 6,
+      "chain": "sg_00000000000000000000000001",
+      "chain_version": 1,
+      "state": "IN_FORCE",
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  }
+}

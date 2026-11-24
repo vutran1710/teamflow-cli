@@ -1,0 +1,13 @@
+{
+  "kind": "envelope",
+  "case": "parse_error",
+  "request_text": "{nope",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": null,
+    "error": {
+      "code": -32700,
+      "message": "body is not JSON"
+    }
+  }
+}

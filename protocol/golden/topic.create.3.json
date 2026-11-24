@@ -1,0 +1,21 @@
+{
+  "kind": "rpc",
+  "method": "topic.create",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "expected_version": 1,
+    "name": "plan",
+    "description": "clash"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "'Plan' is the built-in topic's name",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

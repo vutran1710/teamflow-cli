@@ -1,0 +1,20 @@
+{
+  "kind": "rpc",
+  "method": "account.update_profile",
+  "params": {
+    "alias": ""
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "id": "ac_00000000000000000000000001",
+      "email": "huy@acme.test",
+      "name": "Huy Nguyen",
+      "alias": "",
+      "avatar": null,
+      "created_at": "2026-01-15T09:00:00Z",
+      "disabled_at": null
+    }
+  }
+}

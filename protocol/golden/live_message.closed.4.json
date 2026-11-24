@@ -1,0 +1,8 @@
+{
+  "kind": "live",
+  "message": {
+    "type": "closed",
+    "reason": "TOO_SLOW",
+    "message": "this socket could not be sent to; reconnect from your cursor"
+  }
+}

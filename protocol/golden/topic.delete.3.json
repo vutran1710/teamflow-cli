@@ -1,0 +1,20 @@
+{
+  "kind": "rpc",
+  "method": "topic.delete",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "expected_version": 6,
+    "topic": "tp_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "project is at version 1, not 6",
+      "data": {
+        "reason": "STALE_PROJECT_VERSION"
+      }
+    }
+  }
+}

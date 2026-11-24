@@ -1,0 +1,43 @@
+{
+  "kind": "event",
+  "event": {
+    "project": "pj_00000000000000000000000001",
+    "seq": 5,
+    "at": "2026-01-15T09:00:01Z",
+    "type": "signal.accepted",
+    "signal": {
+      "signal": {
+        "id": "sg_00000000000000000000000001",
+        "project": "pj_00000000000000000000000001",
+        "topic": "tp_00000000000000000000000001",
+        "kind": "DECISION",
+        "title": "Round prices to 0.05",
+        "body": {
+          "type": "key_points.v1",
+          "summary": "All prices round to the nearest 0.05",
+          "points": [
+            "Every currency"
+          ],
+          "why": ""
+        },
+        "refs": [],
+        "supersedes": null,
+        "target": null,
+        "request_for_approval": null,
+        "about": null,
+        "emitted_at": "2026-01-15T09:00:00Z"
+      },
+      "author": {
+        "member": "mb_00000000000000000000000001",
+        "client_session": "",
+        "actor": "AGENT"
+      },
+      "received_at": "2026-01-15T09:00:01Z",
+      "seq": 5,
+      "chain": "sg_00000000000000000000000001",
+      "chain_version": 1,
+      "state": "IN_FORCE",
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.update_milestone",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": ": Value error, the milestone's id is required (a new milestone needs a whole publish)",
+      "data": {
+        "reason": "SCHEMA_VIOLATION"
+      }
+    }
+  }
+}

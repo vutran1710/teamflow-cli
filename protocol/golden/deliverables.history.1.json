@@ -1,0 +1,14 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.history",
+  "params": {
+    "project": "pj_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "versions": []
+    }
+  }
+}

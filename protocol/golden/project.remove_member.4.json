@@ -1,0 +1,20 @@
+{
+  "kind": "rpc",
+  "method": "project.remove_member",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "expected_version": 2,
+    "member": "mb_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "only the project's initiator can do this",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

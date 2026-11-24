@@ -1,0 +1,100 @@
+{
+  "kind": "rpc",
+  "method": "task.list",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "kind": "ROLLING_UPDATE_PROJECT"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "tasks": [
+        {
+          "task": {
+            "id": "tk_00000000000000000000000001",
+            "kind": "ROLLING_UPDATE_PROJECT",
+            "project": "pj_00000000000000000000000001",
+            "input": {
+              "kind": "ROLLING_UPDATE_PROJECT",
+              "base_version": 1,
+              "from_seq": 0,
+              "to_seq": 7,
+              "note": "weekly"
+            },
+            "state": "DONE",
+            "attempts": 1,
+            "result": {
+              "kind": "ROLLING_UPDATE_PROJECT",
+              "state_version": 2
+            },
+            "error": "",
+            "requested_by": {
+              "member": "mb_00000000000000000000000001",
+              "client_session": "",
+              "actor": "MEMBER"
+            },
+            "requested_at": "2026-01-15T09:00:00Z",
+            "finished_at": "2026-01-15T09:00:03Z"
+          },
+          "attempts": [
+            {
+              "task": "tk_00000000000000000000000001",
+              "attempt": 1,
+              "state": "DONE",
+              "external_id": "flow-1",
+              "deadline_at": null,
+              "queued_at": "2026-01-15T09:00:00Z",
+              "accepted_at": "2026-01-15T09:00:01Z",
+              "started_at": "2026-01-15T09:00:02Z",
+              "finished_at": "2026-01-15T09:00:03Z",
+              "error": ""
+            }
+          ]
+        },
+        {
+          "task": {
+            "id": "tk_00000000000000000000000002",
+            "kind": "ROLLING_UPDATE_PROJECT",
+            "project": "pj_00000000000000000000000001",
+            "input": {
+              "kind": "ROLLING_UPDATE_PROJECT",
+              "base_version": 2,
+              "from_seq": 7,
+              "to_seq": 13,
+              "note": ""
+            },
+            "state": "DONE",
+            "attempts": 1,
+            "result": {
+              "kind": "ROLLING_UPDATE_PROJECT",
+              "state_version": 3
+            },
+            "error": "",
+            "requested_by": {
+              "member": "mb_00000000000000000000000001",
+              "client_session": "",
+              "actor": "MEMBER"
+            },
+            "requested_at": "2026-01-15T09:00:04Z",
+            "finished_at": "2026-01-15T09:00:06Z"
+          },
+          "attempts": [
+            {
+              "task": "tk_00000000000000000000000002",
+              "attempt": 1,
+              "state": "DONE",
+              "external_id": "flow-2",
+              "deadline_at": null,
+              "queued_at": "2026-01-15T09:00:04Z",
+              "accepted_at": "2026-01-15T09:00:05Z",
+              "started_at": null,
+              "finished_at": "2026-01-15T09:00:06Z",
+              "error": ""
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

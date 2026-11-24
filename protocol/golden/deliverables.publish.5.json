@@ -1,0 +1,55 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.publish",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": null,
+    "milestones": [
+      {
+        "name": "Design",
+        "due": "2026-01-25",
+        "actions": [
+          {
+            "name": "Draft rounding rules",
+            "topic": "Rounding",
+            "due": "2026-01-20",
+            "owner": "huy"
+          },
+          {
+            "name": "List currencies",
+            "topic": "Currency",
+            "due": "2026-01-23",
+            "owner": null,
+            "after": [
+              "Implement rounding"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Ship",
+        "due": "2026-02-04",
+        "actions": [
+          {
+            "name": "Implement rounding",
+            "topic": "rounding",
+            "due": "2026-01-30",
+            "owner": "Lan",
+            "after": []
+          }
+        ]
+      }
+    ]
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "action 'List currencies' depends on 'Implement rounding', which is in a later milestone; action 'List currencies' (due 2026-01-23) is due before 'Implement rounding' (2026-01-30), which it depends on",
+      "data": {
+        "reason": "DELIVERABLES_INVALID"
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "kind": "rpc",
+  "method": "project.get",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "error": {
+      "code": -32602,
+      "message": "project: Field required",
+      "data": {
+        "reason": "SCHEMA_VIOLATION"
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "event": "Stop",
+  "case": "signed-out",
+  "layout": "none",
+  "stdin": "{\"session_id\": \"s1\", \"stop_hook_active\": false}",
+  "stdout": "",
+  "scenario": "A Teamflow home with no sign-in (no config.json): every hook answers nothing.",
+  "compare": "json-normalised"
+}

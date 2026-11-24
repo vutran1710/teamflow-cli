@@ -1,0 +1,28 @@
+{
+  "kind": "event",
+  "event": {
+    "project": "pj_00000000000000000000000001",
+    "seq": 13,
+    "at": "2026-01-15T09:00:01Z",
+    "type": "drift.resolved",
+    "drift": {
+      "id": "dr_00000000000000000000000001",
+      "project": "pj_00000000000000000000000001",
+      "kind": "PLAN_CONFLICT",
+      "summary": "Rounding contradicts the plan",
+      "signals": [
+        "sg_00000000000000000000000001"
+      ],
+      "status": "RESOLVED",
+      "found_in": 2,
+      "resolved_in": 2,
+      "resolution": "Rounding wins; the plan will follow",
+      "resolved_by": [
+        "sg_00000000000000000000000002",
+        "sg_00000000000000000000000003"
+      ],
+      "created_at": "2026-01-15T09:00:00Z",
+      "resolved_at": "2026-01-15T09:00:01Z"
+    }
+  }
+}

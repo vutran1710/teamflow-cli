@@ -1,0 +1,136 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.update_milestone",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": 1,
+    "milestone": {
+      "id": "ms_00000000000000000000000001",
+      "name": "Design",
+      "due": "2026-01-25",
+      "actions": [
+        {
+          "id": "ai_00000000000000000000000001",
+          "name": "Draft rounding rules",
+          "topic": "tp_00000000000000000000000001",
+          "due": "2026-01-21",
+          "owner": "mb_00000000000000000000000001",
+          "after": []
+        },
+        {
+          "id": "ai_00000000000000000000000002",
+          "name": "List currencies",
+          "topic": "tp_00000000000000000000000002",
+          "due": "2026-01-23",
+          "owner": null,
+          "after": [
+            "ai_00000000000000000000000001"
+          ]
+        },
+        {
+          "name": "Check rounding with finance",
+          "topic": "Rounding",
+          "due": "2026-01-24",
+          "owner": "huy",
+          "after": [
+            "Draft rounding rules"
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "deliverables": {
+        "project": "pj_00000000000000000000000001",
+        "version": 2,
+        "based_on_state": 1,
+        "published_by": "mb_00000000000000000000000001",
+        "published_at": "2026-01-15T09:00:00Z",
+        "archived": false,
+        "archive_note": "",
+        "milestones": [
+          {
+            "id": "ms_00000000000000000000000001",
+            "name": "Design",
+            "due": "2026-01-25",
+            "actions": [
+              {
+                "id": "ai_00000000000000000000000001",
+                "name": "Draft rounding rules",
+                "topic": "tp_00000000000000000000000001",
+                "due": "2026-01-21",
+                "owner": "mb_00000000000000000000000001",
+                "after": [],
+                "done_by": null,
+                "done_at": null,
+                "done_signal": null
+              },
+              {
+                "id": "ai_00000000000000000000000002",
+                "name": "List currencies",
+                "topic": "tp_00000000000000000000000002",
+                "due": "2026-01-23",
+                "owner": null,
+                "after": [
+                  "ai_00000000000000000000000001"
+                ],
+                "done_by": null,
+                "done_at": null,
+                "done_signal": null
+              },
+              {
+                "id": "ai_00000000000000000000000003",
+                "name": "Check rounding with finance",
+                "topic": "tp_00000000000000000000000001",
+                "due": "2026-01-24",
+                "owner": "mb_00000000000000000000000001",
+                "after": [
+                  "ai_00000000000000000000000001"
+                ],
+                "done_by": null,
+                "done_at": null,
+                "done_signal": null
+              }
+            ],
+            "done": 0,
+            "total": 3
+          },
+          {
+            "id": "ms_00000000000000000000000002",
+            "name": "Ship",
+            "due": "2026-02-04",
+            "actions": [
+              {
+                "id": "ai_00000000000000000000000004",
+                "name": "Implement rounding",
+                "topic": "tp_00000000000000000000000001",
+                "due": "2026-01-30",
+                "owner": "mb_00000000000000000000000002",
+                "after": [
+                  "ai_00000000000000000000000002"
+                ],
+                "done_by": null,
+                "done_at": null,
+                "done_signal": null
+              }
+            ],
+            "done": 0,
+            "total": 1
+          }
+        ],
+        "milestones_done": 0,
+        "milestones_total": 2
+      },
+      "statuses": {
+        "ai_00000000000000000000000001": "NOT_STARTED",
+        "ai_00000000000000000000000002": "NOT_STARTED",
+        "ai_00000000000000000000000003": "NOT_STARTED",
+        "ai_00000000000000000000000004": "NOT_STARTED"
+      },
+      "late": []
+    }
+  }
+}

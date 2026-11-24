@@ -1,0 +1,21 @@
+{
+  "kind": "rpc",
+  "method": "project.write_state",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": 1,
+    "plan": "stale",
+    "instruction": ""
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "the plan and instruction are at v2 now, not v1",
+      "data": {
+        "reason": "STALE_STATE_VERSION"
+      }
+    }
+  }
+}

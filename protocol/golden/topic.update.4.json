@@ -1,0 +1,21 @@
+{
+  "kind": "rpc",
+  "method": "topic.update",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "expected_version": 1,
+    "topic": "tp_00000000000000000000000001",
+    "name": "Plans"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "the built-in Plan topic cannot be changed",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

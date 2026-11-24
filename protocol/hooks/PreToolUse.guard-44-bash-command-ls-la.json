@@ -1,0 +1,13 @@
+{
+  "event": "PreToolUse",
+  "case": "guard-44-bash-command-ls-la",
+  "scenario": "A folder {root} holding {root}/people/lan/.teamflow (= {home}, the Teamflow home) with config.json and an empty client.sqlite, and {root}/work with innocent.json, a symlink to {home}/config.json. TEAMFLOW_HOME={home} and HOME={root}/people/lan. The hook runs with no store (none is needed to refuse; an allowed call answers with nothing).",
+  "layout": "guard",
+  "env": {
+    "TEAMFLOW_HOME": "{home}",
+    "HOME": "{root}/people/lan"
+  },
+  "stdin": "{\"session_id\": \"x\", \"tool_name\": \"Bash\", \"tool_input\": {\"command\": \"ls -la\"}, \"cwd\": \"{root}/work\"}",
+  "stdout": "",
+  "compare": "json-normalised"
+}

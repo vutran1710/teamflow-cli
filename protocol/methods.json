@@ -1,0 +1,317 @@
+{
+  "auth.login": {
+    "params": "Login",
+    "result": "LoginResult",
+    "who": "anyone"
+  },
+  "auth.logout": {
+    "params": "Empty",
+    "result": "Empty",
+    "who": "account"
+  },
+  "account.me": {
+    "params": "Empty",
+    "result": "AccountView",
+    "who": "account"
+  },
+  "account.projects": {
+    "params": "Empty",
+    "result": "AccountProjects",
+    "who": "account"
+  },
+  "key.fetch": {
+    "params": "KeyFetch",
+    "result": "ProjectKey",
+    "who": "account"
+  },
+  "org.members": {
+    "params": "OrgRef",
+    "result": "Members",
+    "who": "account"
+  },
+  "org.add_member": {
+    "params": "OrgAddMember",
+    "result": "Member",
+    "who": "account"
+  },
+  "org.remove_member": {
+    "params": "OrgRemoveMember",
+    "result": "Members",
+    "who": "account"
+  },
+  "org.set_title": {
+    "params": "OrgSetTitle",
+    "result": "Member",
+    "who": "account"
+  },
+  "account.update_profile": {
+    "params": "ProfileUpdate",
+    "result": "Account",
+    "who": "account"
+  },
+  "account.set_avatar": {
+    "params": "AvatarSet",
+    "result": "Account",
+    "who": "account"
+  },
+  "account.remove_avatar": {
+    "params": "Empty",
+    "result": "Account",
+    "who": "account"
+  },
+  "people.avatar": {
+    "params": "AvatarGet",
+    "result": "AvatarContent",
+    "who": "signed_in"
+  },
+  "member.me": {
+    "params": "Empty",
+    "result": "Member",
+    "who": "member"
+  },
+  "member.list": {
+    "params": "Empty",
+    "result": "Members",
+    "who": "member"
+  },
+  "project.create": {
+    "params": "ProjectCreate",
+    "result": "ProjectView",
+    "who": "account"
+  },
+  "project.get": {
+    "params": "ProjectGet",
+    "result": "ProjectView",
+    "who": "project_member"
+  },
+  "project.list": {
+    "params": "Empty",
+    "result": "ProjectList",
+    "who": "member"
+  },
+  "project.history": {
+    "params": "ProjectRef",
+    "result": "ProjectHistory",
+    "who": "project_member"
+  },
+  "project.provenance": {
+    "params": "SignalRef",
+    "result": "Provenance",
+    "who": "project_member"
+  },
+  "project.add_members": {
+    "params": "AddMembers",
+    "result": "ProjectView",
+    "who": "initiator"
+  },
+  "project.remove_member": {
+    "params": "RemoveMember",
+    "result": "ProjectView",
+    "who": "initiator"
+  },
+  "project.set_title": {
+    "params": "ProjectSetTitle",
+    "result": "ProjectView",
+    "who": "initiator"
+  },
+  "project.write_state": {
+    "params": "WriteState",
+    "result": "ProjectView",
+    "who": "initiator"
+  },
+  "topic.create": {
+    "params": "TopicCreate",
+    "result": "ProjectView",
+    "who": "initiator"
+  },
+  "topic.update": {
+    "params": "TopicUpdate",
+    "result": "ProjectView",
+    "who": "initiator"
+  },
+  "topic.delete": {
+    "params": "TopicDelete",
+    "result": "TopicDeleted",
+    "who": "initiator"
+  },
+  "project.request_update": {
+    "params": "RequestUpdate",
+    "result": "TaskView",
+    "who": "initiator"
+  },
+  "task.get": {
+    "params": "TaskRef",
+    "result": "TaskView",
+    "who": "project_member"
+  },
+  "task.list": {
+    "params": "TaskList",
+    "result": "Tasks",
+    "who": "project_member"
+  },
+  "drift.list": {
+    "params": "DriftList",
+    "result": "Drifts",
+    "who": "project_member"
+  },
+  "drift.dismiss": {
+    "params": "DriftDismiss",
+    "result": "Drifts",
+    "who": "initiator"
+  },
+  "drift.resolve": {
+    "params": "DriftResolve",
+    "result": "Drifts",
+    "who": "initiator"
+  },
+  "signal.emit": {
+    "params": "SignalEmit",
+    "result": "SignalResult",
+    "who": "project_member"
+  },
+  "signal.get": {
+    "params": "SignalRef",
+    "result": "StoredSignal",
+    "who": "project_member"
+  },
+  "signal.list": {
+    "params": "SignalList",
+    "result": "SignalPage",
+    "who": "project_member"
+  },
+  "artifact.write": {
+    "params": "ArtifactWrite",
+    "result": "ArtifactResult",
+    "who": "project_member"
+  },
+  "artifact.get": {
+    "params": "ArtifactGet",
+    "result": "ArtifactContent",
+    "who": "project_member"
+  },
+  "artifact.list": {
+    "params": "ArtifactList",
+    "result": "Artifacts",
+    "who": "project_member"
+  },
+  "artifact.archive": {
+    "params": "ArtifactArchive",
+    "result": "ArtifactSummary",
+    "who": "initiator"
+  },
+  "deliverables.get": {
+    "params": "DeliverablesGet",
+    "result": "DeliverablesView",
+    "who": "project_member"
+  },
+  "deliverables.history": {
+    "params": "DeliverablesHistory",
+    "result": "DeliverablesVersions",
+    "who": "project_member"
+  },
+  "deliverables.publish": {
+    "params": "DeliverablesPublish",
+    "result": "DeliverablesView",
+    "who": "project_member"
+  },
+  "deliverables.update_milestone": {
+    "params": "DeliverablesUpdateMilestone",
+    "result": "DeliverablesView",
+    "who": "project_member"
+  },
+  "deliverables.rename": {
+    "params": "DeliverablesRename",
+    "result": "DeliverablesView",
+    "who": "project_member"
+  },
+  "deliverables.archive": {
+    "params": "DeliverablesArchive",
+    "result": "DeliverablesView",
+    "who": "initiator"
+  },
+  "deliverables.delete": {
+    "params": "DeliverablesDelete",
+    "result": "DeliverablesView",
+    "who": "initiator"
+  },
+  "sync.poll": {
+    "params": "SyncPoll",
+    "result": "SyncBatch",
+    "who": "member"
+  },
+  "live.ticket": {
+    "params": "ProjectRef",
+    "result": "LiveTicket",
+    "who": "project_member"
+  },
+  "runner.started": {
+    "params": "RunnerStarted",
+    "result": "Empty",
+    "who": "runner"
+  },
+  "runner.complete": {
+    "params": "RunnerComplete",
+    "result": "Empty",
+    "who": "runner"
+  },
+  "admin.account_add": {
+    "params": "AdminAccountAdd",
+    "result": "AdminAccount",
+    "who": "admin"
+  },
+  "admin.account_password": {
+    "params": "AdminAccountPassword",
+    "result": "AdminAccount",
+    "who": "admin"
+  },
+  "admin.account_disable": {
+    "params": "AdminAccountRef",
+    "result": "AdminAccount",
+    "who": "admin"
+  },
+  "admin.accounts": {
+    "params": "Empty",
+    "result": "AdminAccounts",
+    "who": "admin"
+  },
+  "admin.org_add": {
+    "params": "AdminOrgAdd",
+    "result": "AdminOrg",
+    "who": "admin"
+  },
+  "admin.org_set_admin": {
+    "params": "AdminOrgSetAdmin",
+    "result": "AdminOrg",
+    "who": "admin"
+  },
+  "admin.org_add_member": {
+    "params": "AdminOrgAddMember",
+    "result": "AdminMember",
+    "who": "admin"
+  },
+  "admin.orgs": {
+    "params": "Empty",
+    "result": "AdminOrgs",
+    "who": "admin"
+  },
+  "admin.repair": {
+    "params": "Empty",
+    "result": "AdminRepaired",
+    "who": "admin"
+  },
+  "admin.export": {
+    "params": "AdminExport",
+    "result": "AdminRows",
+    "who": "admin"
+  },
+  "admin.org_import": {
+    "params": "AdminOrgImport",
+    "result": "AdminImported",
+    "who": "admin"
+  },
+  "admin.directory_import": {
+    "params": "ImportPage",
+    "result": "AdminImported",
+    "who": "admin"
+  }
+}

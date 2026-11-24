@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.archive",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "archived": true
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "only the project's initiator can do this",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

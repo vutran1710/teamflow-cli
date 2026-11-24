@@ -1,0 +1,269 @@
+{
+  "kind": "envelope",
+  "case": "batch_refused",
+  "request": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "account.me"
+    }
+  ],
+  "response": {
+    "jsonrpc": "2.0",
+    "id": null,
+    "error": {
+      "code": -32600,
+      "message": "a batch has at most 50 calls"
+    }
+  }
+}

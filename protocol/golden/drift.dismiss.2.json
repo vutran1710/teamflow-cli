@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "drift.dismiss",
+  "params": {
+    "drift": "dr_00000000000000000000000001",
+    "note": "n"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "no such drift here: a project key reaches only its own project",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

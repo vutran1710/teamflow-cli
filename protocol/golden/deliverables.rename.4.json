@@ -1,0 +1,22 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.rename",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": 2,
+    "names": {
+      "ai_00000000000000000000000001": "x"
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "no item ai_00000000000000000000000001 in the current version",
+      "data": {
+        "reason": "DELIVERABLES_INVALID"
+      }
+    }
+  }
+}

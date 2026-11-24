@@ -1,0 +1,5853 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teamflow.invalid/protocol/schema.json",
+  "title": "Teamflow protocol",
+  "x-constants": {
+    "PROTOCOL_VERSION": 1,
+    "MIN_CLIENT_PROTOCOL": 1,
+    "MAX_BATCH": 50,
+    "MAX_BODY_BYTES": 8388608,
+    "MAX_ARTIFACT_BYTES": 5242880,
+    "AVATAR_MAX_BYTES": 204800,
+    "MAX_MILESTONES": 20,
+    "MAX_ACTIONS": 200,
+    "MAX_AFTER": 10,
+    "LIVE_PATH": "/live",
+    "LIVE_TICKET_SECONDS": 60,
+    "LIVE_HELLO_SECONDS": 10,
+    "LIVE_MAX_EVENTS": 500,
+    "LIVE_MAX_SOCKETS": 8,
+    "LIVE_CLOSE_CODE": 1008,
+    "LIVE_PING": "ping",
+    "LIVE_PONG": "pong",
+    "LIVE_PING_SECONDS": 30,
+    "LIVE_PONG_SECONDS": 10,
+    "HOOK_TIMEOUT": 4.0,
+    "RPC_PATH": "/rpc",
+    "CLIENT_HEADER": "Teamflow-Client",
+    "CLIENT_HEADER_FORMAT": "<name>/<version> (protocol N)",
+    "PROTOCOL_HEADER": "Teamflow-Protocol",
+    "RPC_ERROR_CODES": {
+      "PARSE_ERROR": -32700,
+      "INVALID_REQUEST": -32600,
+      "METHOD_NOT_FOUND": -32601,
+      "INVALID_PARAMS": -32602,
+      "INTERNAL_ERROR": -32603,
+      "RULE_FAILED": -32000
+    }
+  },
+  "$defs": {
+    "AboutDocument": {
+      "additionalProperties": false,
+      "description": "The signal comments on the plan or the instruction, at one version (optionally quoting it).",
+      "properties": {
+        "document": {
+          "enum": [
+            "plan",
+            "instruction"
+          ],
+          "title": "Document",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "quote": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Quote",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "version"
+      ],
+      "title": "AboutDocument",
+      "type": "object"
+    },
+    "AboutDrift": {
+      "additionalProperties": false,
+      "description": "The signal is part of the discussion of a drift.",
+      "properties": {
+        "drift": {
+          "pattern": "^dr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Drift",
+          "type": "string"
+        }
+      },
+      "required": [
+        "drift"
+      ],
+      "title": "AboutDrift",
+      "type": "object"
+    },
+    "Account": {
+      "additionalProperties": false,
+      "description": "A person: email + password (the hash never leaves the server). Inserted by the server admin. The person\nedits their own name, alias (a nickname, not unique) and avatar: the same in every org.",
+      "properties": {
+        "id": {
+          "pattern": "^ac_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "alias": {
+          "default": "",
+          "maxLength": 40,
+          "minLength": 0,
+          "title": "Alias",
+          "type": "string"
+        },
+        "avatar": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "disabled_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Disabled At"
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "name",
+        "created_at"
+      ],
+      "title": "Account",
+      "type": "object"
+    },
+    "AccountProjects": {
+      "additionalProperties": false,
+      "description": "Every project you are a member of, across your orgs.",
+      "properties": {
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/ProjectView"
+          },
+          "title": "Projects",
+          "type": "array"
+        },
+        "orgs": {
+          "default": {},
+          "patternProperties": {
+            "^og_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "type": "string"
+            }
+          },
+          "title": "Orgs",
+          "type": "object"
+        },
+        "summaries": {
+          "default": {},
+          "patternProperties": {
+            "^pj_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "$ref": "#/$defs/ProjectSummary"
+            }
+          },
+          "title": "Summaries",
+          "type": "object"
+        }
+      },
+      "required": [
+        "projects"
+      ],
+      "title": "AccountProjects",
+      "type": "object"
+    },
+    "AccountView": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/Account"
+        },
+        "orgs": {
+          "items": {
+            "$ref": "#/$defs/OrgView"
+          },
+          "title": "Orgs",
+          "type": "array"
+        },
+        "protocol": {
+          "default": 1,
+          "title": "Protocol",
+          "type": "integer"
+        },
+        "min_client_protocol": {
+          "default": 1,
+          "title": "Min Client Protocol",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "account",
+        "orgs"
+      ],
+      "title": "AccountView",
+      "type": "object"
+    },
+    "Action": {
+      "additionalProperties": false,
+      "description": "One action of a milestone, run under a topic. Done once an agent's result says so (done_* are filled\nby the server and cleared by a revoke).",
+      "properties": {
+        "id": {
+          "pattern": "^ai_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "topic": {
+          "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Topic",
+          "type": "string"
+        },
+        "due": {
+          "format": "date",
+          "title": "Due",
+          "type": "string"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Owner"
+        },
+        "after": {
+          "default": [],
+          "items": {
+            "pattern": "^ai_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "title": "After",
+          "type": "array"
+        },
+        "done_by": {
+          "anyOf": [
+            {
+              "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Done By"
+        },
+        "done_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Done At"
+        },
+        "done_signal": {
+          "anyOf": [
+            {
+              "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Done Signal"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "topic",
+        "due",
+        "owner"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "ActionOutcome": {
+      "description": "What an agent reports about an action.",
+      "enum": [
+        "DONE",
+        "PARTIAL",
+        "BLOCKED"
+      ],
+      "title": "ActionOutcome",
+      "type": "string"
+    },
+    "ActionResultBody": {
+      "additionalProperties": false,
+      "description": "What an agent reports about a deliverables action; DONE completes it.",
+      "properties": {
+        "type": {
+          "const": "action_result.v1",
+          "default": "action_result.v1",
+          "title": "Type",
+          "type": "string"
+        },
+        "action": {
+          "pattern": "^ai_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Action",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ActionOutcome"
+        },
+        "summary": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "points": {
+          "default": [],
+          "items": {
+            "maxLength": 150,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 7,
+          "title": "Points",
+          "type": "array"
+        },
+        "blocker": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Blocker",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "outcome",
+        "summary"
+      ],
+      "title": "ActionResultBody",
+      "type": "object"
+    },
+    "ActionRevokeBody": {
+      "additionalProperties": false,
+      "description": "Withdraws an action's done: the action reads as in progress again.",
+      "properties": {
+        "type": {
+          "const": "action_revoke.v1",
+          "default": "action_revoke.v1",
+          "title": "Type",
+          "type": "string"
+        },
+        "action": {
+          "pattern": "^ai_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Action",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "reason"
+      ],
+      "title": "ActionRevokeBody",
+      "type": "object"
+    },
+    "ActionSpec": {
+      "additionalProperties": false,
+      "description": "An action as submitted. A new one has no id; an existing one keeps its id (and its results and done).",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "pattern": "^ai_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "topic": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Topic",
+          "type": "string"
+        },
+        "due": {
+          "format": "date",
+          "title": "Due",
+          "type": "string"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "after": {
+          "default": [],
+          "items": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "After",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "topic",
+        "due"
+      ],
+      "title": "ActionSpec",
+      "type": "object"
+    },
+    "ActionStatus": {
+      "description": "Inferred from an action's results; never stored.",
+      "enum": [
+        "NOT_STARTED",
+        "IN_PROGRESS",
+        "BLOCKED",
+        "DONE"
+      ],
+      "title": "ActionStatus",
+      "type": "string"
+    },
+    "Actor": {
+      "enum": [
+        "MEMBER",
+        "AGENT"
+      ],
+      "title": "Actor",
+      "type": "string"
+    },
+    "AddMembers": {
+      "additionalProperties": false,
+      "description": "Invite members of the project's org: each can then fetch their project key.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "expected_version": {
+          "minimum": 1,
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "members": {
+          "items": {
+            "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "titles": {
+          "default": {},
+          "patternProperties": {
+            "^mb_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "maxLength": 80,
+              "minLength": 0,
+              "type": "string"
+            }
+          },
+          "title": "Titles",
+          "type": "object"
+        }
+      },
+      "required": [
+        "project",
+        "expected_version",
+        "members"
+      ],
+      "title": "AddMembers",
+      "type": "object"
+    },
+    "AdminAccount": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^ac_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "disabled": {
+          "title": "Disabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "name",
+        "disabled"
+      ],
+      "title": "AdminAccount",
+      "type": "object"
+    },
+    "AdminAccountAdd": {
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "password": {
+          "maxLength": 200,
+          "minLength": 8,
+          "title": "Password",
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "name",
+        "password"
+      ],
+      "title": "AdminAccountAdd",
+      "type": "object"
+    },
+    "AdminAccountPassword": {
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "password": {
+          "maxLength": 200,
+          "minLength": 8,
+          "title": "Password",
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "password"
+      ],
+      "title": "AdminAccountPassword",
+      "type": "object"
+    },
+    "AdminAccountRef": {
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        }
+      },
+      "required": [
+        "email"
+      ],
+      "title": "AdminAccountRef",
+      "type": "object"
+    },
+    "AdminAccounts": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/AdminAccount"
+          },
+          "title": "Accounts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "accounts"
+      ],
+      "title": "AdminAccounts",
+      "type": "object"
+    },
+    "AdminExport": {
+      "additionalProperties": false,
+      "description": "admin.export: one page of one table by rowid. org=None: a table of the directory (password hashes included).",
+      "properties": {
+        "org": {
+          "anyOf": [
+            {
+              "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Org"
+        },
+        "table": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Table",
+          "type": "string"
+        },
+        "after": {
+          "default": 0,
+          "minimum": 0,
+          "title": "After",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 100,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "table"
+      ],
+      "title": "AdminExport",
+      "type": "object"
+    },
+    "AdminImported": {
+      "additionalProperties": false,
+      "properties": {
+        "rows": {
+          "default": 0,
+          "title": "Rows",
+          "type": "integer"
+        }
+      },
+      "title": "AdminImported",
+      "type": "object"
+    },
+    "AdminMember": {
+      "additionalProperties": false,
+      "properties": {
+        "member": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Member",
+          "type": "string"
+        },
+        "org": {
+          "title": "Org",
+          "type": "string"
+        },
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member",
+        "org",
+        "email"
+      ],
+      "title": "AdminMember",
+      "type": "object"
+    },
+    "AdminOrg": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "admin": {
+          "title": "Admin",
+          "type": "string"
+        },
+        "members": {
+          "title": "Members",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "admin",
+        "members"
+      ],
+      "title": "AdminOrg",
+      "type": "object"
+    },
+    "AdminOrgAdd": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "admin": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Admin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "admin"
+      ],
+      "title": "AdminOrgAdd",
+      "type": "object"
+    },
+    "AdminOrgAddMember": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Org",
+          "type": "string"
+        },
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "maxLength": 80,
+          "minLength": 0,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "org",
+        "email"
+      ],
+      "title": "AdminOrgAddMember",
+      "type": "object"
+    },
+    "AdminOrgImport": {
+      "additionalProperties": false,
+      "description": "admin.org_import: into the org's own storage (the org must be in the directory: import that first).",
+      "properties": {
+        "step": {
+          "enum": [
+            "start",
+            "rows",
+            "finish"
+          ],
+          "title": "Step",
+          "type": "string"
+        },
+        "table": {
+          "default": "",
+          "maxLength": 64,
+          "title": "Table",
+          "type": "string"
+        },
+        "rows": {
+          "default": [],
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "title": "Rows",
+          "type": "array"
+        },
+        "resume": {
+          "default": false,
+          "title": "Resume",
+          "type": "boolean"
+        },
+        "org": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Org",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "org"
+      ],
+      "title": "AdminOrgImport",
+      "type": "object"
+    },
+    "AdminOrgSetAdmin": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Org",
+          "type": "string"
+        },
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        }
+      },
+      "required": [
+        "org",
+        "email"
+      ],
+      "title": "AdminOrgSetAdmin",
+      "type": "object"
+    },
+    "AdminOrgs": {
+      "additionalProperties": false,
+      "properties": {
+        "orgs": {
+          "items": {
+            "$ref": "#/$defs/AdminOrg"
+          },
+          "title": "Orgs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "orgs"
+      ],
+      "title": "AdminOrgs",
+      "type": "object"
+    },
+    "AdminRepaired": {
+      "additionalProperties": false,
+      "properties": {
+        "orgs": {
+          "title": "Orgs",
+          "type": "integer"
+        },
+        "members": {
+          "title": "Members",
+          "type": "integer"
+        },
+        "projects": {
+          "title": "Projects",
+          "type": "integer"
+        },
+        "keys": {
+          "title": "Keys",
+          "type": "integer"
+        },
+        "failed": {
+          "items": {
+            "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "title": "Failed",
+          "type": "array"
+        }
+      },
+      "required": [
+        "orgs",
+        "members",
+        "projects",
+        "keys",
+        "failed"
+      ],
+      "title": "AdminRepaired",
+      "type": "object"
+    },
+    "AdminRows": {
+      "additionalProperties": false,
+      "properties": {
+        "rows": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Rows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "title": "AdminRows",
+      "type": "object"
+    },
+    "ApprovalRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "items": {
+            "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Approvers",
+          "type": "array"
+        },
+        "required": {
+          "minimum": 1,
+          "title": "Required",
+          "type": "integer"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approvers",
+        "required"
+      ],
+      "title": "ApprovalRequest",
+      "type": "object"
+    },
+    "ArtifactArchive": {
+      "additionalProperties": false,
+      "description": "artifact.archive: the initiator hides an artifact (archived) or brings it back.",
+      "properties": {
+        "artifact": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Artifact",
+          "type": "string"
+        },
+        "archived": {
+          "default": true,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact"
+      ],
+      "title": "ArtifactArchive",
+      "type": "object"
+    },
+    "ArtifactArchivedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "artifact.archived",
+          "default": "artifact.archived",
+          "title": "Type",
+          "type": "string"
+        },
+        "artifact": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Artifact",
+          "type": "string"
+        },
+        "archived": {
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Note",
+          "type": "string"
+        },
+        "by": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "By",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "artifact",
+        "archived",
+        "by"
+      ],
+      "title": "ArtifactArchivedEvent",
+      "type": "object"
+    },
+    "ArtifactBody": {
+      "additionalProperties": false,
+      "description": "One version of an artifact: stored (`stored`, exact) or linked (`url`, unpinned).\n\nA body with neither is a draft, taken only by artifact.write, which stores the content and\nfills `stored`; every accepted ARTIFACT signal has one or the other.",
+      "properties": {
+        "type": {
+          "const": "artifact.v1",
+          "default": "artifact.v1",
+          "title": "Type",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "summary": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "points": {
+          "default": [],
+          "items": {
+            "maxLength": 150,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 7,
+          "title": "Points",
+          "type": "array"
+        },
+        "stored": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "url": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "pattern": "^[hH][tT][tT][pP][sS]?://[^\\s/?#]+[^\\s]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "media_type": {
+          "anyOf": [
+            {
+              "maxLength": 127,
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Media Type"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "summary"
+      ],
+      "title": "ArtifactBody",
+      "type": "object"
+    },
+    "ArtifactContent": {
+      "additionalProperties": false,
+      "properties": {
+        "signal": {
+          "$ref": "#/$defs/StoredSignal"
+        },
+        "artifact": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Artifact",
+          "type": "string"
+        },
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "content_b64": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content B64"
+        }
+      },
+      "required": [
+        "signal",
+        "artifact"
+      ],
+      "title": "ArtifactContent",
+      "type": "object"
+    },
+    "ArtifactGet": {
+      "additionalProperties": false,
+      "description": "One version by its sg_ id, or an artifact by its chain id (its version now in force, else its newest).",
+      "properties": {
+        "version": {
+          "anyOf": [
+            {
+              "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "artifact": {
+          "anyOf": [
+            {
+              "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact"
+        },
+        "include_content": {
+          "default": true,
+          "title": "Include Content",
+          "type": "boolean"
+        }
+      },
+      "title": "ArtifactGet",
+      "type": "object"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "TEXT",
+        "DATA",
+        "CODE",
+        "DOCUMENT",
+        "PRESENTATION",
+        "IMAGE",
+        "AUDIO",
+        "VIDEO",
+        "LINK"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "ArtifactList": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
+        },
+        "include_archived": {
+          "default": false,
+          "title": "Include Archived",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "ArtifactList",
+      "type": "object"
+    },
+    "ArtifactResult": {
+      "additionalProperties": false,
+      "description": "artifact.write's answer: the signal's result and where the content went.",
+      "properties": {
+        "signal": {
+          "title": "Signal",
+          "type": "string"
+        },
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "message": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Message",
+          "type": "string"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seq"
+        },
+        "received_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Received At"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignalState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stored": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "signal",
+        "accepted"
+      ],
+      "title": "ArtifactResult",
+      "type": "object"
+    },
+    "ArtifactSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Artifact",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "topic": {
+          "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Topic",
+          "type": "string"
+        },
+        "latest": {
+          "$ref": "#/$defs/StoredSignal"
+        },
+        "in_force": {
+          "anyOf": [
+            {
+              "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Force"
+        },
+        "versions": {
+          "title": "Versions",
+          "type": "integer"
+        },
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact",
+        "name",
+        "kind",
+        "topic",
+        "latest",
+        "versions"
+      ],
+      "title": "ArtifactSummary",
+      "type": "object"
+    },
+    "ArtifactWrite": {
+      "additionalProperties": false,
+      "description": "artifact.write: the server stores the content (any type, at most 5 MB) in its file store and\naccepts the ARTIFACT signal (its body a draft, with neither stored nor url). Larger: publish a link.",
+      "properties": {
+        "client_session": {
+          "default": "",
+          "maxLength": 100,
+          "minLength": 0,
+          "title": "Client Session",
+          "type": "string"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "project_version": {
+          "minimum": 1,
+          "title": "Project Version",
+          "type": "integer"
+        },
+        "signal": {
+          "$ref": "#/$defs/Signal"
+        },
+        "media_type": {
+          "maxLength": 127,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "content_b64": {
+          "default": "",
+          "maxLength": 6990508,
+          "title": "Content B64",
+          "type": "string"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size"
+        }
+      },
+      "required": [
+        "actor",
+        "project_version",
+        "signal",
+        "media_type"
+      ],
+      "title": "ArtifactWrite",
+      "type": "object"
+    },
+    "Artifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSummary"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifacts"
+      ],
+      "title": "Artifacts",
+      "type": "object"
+    },
+    "AttemptState": {
+      "description": "One try of a task on the LLM server.",
+      "enum": [
+        "QUEUED",
+        "ACCEPTED",
+        "RUNNING",
+        "DONE",
+        "FAILED",
+        "TIMED_OUT"
+      ],
+      "title": "AttemptState",
+      "type": "string"
+    },
+    "Author": {
+      "additionalProperties": false,
+      "description": "Server-stamped on every write.",
+      "properties": {
+        "member": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Member",
+          "type": "string"
+        },
+        "client_session": {
+          "default": "",
+          "maxLength": 100,
+          "minLength": 0,
+          "title": "Client Session",
+          "type": "string"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        }
+      },
+      "required": [
+        "member",
+        "actor"
+      ],
+      "title": "Author",
+      "type": "object"
+    },
+    "AvatarContent": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "pattern": "^ac_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Account",
+          "type": "string"
+        },
+        "media_type": {
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ],
+          "title": "Media Type",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "content_b64": {
+          "title": "Content B64",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account",
+        "media_type",
+        "sha256",
+        "content_b64"
+      ],
+      "title": "AvatarContent",
+      "type": "object"
+    },
+    "AvatarGet": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "pattern": "^ac_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Account",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account"
+      ],
+      "title": "AvatarGet",
+      "type": "object"
+    },
+    "AvatarSet": {
+      "additionalProperties": false,
+      "description": "account.set_avatar: a small square image (the web app crops and shrinks it first).",
+      "properties": {
+        "media_type": {
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ],
+          "title": "Media Type",
+          "type": "string"
+        },
+        "content_b64": {
+          "maxLength": 546136,
+          "minLength": 1,
+          "title": "Content B64",
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "content_b64"
+      ],
+      "title": "AvatarSet",
+      "type": "object"
+    },
+    "CommentBody": {
+      "additionalProperties": false,
+      "description": "A comment typed by a person in the web app: free text; its first line is the signal's title.",
+      "properties": {
+        "type": {
+          "const": "comment.v1",
+          "default": "comment.v1",
+          "title": "Type",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "CommentBody",
+      "type": "object"
+    },
+    "Deliverables": {
+      "additionalProperties": false,
+      "description": "A project's deliverables at one version; each publish is a new version.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "based_on_state": {
+          "minimum": 1,
+          "title": "Based On State",
+          "type": "integer"
+        },
+        "published_by": {
+          "anyOf": [
+            {
+              "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Published By"
+        },
+        "published_at": {
+          "format": "date-time",
+          "title": "Published At",
+          "type": "string"
+        },
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "archive_note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Archive Note",
+          "type": "string"
+        },
+        "milestones": {
+          "items": {
+            "$ref": "#/$defs/Milestone"
+          },
+          "title": "Milestones",
+          "type": "array"
+        },
+        "milestones_done": {
+          "title": "Milestones Done",
+          "type": "integer"
+        },
+        "milestones_total": {
+          "title": "Milestones Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project",
+        "version",
+        "based_on_state",
+        "published_by",
+        "published_at",
+        "milestones",
+        "milestones_done",
+        "milestones_total"
+      ],
+      "title": "Deliverables",
+      "type": "object"
+    },
+    "DeliverablesArchive": {
+      "additionalProperties": false,
+      "description": "deliverables.archive: the initiator freezes the Deliverables (archived) or restores them as they were.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "archived": {
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "archived"
+      ],
+      "title": "DeliverablesArchive",
+      "type": "object"
+    },
+    "DeliverablesArchived": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "deliverables.archived",
+          "default": "deliverables.archived",
+          "title": "Type",
+          "type": "string"
+        },
+        "archived": {
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Note",
+          "type": "string"
+        },
+        "by": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "By",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "archived",
+        "by"
+      ],
+      "title": "DeliverablesArchived",
+      "type": "object"
+    },
+    "DeliverablesDelete": {
+      "additionalProperties": false,
+      "description": "deliverables.delete: the initiator removes the Deliverables and their history (results stay as signals).",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "DeliverablesDelete",
+      "type": "object"
+    },
+    "DeliverablesDeleted": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "deliverables.deleted",
+          "default": "deliverables.deleted",
+          "title": "Type",
+          "type": "string"
+        },
+        "by": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "By",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "by"
+      ],
+      "title": "DeliverablesDeleted",
+      "type": "object"
+    },
+    "DeliverablesGet": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "DeliverablesGet",
+      "type": "object"
+    },
+    "DeliverablesHistory": {
+      "additionalProperties": false,
+      "description": "deliverables.history: every version still kept, newest first (the current one included).",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "DeliverablesHistory",
+      "type": "object"
+    },
+    "DeliverablesPublish": {
+      "additionalProperties": false,
+      "description": "deliverables.publish: the whole structure, as a new version.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "base_version": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Version"
+        },
+        "milestones": {
+          "items": {
+            "$ref": "#/$defs/MilestoneSpec"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Milestones",
+          "type": "array"
+        }
+      },
+      "required": [
+        "project",
+        "milestones"
+      ],
+      "title": "DeliverablesPublish",
+      "type": "object"
+    },
+    "DeliverablesPublished": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "deliverables.published",
+          "default": "deliverables.published",
+          "title": "Type",
+          "type": "string"
+        },
+        "deliverables": {
+          "$ref": "#/$defs/Deliverables"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "deliverables"
+      ],
+      "title": "DeliverablesPublished",
+      "type": "object"
+    },
+    "DeliverablesRename": {
+      "additionalProperties": false,
+      "description": "deliverables.rename: new names for milestones and actions, by id.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "base_version": {
+          "minimum": 1,
+          "title": "Base Version",
+          "type": "integer"
+        },
+        "names": {
+          "additionalProperties": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxProperties": 220,
+          "minProperties": 1,
+          "title": "Names",
+          "type": "object"
+        }
+      },
+      "required": [
+        "project",
+        "base_version",
+        "names"
+      ],
+      "title": "DeliverablesRename",
+      "type": "object"
+    },
+    "DeliverablesSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "milestones_done": {
+          "title": "Milestones Done",
+          "type": "integer"
+        },
+        "milestones_total": {
+          "title": "Milestones Total",
+          "type": "integer"
+        },
+        "archived": {
+          "title": "Archived",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "version",
+        "milestones_done",
+        "milestones_total",
+        "archived"
+      ],
+      "title": "DeliverablesSummary",
+      "type": "object"
+    },
+    "DeliverablesUpdateMilestone": {
+      "additionalProperties": false,
+      "description": "deliverables.update_milestone: one milestone with all its actions; the rest is kept as it is. Moving an\naction between milestones needs a whole publish.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "base_version": {
+          "minimum": 1,
+          "title": "Base Version",
+          "type": "integer"
+        },
+        "milestone": {
+          "$ref": "#/$defs/MilestoneSpec"
+        }
+      },
+      "required": [
+        "project",
+        "base_version",
+        "milestone"
+      ],
+      "title": "DeliverablesUpdateMilestone",
+      "type": "object"
+    },
+    "DeliverablesVersion": {
+      "additionalProperties": false,
+      "description": "One version in the Deliverables' history: who published it and when (deliverables.history).",
+      "properties": {
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "published_by": {
+          "anyOf": [
+            {
+              "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Published By"
+        },
+        "published_at": {
+          "format": "date-time",
+          "title": "Published At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "published_by",
+        "published_at"
+      ],
+      "title": "DeliverablesVersion",
+      "type": "object"
+    },
+    "DeliverablesVersions": {
+      "additionalProperties": false,
+      "description": "Newest first; none when there are no Deliverables, or they are archived and you are not the initiator.",
+      "properties": {
+        "versions": {
+          "items": {
+            "$ref": "#/$defs/DeliverablesVersion"
+          },
+          "title": "Versions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "versions"
+      ],
+      "title": "DeliverablesVersions",
+      "type": "object"
+    },
+    "DeliverablesView": {
+      "additionalProperties": false,
+      "description": "The current version with each action's status (inferred from its results) and what is late.",
+      "properties": {
+        "deliverables": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Deliverables"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "statuses": {
+          "default": {},
+          "patternProperties": {
+            "^ai_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "$ref": "#/$defs/ActionStatus"
+            }
+          },
+          "title": "Statuses",
+          "type": "object"
+        },
+        "late": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Late",
+          "type": "array"
+        }
+      },
+      "required": [
+        "deliverables"
+      ],
+      "title": "DeliverablesView",
+      "type": "object"
+    },
+    "Drift": {
+      "additionalProperties": false,
+      "description": "A conflict the runner found. Deleted only by a topic cascade.",
+      "properties": {
+        "id": {
+          "pattern": "^dr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DriftKind"
+        },
+        "summary": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "signals": {
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Signals",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/DriftStatus"
+        },
+        "found_in": {
+          "minimum": 1,
+          "title": "Found In",
+          "type": "integer"
+        },
+        "resolved_in": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved In"
+        },
+        "resolution": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Resolution",
+          "type": "string"
+        },
+        "resolved_by": {
+          "default": [],
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Resolved By",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "resolved_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved At"
+        }
+      },
+      "required": [
+        "id",
+        "project",
+        "kind",
+        "summary",
+        "signals",
+        "status",
+        "found_in",
+        "created_at"
+      ],
+      "title": "Drift",
+      "type": "object"
+    },
+    "DriftDismiss": {
+      "additionalProperties": false,
+      "properties": {
+        "drift": {
+          "pattern": "^dr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Drift",
+          "type": "string"
+        },
+        "note": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "drift",
+        "note"
+      ],
+      "title": "DriftDismiss",
+      "type": "object"
+    },
+    "DriftFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/DriftKind"
+        },
+        "summary": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "signals": {
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Signals",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "summary",
+        "signals"
+      ],
+      "title": "DriftFinding",
+      "type": "object"
+    },
+    "DriftFound": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "drift.found",
+          "default": "drift.found",
+          "title": "Type",
+          "type": "string"
+        },
+        "drift": {
+          "$ref": "#/$defs/Drift"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "drift"
+      ],
+      "title": "DriftFound",
+      "type": "object"
+    },
+    "DriftKind": {
+      "enum": [
+        "SIGNAL_CONFLICT",
+        "PLAN_CONFLICT",
+        "INSTRUCTION_CONFLICT",
+        "UNANSWERED"
+      ],
+      "title": "DriftKind",
+      "type": "string"
+    },
+    "DriftList": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DriftStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "DriftList",
+      "type": "object"
+    },
+    "DriftResolution": {
+      "additionalProperties": false,
+      "properties": {
+        "drift": {
+          "pattern": "^dr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Drift",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "RESOLVED",
+            "DISMISSED"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "note": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Note",
+          "type": "string"
+        },
+        "resolved_by": {
+          "default": [],
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Resolved By",
+          "type": "array"
+        }
+      },
+      "required": [
+        "drift",
+        "outcome",
+        "note"
+      ],
+      "title": "DriftResolution",
+      "type": "object"
+    },
+    "DriftResolve": {
+      "additionalProperties": false,
+      "description": "drift.resolve: the initiator marks a drift settled by its discussion.",
+      "properties": {
+        "drift": {
+          "pattern": "^dr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Drift",
+          "type": "string"
+        },
+        "note": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Note",
+          "type": "string"
+        },
+        "resolved_by": {
+          "default": [],
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Resolved By",
+          "type": "array"
+        }
+      },
+      "required": [
+        "drift",
+        "note"
+      ],
+      "title": "DriftResolve",
+      "type": "object"
+    },
+    "DriftResolved": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "drift.resolved",
+          "default": "drift.resolved",
+          "title": "Type",
+          "type": "string"
+        },
+        "drift": {
+          "$ref": "#/$defs/Drift"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "drift"
+      ],
+      "title": "DriftResolved",
+      "type": "object"
+    },
+    "DriftStatus": {
+      "enum": [
+        "OPEN",
+        "RESOLVED",
+        "DISMISSED"
+      ],
+      "title": "DriftStatus",
+      "type": "string"
+    },
+    "Drifts": {
+      "additionalProperties": false,
+      "properties": {
+        "drifts": {
+          "items": {
+            "$ref": "#/$defs/Drift"
+          },
+          "title": "Drifts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "drifts"
+      ],
+      "title": "Drifts",
+      "type": "object"
+    },
+    "Empty": {
+      "additionalProperties": false,
+      "description": "No params, or no result.",
+      "properties": {},
+      "title": "Empty",
+      "type": "object"
+    },
+    "Event": {
+      "additionalProperties": false,
+      "description": "One row of the append-only event log; seq counts per project.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "type",
+        "payload",
+        "at"
+      ],
+      "title": "Event",
+      "type": "object"
+    },
+    "EventType": {
+      "description": "Sync event types (doc: Server API, Sync events).",
+      "enum": [
+        "signal.accepted",
+        "signal.state_changed",
+        "project.updated",
+        "topic.updated",
+        "topic.deleted",
+        "drift.found",
+        "drift.resolved",
+        "task.updated",
+        "artifact.archived",
+        "deliverables.published",
+        "deliverables.archived",
+        "deliverables.deleted"
+      ],
+      "title": "EventType",
+      "type": "string"
+    },
+    "ImportPage": {
+      "additionalProperties": false,
+      "description": "One step of restoring an export (`teamflow-server import`) into a FRESH target, refused anywhere else:\n\"start\" (the target must be empty and not being restored; `resume`: go on with a restore that did not finish),\n\"rows\" (a page of one table's exported rows, tables in the export's order; a row already there is skipped), then\n\"finish\". While a restore is open an org is not set up: it answers nothing.",
+      "properties": {
+        "step": {
+          "enum": [
+            "start",
+            "rows",
+            "finish"
+          ],
+          "title": "Step",
+          "type": "string"
+        },
+        "table": {
+          "default": "",
+          "maxLength": 64,
+          "title": "Table",
+          "type": "string"
+        },
+        "rows": {
+          "default": [],
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "title": "Rows",
+          "type": "array"
+        },
+        "resume": {
+          "default": false,
+          "title": "Resume",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "step"
+      ],
+      "title": "ImportPage",
+      "type": "object"
+    },
+    "KeyFetch": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "KeyFetch",
+      "type": "object"
+    },
+    "KeyPointsBody": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "key_points.v1",
+          "default": "key_points.v1",
+          "title": "Type",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "maxLength": 150,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 7,
+          "minItems": 1,
+          "title": "Points",
+          "type": "array"
+        },
+        "why": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Why",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "points"
+      ],
+      "title": "KeyPointsBody",
+      "type": "object"
+    },
+    "LiveClosed": {
+      "additionalProperties": false,
+      "description": "Server to client, the last message: why the socket is closing.",
+      "properties": {
+        "type": {
+          "const": "closed",
+          "default": "closed",
+          "title": "Type",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/RejectReason"
+        },
+        "message": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "LiveClosed",
+      "type": "object"
+    },
+    "LiveEvents": {
+      "additionalProperties": false,
+      "description": "Server to client: events of the socket's project in seq order; `cursor` is the last one's seq (or the\nclient's own cursor, in an empty catch-up). `reset`: only in the first answer, when the hello's cursor was beyond\nthe project's head (rule 2): no events, `cursor` is the head, and the client starts over from 0.",
+      "properties": {
+        "type": {
+          "const": "events",
+          "default": "events",
+          "title": "Type",
+          "type": "string"
+        },
+        "events": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "artifact.archived": "#/$defs/ArtifactArchivedEvent",
+                "deliverables.archived": "#/$defs/DeliverablesArchived",
+                "deliverables.deleted": "#/$defs/DeliverablesDeleted",
+                "deliverables.published": "#/$defs/DeliverablesPublished",
+                "drift.found": "#/$defs/DriftFound",
+                "drift.resolved": "#/$defs/DriftResolved",
+                "project.updated": "#/$defs/ProjectUpdated",
+                "signal.accepted": "#/$defs/SignalAccepted",
+                "signal.state_changed": "#/$defs/SignalStateChanged",
+                "task.updated": "#/$defs/TaskUpdatedEvent",
+                "topic.deleted": "#/$defs/TopicDeletedEvent",
+                "topic.updated": "#/$defs/TopicUpdatedEvent"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/SignalAccepted"
+              },
+              {
+                "$ref": "#/$defs/SignalStateChanged"
+              },
+              {
+                "$ref": "#/$defs/ProjectUpdated"
+              },
+              {
+                "$ref": "#/$defs/TopicUpdatedEvent"
+              },
+              {
+                "$ref": "#/$defs/TopicDeletedEvent"
+              },
+              {
+                "$ref": "#/$defs/DriftFound"
+              },
+              {
+                "$ref": "#/$defs/DriftResolved"
+              },
+              {
+                "$ref": "#/$defs/TaskUpdatedEvent"
+              },
+              {
+                "$ref": "#/$defs/ArtifactArchivedEvent"
+              },
+              {
+                "$ref": "#/$defs/DeliverablesPublished"
+              },
+              {
+                "$ref": "#/$defs/DeliverablesArchived"
+              },
+              {
+                "$ref": "#/$defs/DeliverablesDeleted"
+              }
+            ]
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "cursor": {
+          "minimum": 0,
+          "title": "Cursor",
+          "type": "integer"
+        },
+        "reset": {
+          "default": false,
+          "title": "Reset",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "events",
+        "cursor"
+      ],
+      "title": "LiveEvents",
+      "type": "object"
+    },
+    "LiveHello": {
+      "additionalProperties": false,
+      "description": "Client to server, the first message: the ticket, and the last seq the client has of the project.",
+      "properties": {
+        "type": {
+          "const": "hello",
+          "default": "hello",
+          "title": "Type",
+          "type": "string"
+        },
+        "ticket": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Ticket",
+          "type": "string"
+        },
+        "cursor": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cursor",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ticket"
+      ],
+      "title": "LiveHello",
+      "type": "object"
+    },
+    "LiveMessage": {
+      "discriminator": {
+        "mapping": {
+          "closed": "#/$defs/LiveClosed",
+          "events": "#/$defs/LiveEvents"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/LiveEvents"
+        },
+        {
+          "$ref": "#/$defs/LiveClosed"
+        }
+      ],
+      "title": "LiveMessage"
+    },
+    "LiveTicket": {
+      "additionalProperties": false,
+      "description": "A short-lived ticket for one project's live socket (tf_models.live): sent as the socket's first message, so\nno key ever goes in a URL. Signed by the server for (org, project, member, expires_at).",
+      "properties": {
+        "ticket": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Ticket",
+          "type": "string"
+        },
+        "org": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Org",
+          "type": "string"
+        },
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticket",
+        "org",
+        "project",
+        "expires_at"
+      ],
+      "title": "LiveTicket",
+      "type": "object"
+    },
+    "Login": {
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "password": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Password",
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "password"
+      ],
+      "title": "Login",
+      "type": "object"
+    },
+    "LoginResult": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_key": {
+          "title": "Auth Key",
+          "type": "string"
+        },
+        "account": {
+          "$ref": "#/$defs/Account"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "auth_key",
+        "account",
+        "expires_at"
+      ],
+      "title": "LoginResult",
+      "type": "object"
+    },
+    "Member": {
+      "additionalProperties": false,
+      "description": "A person in one org. Signals, projects and approvals name members, never accounts.",
+      "properties": {
+        "id": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "org": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Org",
+          "type": "string"
+        },
+        "account": {
+          "pattern": "^ac_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Account",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "alias": {
+          "default": "",
+          "maxLength": 40,
+          "minLength": 0,
+          "title": "Alias",
+          "type": "string"
+        },
+        "avatar": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar"
+        },
+        "title": {
+          "default": "",
+          "maxLength": 80,
+          "minLength": 0,
+          "title": "Title",
+          "type": "string"
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revoked At"
+        },
+        "protocol": {
+          "default": 1,
+          "title": "Protocol",
+          "type": "integer"
+        },
+        "min_client_protocol": {
+          "default": 1,
+          "title": "Min Client Protocol",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "org",
+        "account",
+        "name",
+        "email"
+      ],
+      "title": "Member",
+      "type": "object"
+    },
+    "Members": {
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "items": {
+            "$ref": "#/$defs/Member"
+          },
+          "title": "Members",
+          "type": "array"
+        }
+      },
+      "required": [
+        "members"
+      ],
+      "title": "Members",
+      "type": "object"
+    },
+    "Milestone": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^ms_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "due": {
+          "format": "date",
+          "title": "Due",
+          "type": "string"
+        },
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "done": {
+          "title": "Done",
+          "type": "integer"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "due",
+        "actions",
+        "done",
+        "total"
+      ],
+      "title": "Milestone",
+      "type": "object"
+    },
+    "MilestoneSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "pattern": "^ms_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "due": {
+          "format": "date",
+          "title": "Due",
+          "type": "string"
+        },
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/ActionSpec"
+          },
+          "minItems": 1,
+          "title": "Actions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "due",
+        "actions"
+      ],
+      "title": "MilestoneSpec",
+      "type": "object"
+    },
+    "NoticeType": {
+      "description": "Built on the client from synced events; the server stores no notices.",
+      "enum": [
+        "APPROVAL_REQUESTED",
+        "APPROVAL_DUE",
+        "CITED_SUPERSEDED",
+        "CITED_PENDING_CHANGE",
+        "PROJECT_UPDATED",
+        "DRIFT_FOUND",
+        "DRIFT_RESOLVED",
+        "SIGNAL_REJECTED",
+        "SIGNAL_SENT",
+        "TOPIC_DELETED",
+        "ACTION_DUE",
+        "ACTION_REVOKED"
+      ],
+      "title": "NoticeType",
+      "type": "string"
+    },
+    "Org": {
+      "additionalProperties": false,
+      "description": "An org: its name, its one admin, and the projects and members it holds. Its artifacts live in the\nplatform's file store, under the org's id.",
+      "properties": {
+        "id": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "admin": {
+          "pattern": "^ac_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Admin",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "admin",
+        "created_at"
+      ],
+      "title": "Org",
+      "type": "object"
+    },
+    "OrgAddMember": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Org",
+          "type": "string"
+        },
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "maxLength": 80,
+          "minLength": 0,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "org",
+        "email"
+      ],
+      "title": "OrgAddMember",
+      "type": "object"
+    },
+    "OrgRef": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Org",
+          "type": "string"
+        }
+      },
+      "required": [
+        "org"
+      ],
+      "title": "OrgRef",
+      "type": "object"
+    },
+    "OrgRemoveMember": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Org",
+          "type": "string"
+        },
+        "member": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Member",
+          "type": "string"
+        }
+      },
+      "required": [
+        "org",
+        "member"
+      ],
+      "title": "OrgRemoveMember",
+      "type": "object"
+    },
+    "OrgSetTitle": {
+      "additionalProperties": false,
+      "description": "org.set_title: the org's admin sets a member's title in the org.",
+      "properties": {
+        "org": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Org",
+          "type": "string"
+        },
+        "member": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Member",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 80,
+          "minLength": 0,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "org",
+        "member",
+        "title"
+      ],
+      "title": "OrgSetTitle",
+      "type": "object"
+    },
+    "OrgView": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "$ref": "#/$defs/Org"
+        },
+        "member": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Member",
+          "type": "string"
+        },
+        "admin": {
+          "title": "Admin",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "org",
+        "member",
+        "admin"
+      ],
+      "title": "OrgView",
+      "type": "object"
+    },
+    "Person": {
+      "additionalProperties": false,
+      "description": "How a project member is shown: their name and alias (one per person), their avatar's hash, and their titles\n(the org's, set by its admin; this project's, set by its initiator).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "alias": {
+          "default": "",
+          "title": "Alias",
+          "type": "string"
+        },
+        "account": {
+          "pattern": "^ac_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Account",
+          "type": "string"
+        },
+        "avatar": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar"
+        },
+        "org_title": {
+          "default": "",
+          "title": "Org Title",
+          "type": "string"
+        },
+        "project_title": {
+          "default": "",
+          "title": "Project Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "account"
+      ],
+      "title": "Person",
+      "type": "object"
+    },
+    "ProfileUpdate": {
+      "additionalProperties": false,
+      "description": "account.update_profile: the person's own name and alias (the same in every org).",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "alias": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "minLength": 0,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alias"
+        }
+      },
+      "title": "ProfileUpdate",
+      "type": "object"
+    },
+    "Project": {
+      "additionalProperties": false,
+      "description": "One row per project, updated in place; topics live in their own table.",
+      "properties": {
+        "id": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "org": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Org",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "initiator": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Initiator",
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "titles": {
+          "default": {},
+          "patternProperties": {
+            "^mb_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "maxLength": 80,
+              "minLength": 0,
+              "type": "string"
+            }
+          },
+          "title": "Titles",
+          "type": "object"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "org",
+        "name",
+        "initiator",
+        "members",
+        "version",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "Project",
+      "type": "object"
+    },
+    "ProjectChange": {
+      "enum": [
+        "CREATED",
+        "ROLLING_UPDATE",
+        "MANUAL"
+      ],
+      "title": "ProjectChange",
+      "type": "string"
+    },
+    "ProjectCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Org",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "topics": {
+          "items": {
+            "$ref": "#/$defs/TopicSpec"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Topics",
+          "type": "array"
+        },
+        "plan": {
+          "default": "",
+          "maxLength": 4000,
+          "minLength": 0,
+          "title": "Plan",
+          "type": "string"
+        },
+        "instruction": {
+          "default": "",
+          "maxLength": 4000,
+          "minLength": 0,
+          "title": "Instruction",
+          "type": "string"
+        },
+        "members": {
+          "default": [],
+          "items": {
+            "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Members",
+          "type": "array"
+        },
+        "titles": {
+          "default": {},
+          "patternProperties": {
+            "^mb_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "maxLength": 80,
+              "minLength": 0,
+              "type": "string"
+            }
+          },
+          "title": "Titles",
+          "type": "object"
+        }
+      },
+      "required": [
+        "org",
+        "name",
+        "topics"
+      ],
+      "title": "ProjectCreate",
+      "type": "object"
+    },
+    "ProjectGet": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "state_version": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State Version"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "ProjectGet",
+      "type": "object"
+    },
+    "ProjectHistory": {
+      "additionalProperties": false,
+      "properties": {
+        "states": {
+          "items": {
+            "$ref": "#/$defs/ProjectState"
+          },
+          "title": "States",
+          "type": "array"
+        }
+      },
+      "required": [
+        "states"
+      ],
+      "title": "ProjectHistory",
+      "type": "object"
+    },
+    "ProjectKey": {
+      "additionalProperties": false,
+      "description": "A project key, minted for the member who asks (one per machine or browser; all revoked together).",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "org": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Org",
+          "type": "string"
+        },
+        "member": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Member",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "project",
+        "org",
+        "member",
+        "name"
+      ],
+      "title": "ProjectKey",
+      "type": "object"
+    },
+    "ProjectList": {
+      "additionalProperties": false,
+      "properties": {
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/ProjectView"
+          },
+          "title": "Projects",
+          "type": "array"
+        }
+      },
+      "required": [
+        "projects"
+      ],
+      "title": "ProjectList",
+      "type": "object"
+    },
+    "ProjectRef": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "ProjectRef",
+      "type": "object"
+    },
+    "ProjectSetTitle": {
+      "additionalProperties": false,
+      "description": "project.set_title: the initiator sets a member's title in the project.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "member": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Member",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 80,
+          "minLength": 0,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "member",
+        "title"
+      ],
+      "title": "ProjectSetTitle",
+      "type": "object"
+    },
+    "ProjectState": {
+      "additionalProperties": false,
+      "description": "Rolling, append-only: every change inserts a new row; the latest is current.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "plan": {
+          "maxLength": 4000,
+          "minLength": 0,
+          "title": "Plan",
+          "type": "string"
+        },
+        "instruction": {
+          "maxLength": 4000,
+          "minLength": 0,
+          "title": "Instruction",
+          "type": "string"
+        },
+        "change": {
+          "$ref": "#/$defs/ProjectChange"
+        },
+        "based_on": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Based On"
+        },
+        "checkpoint_seq": {
+          "minimum": 0,
+          "title": "Checkpoint Seq",
+          "type": "integer"
+        },
+        "checkpoint_at": {
+          "format": "date-time",
+          "title": "Checkpoint At",
+          "type": "string"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task"
+        },
+        "led_by": {
+          "default": [],
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Led By",
+          "type": "array"
+        },
+        "author": {
+          "$ref": "#/$defs/Author"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "version",
+        "plan",
+        "instruction",
+        "change",
+        "checkpoint_seq",
+        "checkpoint_at",
+        "author",
+        "created_at"
+      ],
+      "title": "ProjectState",
+      "type": "object"
+    },
+    "ProjectSummary": {
+      "additionalProperties": false,
+      "description": "Counts for a project card, so a list of projects needs no project keys.",
+      "properties": {
+        "in_force": {
+          "default": 0,
+          "title": "In Force",
+          "type": "integer"
+        },
+        "pending": {
+          "default": 0,
+          "title": "Pending",
+          "type": "integer"
+        },
+        "rejected": {
+          "default": 0,
+          "title": "Rejected",
+          "type": "integer"
+        },
+        "open_drifts": {
+          "default": 0,
+          "title": "Open Drifts",
+          "type": "integer"
+        },
+        "last_activity": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Activity"
+        },
+        "deliverables": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliverablesSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ProjectSummary",
+      "type": "object"
+    },
+    "ProjectUpdated": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "project.updated",
+          "default": "project.updated",
+          "title": "Type",
+          "type": "string"
+        },
+        "updated": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Project"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at"
+      ],
+      "title": "ProjectUpdated",
+      "type": "object"
+    },
+    "ProjectView": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "$ref": "#/$defs/Project"
+        },
+        "topics": {
+          "items": {
+            "$ref": "#/$defs/Topic"
+          },
+          "title": "Topics",
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/ProjectState"
+        },
+        "names": {
+          "default": {},
+          "patternProperties": {
+            "^mb_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "type": "string"
+            }
+          },
+          "title": "Names",
+          "type": "object"
+        },
+        "people": {
+          "default": {},
+          "patternProperties": {
+            "^mb_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "$ref": "#/$defs/Person"
+            }
+          },
+          "title": "People",
+          "type": "object"
+        },
+        "artifact_count": {
+          "default": 0,
+          "title": "Artifact Count",
+          "type": "integer"
+        },
+        "deliverables": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliverablesSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "project",
+        "topics",
+        "state"
+      ],
+      "title": "ProjectView",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "states": {
+          "items": {
+            "$ref": "#/$defs/ProjectState"
+          },
+          "title": "States",
+          "type": "array"
+        }
+      },
+      "required": [
+        "states"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "RejectReason": {
+      "enum": [
+        "SCHEMA_VIOLATION",
+        "NOT_A_MEMBER",
+        "UNKNOWN_PROJECT",
+        "UNKNOWN_TOPIC",
+        "TOPIC_CLOSED",
+        "OFF_TOPIC",
+        "STALE_PROJECT_VERSION",
+        "STALE_STATE_VERSION",
+        "UNKNOWN_REF",
+        "CROSS_PROJECT_REF",
+        "SUPERSEDES_NOT_LATEST",
+        "SUPERSEDES_OTHER_TOPIC",
+        "OUT_OF_ORDER",
+        "CLOCK_SKEW",
+        "NOT_AN_APPROVER",
+        "UNKNOWN_APPROVER",
+        "TARGET_NOT_PENDING",
+        "ALREADY_DECIDED",
+        "DRIFT_CLOSED",
+        "ID_CONFLICT",
+        "NOT_ALLOWED",
+        "TASK_IN_PROGRESS",
+        "INVALID_TASK_OUTPUT",
+        "ARTIFACT_TOO_LARGE",
+        "CONTENT_MISMATCH",
+        "UNKNOWN_ACTION",
+        "NOT_ACTION_OWNER",
+        "DELIVERABLES_INVALID",
+        "STALE_DELIVERABLES_VERSION",
+        "DELIVERABLES_ARCHIVED",
+        "TOPIC_HAS_ACTIONS",
+        "TOO_SLOW",
+        "REPLACED",
+        "UPGRADE_REQUIRED"
+      ],
+      "title": "RejectReason",
+      "type": "string"
+    },
+    "RemoveMember": {
+      "additionalProperties": false,
+      "description": "The initiator removes a member (not themselves): their project keys are revoked.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "expected_version": {
+          "minimum": 1,
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "member": {
+          "pattern": "^mb_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Member",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "expected_version",
+        "member"
+      ],
+      "title": "RemoveMember",
+      "type": "object"
+    },
+    "RequestUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "RequestUpdate",
+      "type": "object"
+    },
+    "RollingUpdateInput": {
+      "additionalProperties": false,
+      "description": "What a ROLLING_UPDATE_PROJECT task covers.",
+      "properties": {
+        "kind": {
+          "const": "ROLLING_UPDATE_PROJECT",
+          "default": "ROLLING_UPDATE_PROJECT",
+          "title": "Kind",
+          "type": "string"
+        },
+        "base_version": {
+          "minimum": 1,
+          "title": "Base Version",
+          "type": "integer"
+        },
+        "from_seq": {
+          "minimum": 0,
+          "title": "From Seq",
+          "type": "integer"
+        },
+        "to_seq": {
+          "minimum": 0,
+          "title": "To Seq",
+          "type": "integer"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_version",
+        "from_seq",
+        "to_seq"
+      ],
+      "title": "RollingUpdateInput",
+      "type": "object"
+    },
+    "RollingUpdateOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ROLLING_UPDATE_PROJECT",
+          "default": "ROLLING_UPDATE_PROJECT",
+          "title": "Kind",
+          "type": "string"
+        },
+        "plan": {
+          "maxLength": 4000,
+          "minLength": 0,
+          "title": "Plan",
+          "type": "string"
+        },
+        "instruction": {
+          "maxLength": 4000,
+          "minLength": 0,
+          "title": "Instruction",
+          "type": "string"
+        },
+        "led_by": {
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Led By",
+          "type": "array"
+        },
+        "new_drifts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DriftFinding"
+          },
+          "maxItems": 20,
+          "title": "New Drifts",
+          "type": "array"
+        },
+        "resolved_drifts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DriftResolution"
+          },
+          "title": "Resolved Drifts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan",
+        "instruction",
+        "led_by"
+      ],
+      "title": "RollingUpdateOutput",
+      "type": "object"
+    },
+    "RollingUpdateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ROLLING_UPDATE_PROJECT",
+          "default": "ROLLING_UPDATE_PROJECT",
+          "title": "Kind",
+          "type": "string"
+        },
+        "state_version": {
+          "minimum": 1,
+          "title": "State Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state_version"
+      ],
+      "title": "RollingUpdateResult",
+      "type": "object"
+    },
+    "RpcError": {
+      "title": "RpcError",
+      "description": "A JSON-RPC error. `data.reason` is a RejectReason when the server gives one.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/RejectReason"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "RunnerComplete": {
+      "additionalProperties": false,
+      "description": "runner.complete: the attempt's output, or why it failed.",
+      "properties": {
+        "org": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Org",
+          "type": "string"
+        },
+        "task": {
+          "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Task",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "ROLLING_UPDATE_PROJECT": "#/$defs/RollingUpdateOutput"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/RollingUpdateOutput"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
+        },
+        "error": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "org",
+        "task",
+        "attempt"
+      ],
+      "title": "RunnerComplete",
+      "type": "object"
+    },
+    "RunnerStarted": {
+      "additionalProperties": false,
+      "description": "runner.started: the attempt began on the LLM server.",
+      "properties": {
+        "org": {
+          "pattern": "^og_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Org",
+          "type": "string"
+        },
+        "task": {
+          "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Task",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "org",
+        "task",
+        "attempt"
+      ],
+      "title": "RunnerStarted",
+      "type": "object"
+    },
+    "Signal": {
+      "additionalProperties": false,
+      "description": "As sent by the client; never changed once stored.",
+      "properties": {
+        "id": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "topic": {
+          "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Topic",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SignalKind"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "body": {
+          "anyOf": [
+            {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/KeyPointsBody"
+                },
+                {
+                  "$ref": "#/$defs/CommentBody"
+                },
+                {
+                  "$ref": "#/$defs/ArtifactBody"
+                },
+                {
+                  "$ref": "#/$defs/ActionResultBody"
+                },
+                {
+                  "$ref": "#/$defs/ActionRevokeBody"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body"
+        },
+        "refs": {
+          "default": [],
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Refs",
+          "type": "array"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "request_for_approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "about": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AboutDocument"
+            },
+            {
+              "$ref": "#/$defs/AboutDrift"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "About"
+        },
+        "emitted_at": {
+          "format": "date-time",
+          "title": "Emitted At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project",
+        "topic",
+        "kind",
+        "title",
+        "emitted_at"
+      ],
+      "title": "Signal",
+      "type": "object"
+    },
+    "SignalAccepted": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "signal.accepted",
+          "default": "signal.accepted",
+          "title": "Type",
+          "type": "string"
+        },
+        "signal": {
+          "$ref": "#/$defs/StoredSignal"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "signal"
+      ],
+      "title": "SignalAccepted",
+      "type": "object"
+    },
+    "SignalEmit": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session": {
+          "default": "",
+          "maxLength": 100,
+          "minLength": 0,
+          "title": "Client Session",
+          "type": "string"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "project_version": {
+          "minimum": 1,
+          "title": "Project Version",
+          "type": "integer"
+        },
+        "signal": {
+          "$ref": "#/$defs/Signal"
+        }
+      },
+      "required": [
+        "actor",
+        "project_version",
+        "signal"
+      ],
+      "title": "SignalEmit",
+      "type": "object"
+    },
+    "SignalKind": {
+      "enum": [
+        "DECISION",
+        "CONSTRAINT",
+        "REQUIREMENT",
+        "QUESTION",
+        "ANSWER",
+        "STATUS",
+        "NOTE",
+        "APPROVE",
+        "REJECT",
+        "ARTIFACT",
+        "ACTION_RESULT",
+        "ACTION_REVOKE"
+      ],
+      "title": "SignalKind",
+      "type": "string"
+    },
+    "SignalList": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignalKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignalState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "in_force_only": {
+          "default": false,
+          "title": "In Force Only",
+          "type": "boolean"
+        },
+        "query": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Query",
+          "type": "string"
+        },
+        "after": {
+          "default": 0,
+          "minimum": 0,
+          "title": "After",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 50,
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "SignalList",
+      "type": "object"
+    },
+    "SignalPage": {
+      "additionalProperties": false,
+      "properties": {
+        "signals": {
+          "items": {
+            "$ref": "#/$defs/StoredSignal"
+          },
+          "title": "Signals",
+          "type": "array"
+        },
+        "next_after": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next After"
+        }
+      },
+      "required": [
+        "signals"
+      ],
+      "title": "SignalPage",
+      "type": "object"
+    },
+    "SignalRef": {
+      "additionalProperties": false,
+      "properties": {
+        "signal": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Signal",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal"
+      ],
+      "title": "SignalRef",
+      "type": "object"
+    },
+    "SignalResult": {
+      "additionalProperties": false,
+      "description": "signal.emit always answers with one of these; a rejection is never a JSON-RPC error.",
+      "properties": {
+        "signal": {
+          "title": "Signal",
+          "type": "string"
+        },
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "message": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Message",
+          "type": "string"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seq"
+        },
+        "received_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Received At"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignalState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "signal",
+        "accepted"
+      ],
+      "title": "SignalResult",
+      "type": "object"
+    },
+    "SignalState": {
+      "enum": [
+        "IN_FORCE",
+        "PENDING",
+        "REJECTED",
+        "SUPERSEDED"
+      ],
+      "title": "SignalState",
+      "type": "string"
+    },
+    "SignalStateChanged": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "signal.state_changed",
+          "default": "signal.state_changed",
+          "title": "Type",
+          "type": "string"
+        },
+        "signal": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Signal",
+          "type": "string"
+        },
+        "old": {
+          "$ref": "#/$defs/SignalState"
+        },
+        "new": {
+          "$ref": "#/$defs/SignalState"
+        },
+        "in_force": {
+          "anyOf": [
+            {
+              "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "In Force"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "signal",
+        "old",
+        "new",
+        "in_force"
+      ],
+      "title": "SignalStateChanged",
+      "type": "object"
+    },
+    "StoredRef": {
+      "additionalProperties": false,
+      "description": "Exactly where one stored version is: its key in the file store, <org>/<project>/<artifact>/<version>.",
+      "properties": {
+        "key": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "media_type": {
+          "maxLength": 127,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "size": {
+          "maximum": 5242880,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "sha256",
+        "media_type",
+        "size"
+      ],
+      "title": "StoredRef",
+      "type": "object"
+    },
+    "StoredSignal": {
+      "additionalProperties": false,
+      "description": "A signal plus what the server added.",
+      "properties": {
+        "signal": {
+          "$ref": "#/$defs/Signal"
+        },
+        "author": {
+          "$ref": "#/$defs/Author"
+        },
+        "received_at": {
+          "format": "date-time",
+          "title": "Received At",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "chain": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Chain",
+          "type": "string"
+        },
+        "chain_version": {
+          "minimum": 1,
+          "title": "Chain Version",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/SignalState"
+        },
+        "content_hash": {
+          "title": "Content Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal",
+        "author",
+        "received_at",
+        "seq",
+        "chain",
+        "chain_version",
+        "state",
+        "content_hash"
+      ],
+      "title": "StoredSignal",
+      "type": "object"
+    },
+    "SyncBatch": {
+      "additionalProperties": false,
+      "description": "`reset` lists each project whose cursor was beyond its head (the sync.poll rule, tf_models.live): no events\nfor it, its cursor is the head, and the client drops what it holds of the project and pulls it again from 0.",
+      "properties": {
+        "events": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "artifact.archived": "#/$defs/ArtifactArchivedEvent",
+                "deliverables.archived": "#/$defs/DeliverablesArchived",
+                "deliverables.deleted": "#/$defs/DeliverablesDeleted",
+                "deliverables.published": "#/$defs/DeliverablesPublished",
+                "drift.found": "#/$defs/DriftFound",
+                "drift.resolved": "#/$defs/DriftResolved",
+                "project.updated": "#/$defs/ProjectUpdated",
+                "signal.accepted": "#/$defs/SignalAccepted",
+                "signal.state_changed": "#/$defs/SignalStateChanged",
+                "task.updated": "#/$defs/TaskUpdatedEvent",
+                "topic.deleted": "#/$defs/TopicDeletedEvent",
+                "topic.updated": "#/$defs/TopicUpdatedEvent"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/SignalAccepted"
+              },
+              {
+                "$ref": "#/$defs/SignalStateChanged"
+              },
+              {
+                "$ref": "#/$defs/ProjectUpdated"
+              },
+              {
+                "$ref": "#/$defs/TopicUpdatedEvent"
+              },
+              {
+                "$ref": "#/$defs/TopicDeletedEvent"
+              },
+              {
+                "$ref": "#/$defs/DriftFound"
+              },
+              {
+                "$ref": "#/$defs/DriftResolved"
+              },
+              {
+                "$ref": "#/$defs/TaskUpdatedEvent"
+              },
+              {
+                "$ref": "#/$defs/ArtifactArchivedEvent"
+              },
+              {
+                "$ref": "#/$defs/DeliverablesPublished"
+              },
+              {
+                "$ref": "#/$defs/DeliverablesArchived"
+              },
+              {
+                "$ref": "#/$defs/DeliverablesDeleted"
+              }
+            ]
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "cursors": {
+          "patternProperties": {
+            "^pj_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "title": "Cursors",
+          "type": "object"
+        },
+        "reset": {
+          "default": [],
+          "items": {
+            "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "title": "Reset",
+          "type": "array"
+        }
+      },
+      "required": [
+        "events",
+        "cursors"
+      ],
+      "title": "SyncBatch",
+      "type": "object"
+    },
+    "SyncEvent": {
+      "discriminator": {
+        "mapping": {
+          "artifact.archived": "#/$defs/ArtifactArchivedEvent",
+          "deliverables.archived": "#/$defs/DeliverablesArchived",
+          "deliverables.deleted": "#/$defs/DeliverablesDeleted",
+          "deliverables.published": "#/$defs/DeliverablesPublished",
+          "drift.found": "#/$defs/DriftFound",
+          "drift.resolved": "#/$defs/DriftResolved",
+          "project.updated": "#/$defs/ProjectUpdated",
+          "signal.accepted": "#/$defs/SignalAccepted",
+          "signal.state_changed": "#/$defs/SignalStateChanged",
+          "task.updated": "#/$defs/TaskUpdatedEvent",
+          "topic.deleted": "#/$defs/TopicDeletedEvent",
+          "topic.updated": "#/$defs/TopicUpdatedEvent"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SignalAccepted"
+        },
+        {
+          "$ref": "#/$defs/SignalStateChanged"
+        },
+        {
+          "$ref": "#/$defs/ProjectUpdated"
+        },
+        {
+          "$ref": "#/$defs/TopicUpdatedEvent"
+        },
+        {
+          "$ref": "#/$defs/TopicDeletedEvent"
+        },
+        {
+          "$ref": "#/$defs/DriftFound"
+        },
+        {
+          "$ref": "#/$defs/DriftResolved"
+        },
+        {
+          "$ref": "#/$defs/TaskUpdatedEvent"
+        },
+        {
+          "$ref": "#/$defs/ArtifactArchivedEvent"
+        },
+        {
+          "$ref": "#/$defs/DeliverablesPublished"
+        },
+        {
+          "$ref": "#/$defs/DeliverablesArchived"
+        },
+        {
+          "$ref": "#/$defs/DeliverablesDeleted"
+        }
+      ],
+      "title": "SyncEvent"
+    },
+    "SyncPoll": {
+      "additionalProperties": false,
+      "properties": {
+        "cursors": {
+          "default": {},
+          "patternProperties": {
+            "^pj_[0-9A-HJKMNP-TV-Z]{26}$": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "title": "Cursors",
+          "type": "object"
+        },
+        "wait": {
+          "default": 0,
+          "maximum": 30,
+          "minimum": 0,
+          "title": "Wait",
+          "type": "number"
+        }
+      },
+      "title": "SyncPoll",
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "description": "An asynchronous job the context server hands to the LLM server.",
+      "properties": {
+        "id": {
+          "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/TaskKind"
+        },
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "input": {
+          "discriminator": {
+            "mapping": {
+              "ROLLING_UPDATE_PROJECT": "#/$defs/RollingUpdateInput"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/RollingUpdateInput"
+            }
+          ],
+          "title": "Input"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskState"
+        },
+        "attempts": {
+          "default": 0,
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "ROLLING_UPDATE_PROJECT": "#/$defs/RollingUpdateResult"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/RollingUpdateResult"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        },
+        "error": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Error",
+          "type": "string"
+        },
+        "requested_by": {
+          "$ref": "#/$defs/Author"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finished At"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "project",
+        "input",
+        "state",
+        "requested_by",
+        "requested_at"
+      ],
+      "title": "Task",
+      "type": "object"
+    },
+    "TaskAttempt": {
+      "additionalProperties": false,
+      "description": "One try of a task; a retry is a new row.",
+      "properties": {
+        "task": {
+          "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Task",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/AttemptState"
+        },
+        "external_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Id"
+        },
+        "deadline_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deadline At"
+        },
+        "queued_at": {
+          "format": "date-time",
+          "title": "Queued At",
+          "type": "string"
+        },
+        "accepted_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accepted At"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finished At"
+        },
+        "error": {
+          "default": "",
+          "maxLength": 240,
+          "minLength": 0,
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task",
+        "attempt",
+        "state",
+        "queued_at"
+      ],
+      "title": "TaskAttempt",
+      "type": "object"
+    },
+    "TaskKind": {
+      "description": "Asynchronous jobs the context server hands to the LLM server. More kinds come later\n(e.g. create-action-list, draw-work-graph).",
+      "enum": [
+        "ROLLING_UPDATE_PROJECT"
+      ],
+      "title": "TaskKind",
+      "type": "string"
+    },
+    "TaskList": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "title": "TaskList",
+      "type": "object"
+    },
+    "TaskRef": {
+      "additionalProperties": false,
+      "properties": {
+        "task": {
+          "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Task",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "title": "TaskRef",
+      "type": "object"
+    },
+    "TaskState": {
+      "description": "The job as a whole.",
+      "enum": [
+        "QUEUED",
+        "RUNNING",
+        "DONE",
+        "FAILED"
+      ],
+      "title": "TaskState",
+      "type": "string"
+    },
+    "TaskUpdatedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "task.updated",
+          "default": "task.updated",
+          "title": "Type",
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "attempt": {
+          "$ref": "#/$defs/TaskAttempt"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "task",
+        "attempt"
+      ],
+      "title": "TaskUpdatedEvent",
+      "type": "object"
+    },
+    "TaskView": {
+      "additionalProperties": false,
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/TaskAttempt"
+          },
+          "title": "Attempts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task",
+        "attempts"
+      ],
+      "title": "TaskView",
+      "type": "object"
+    },
+    "Tasks": {
+      "additionalProperties": false,
+      "properties": {
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskView"
+          },
+          "title": "Tasks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "tasks"
+      ],
+      "title": "Tasks",
+      "type": "object"
+    },
+    "Topic": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "closed": {
+          "default": false,
+          "title": "Closed",
+          "type": "boolean"
+        },
+        "system": {
+          "default": false,
+          "title": "System",
+          "type": "boolean"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project",
+        "name",
+        "description",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "Topic",
+      "type": "object"
+    },
+    "TopicCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "expected_version": {
+          "minimum": 1,
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "expected_version",
+        "name",
+        "description"
+      ],
+      "title": "TopicCreate",
+      "type": "object"
+    },
+    "TopicDelete": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "expected_version": {
+          "minimum": 1,
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "topic": {
+          "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Topic",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "expected_version",
+        "topic"
+      ],
+      "title": "TopicDelete",
+      "type": "object"
+    },
+    "TopicDeleted": {
+      "additionalProperties": false,
+      "properties": {
+        "signals_deleted": {
+          "title": "Signals Deleted",
+          "type": "integer"
+        },
+        "drifts_deleted": {
+          "title": "Drifts Deleted",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "signals_deleted",
+        "drifts_deleted"
+      ],
+      "title": "TopicDeleted",
+      "type": "object"
+    },
+    "TopicDeletedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "topic.deleted",
+          "default": "topic.deleted",
+          "title": "Type",
+          "type": "string"
+        },
+        "topic": {
+          "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Topic",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 60,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "signals": {
+          "items": {
+            "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "title": "Signals",
+          "type": "array"
+        },
+        "drifts": {
+          "items": {
+            "pattern": "^dr_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "title": "Drifts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "topic",
+        "signals",
+        "drifts"
+      ],
+      "title": "TopicDeletedEvent",
+      "type": "object"
+    },
+    "TopicSpec": {
+      "additionalProperties": false,
+      "description": "A topic as given when it is created.",
+      "properties": {
+        "name": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "title": "TopicSpec",
+      "type": "object"
+    },
+    "TopicUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "expected_version": {
+          "minimum": 1,
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "topic": {
+          "pattern": "^tp_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Topic",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 60,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "closed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Closed"
+        }
+      },
+      "required": [
+        "project",
+        "expected_version",
+        "topic"
+      ],
+      "title": "TopicUpdate",
+      "type": "object"
+    },
+    "TopicUpdatedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "type": {
+          "const": "topic.updated",
+          "default": "topic.updated",
+          "title": "Type",
+          "type": "string"
+        },
+        "topic": {
+          "$ref": "#/$defs/Topic"
+        }
+      },
+      "required": [
+        "project",
+        "seq",
+        "at",
+        "topic"
+      ],
+      "title": "TopicUpdatedEvent",
+      "type": "object"
+    },
+    "UpdateSignal": {
+      "additionalProperties": false,
+      "description": "Which signals led to a state row; written once, with that row.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "state_version": {
+          "minimum": 1,
+          "title": "State Version",
+          "type": "integer"
+        },
+        "signal": {
+          "pattern": "^sg_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Signal",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "state_version",
+        "signal"
+      ],
+      "title": "UpdateSignal",
+      "type": "object"
+    },
+    "WriteState": {
+      "additionalProperties": false,
+      "description": "project.write_state: the initiator writes a new plan and instruction version by hand.",
+      "properties": {
+        "project": {
+          "pattern": "^pj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project",
+          "type": "string"
+        },
+        "base_version": {
+          "minimum": 1,
+          "title": "Base Version",
+          "type": "integer"
+        },
+        "plan": {
+          "maxLength": 4000,
+          "minLength": 0,
+          "title": "Plan",
+          "type": "string"
+        },
+        "instruction": {
+          "maxLength": 4000,
+          "minLength": 0,
+          "title": "Instruction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "base_version",
+        "plan",
+        "instruction"
+      ],
+      "title": "WriteState",
+      "type": "object"
+    }
+  }
+}

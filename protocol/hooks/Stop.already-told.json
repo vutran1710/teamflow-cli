@@ -1,0 +1,9 @@
+{
+  "event": "Stop",
+  "case": "already-told",
+  "layout": "shared",
+  "scenario": "Lan (lan@acme.test) and Huy (huy@acme.test) in org Acme, on Lan's project Pricing (topics Rounding and Currency, plan 'Ship pricing v1'); session lan-1 is Lan's and huy-1 Huy's, both shared with the project and Lan's first prompt already answered. The same request at the next turn end: nothing.",
+  "stdin": "{\"session_id\": \"huy-1\", \"stop_hook_active\": false}",
+  "stdout": "",
+  "compare": "json-normalised"
+}

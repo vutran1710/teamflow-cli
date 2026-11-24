@@ -1,0 +1,34 @@
+{
+  "kind": "rpc",
+  "method": "deliverables.update_milestone",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "base_version": 1,
+    "milestone": {
+      "id": "ms_00000000000000000000000001",
+      "name": "Design",
+      "due": "2026-01-25",
+      "actions": [
+        {
+          "id": "ai_00000000000000000000000001",
+          "name": "Draft rounding rules",
+          "topic": "tp_00000000000000000000000001",
+          "due": "2026-01-20",
+          "owner": "mb_00000000000000000000000001",
+          "after": []
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "action 'Implement rounding' depends on ai_00000000000000000000000002: no action with that id in this version",
+      "data": {
+        "reason": "DELIVERABLES_INVALID"
+      }
+    }
+  }
+}

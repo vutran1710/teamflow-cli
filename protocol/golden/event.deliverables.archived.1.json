@@ -1,0 +1,12 @@
+{
+  "kind": "event",
+  "event": {
+    "project": "pj_00000000000000000000000001",
+    "seq": 6,
+    "at": "2026-01-15T09:00:00Z",
+    "type": "deliverables.archived",
+    "archived": true,
+    "note": "",
+    "by": "mb_00000000000000000000000001"
+  }
+}

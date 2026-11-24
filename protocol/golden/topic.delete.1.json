@@ -1,0 +1,17 @@
+{
+  "kind": "rpc",
+  "method": "topic.delete",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "expected_version": 1,
+    "topic": "tp_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "signals_deleted": 2,
+      "drifts_deleted": 0
+    }
+  }
+}

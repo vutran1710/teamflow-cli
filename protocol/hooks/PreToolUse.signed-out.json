@@ -1,0 +1,9 @@
+{
+  "event": "PreToolUse",
+  "case": "signed-out",
+  "layout": "none",
+  "stdin": "{\"session_id\": \"s1\", \"tool_name\": \"Bash\", \"tool_input\": {\"command\": \"ls\"}, \"cwd\": \"\"}",
+  "stdout": "",
+  "scenario": "A Teamflow home with no sign-in (no config.json): every hook answers nothing.",
+  "compare": "json-normalised"
+}

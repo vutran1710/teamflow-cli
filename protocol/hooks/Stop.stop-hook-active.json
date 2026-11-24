@@ -1,0 +1,9 @@
+{
+  "event": "Stop",
+  "case": "stop-hook-active",
+  "layout": "shared",
+  "scenario": "Lan (lan@acme.test) and Huy (huy@acme.test) in org Acme, on Lan's project Pricing (topics Rounding and Currency, plan 'Ship pricing v1'); session lan-1 is Lan's and huy-1 Huy's, both shared with the project and Lan's first prompt already answered. A turn Claude Code continued because of the Stop hook: never blocked.",
+  "stdin": "{\"session_id\": \"huy-1\", \"stop_hook_active\": true}",
+  "stdout": "",
+  "compare": "json-normalised"
+}

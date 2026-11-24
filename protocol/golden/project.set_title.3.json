@@ -1,0 +1,115 @@
+{
+  "kind": "rpc",
+  "method": "project.set_title",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "member": "mb_00000000000000000000000001",
+    "title": ""
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "project": {
+        "id": "pj_00000000000000000000000001",
+        "org": "og_00000000000000000000000001",
+        "name": "Pricing",
+        "initiator": "mb_00000000000000000000000002",
+        "members": [
+          "mb_00000000000000000000000002",
+          "mb_00000000000000000000000001",
+          "mb_00000000000000000000000003"
+        ],
+        "titles": {
+          "mb_00000000000000000000000003": "Pricing reviewer"
+        },
+        "version": 4,
+        "created_at": "2026-01-15T09:00:00Z",
+        "updated_at": "2026-01-15T09:00:01Z"
+      },
+      "topics": [
+        {
+          "id": "tp_00000000000000000000000001",
+          "project": "pj_00000000000000000000000001",
+          "name": "Rounding",
+          "description": "How prices round",
+          "closed": false,
+          "system": false,
+          "created_at": "2026-01-15T09:00:00Z",
+          "updated_at": "2026-01-15T09:00:00Z"
+        },
+        {
+          "id": "tp_00000000000000000000000002",
+          "project": "pj_00000000000000000000000001",
+          "name": "Currency",
+          "description": "Which currencies",
+          "closed": false,
+          "system": false,
+          "created_at": "2026-01-15T09:00:00Z",
+          "updated_at": "2026-01-15T09:00:00Z"
+        },
+        {
+          "id": "tp_00000000000000000000000003",
+          "project": "pj_00000000000000000000000001",
+          "name": "Plan",
+          "description": "Comments on the plan, the instruction and drifts",
+          "closed": false,
+          "system": true,
+          "created_at": "2026-01-15T09:00:00Z",
+          "updated_at": "2026-01-15T09:00:00Z"
+        }
+      ],
+      "state": {
+        "project": "pj_00000000000000000000000001",
+        "version": 1,
+        "plan": "Ship v1",
+        "instruction": "Be brief",
+        "change": "CREATED",
+        "based_on": null,
+        "checkpoint_seq": 0,
+        "checkpoint_at": "2026-01-15T09:00:00Z",
+        "task": null,
+        "led_by": [],
+        "author": {
+          "member": "mb_00000000000000000000000002",
+          "client_session": "",
+          "actor": "AGENT"
+        },
+        "created_at": "2026-01-15T09:00:00Z"
+      },
+      "names": {
+        "mb_00000000000000000000000002": "lan",
+        "mb_00000000000000000000000001": "huy",
+        "mb_00000000000000000000000003": "mai"
+      },
+      "people": {
+        "mb_00000000000000000000000002": {
+          "name": "lan",
+          "alias": "",
+          "account": "ac_00000000000000000000000001",
+          "avatar": null,
+          "org_title": "",
+          "project_title": ""
+        },
+        "mb_00000000000000000000000001": {
+          "name": "huy",
+          "alias": "",
+          "account": "ac_00000000000000000000000002",
+          "avatar": null,
+          "org_title": "Backend engineer",
+          "project_title": ""
+        },
+        "mb_00000000000000000000000003": {
+          "name": "mai",
+          "alias": "",
+          "account": "ac_00000000000000000000000003",
+          "avatar": null,
+          "org_title": "",
+          "project_title": "Pricing reviewer"
+        }
+      },
+      "artifact_count": 0,
+      "deliverables": null
+    }
+  }
+}

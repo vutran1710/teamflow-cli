@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "drift.resolve",
+  "params": {
+    "drift": "dr_00000000000000000000000001",
+    "note": "again"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "drift is RESOLVED",
+      "data": {
+        "reason": "DRIFT_CLOSED"
+      }
+    }
+  }
+}

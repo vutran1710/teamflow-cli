@@ -1,0 +1,19 @@
+{
+  "kind": "rpc",
+  "method": "account.set_avatar",
+  "params": {
+    "media_type": "image/png",
+    "content_b64": "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4="
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "that is not a PNG image",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

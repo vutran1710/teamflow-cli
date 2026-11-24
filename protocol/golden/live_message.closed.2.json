@@ -1,0 +1,8 @@
+{
+  "kind": "live",
+  "message": {
+    "type": "closed",
+    "reason": "SCHEMA_VIOLATION",
+    "message": "the first message must be a hello: {\"ticket\": \"...\", \"cursor\": n}"
+  }
+}

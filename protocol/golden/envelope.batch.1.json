@@ -1,0 +1,42 @@
+{
+  "kind": "envelope",
+  "case": "batch",
+  "request": [
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "project.list"
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "project.list"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "signal.cite",
+      "params": {}
+    }
+  ],
+  "response": [
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "error": {
+        "code": -32000,
+        "message": "use a project key for this project",
+        "data": {
+          "reason": "NOT_ALLOWED"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "error": {
+        "code": -32601,
+        "message": "unknown method signal.cite"
+      }
+    }
+  ]
+}

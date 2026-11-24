@@ -1,0 +1,18 @@
+{
+  "kind": "rpc",
+  "method": "project.provenance",
+  "params": {
+    "signal": "sg_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "no such signal here: a project key reaches only its own project",
+      "data": {
+        "reason": "NOT_ALLOWED"
+      }
+    }
+  }
+}

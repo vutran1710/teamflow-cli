@@ -1,0 +1,61 @@
+{
+  "kind": "rpc",
+  "method": "artifact.get",
+  "params": {
+    "version": "sg_00000000000000000000000001"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "signal": {
+        "signal": {
+          "id": "sg_00000000000000000000000001",
+          "project": "pj_00000000000000000000000001",
+          "topic": "tp_00000000000000000000000001",
+          "kind": "ARTIFACT",
+          "title": "Artifact spec.md",
+          "body": {
+            "type": "artifact.v1",
+            "name": "spec.md",
+            "kind": "TEXT",
+            "summary": "The spec.md",
+            "points": [
+              "One point"
+            ],
+            "stored": {
+              "key": "og_00000000000000000000000001/pj_00000000000000000000000001/sg_00000000000000000000000001/sg_00000000000000000000000001",
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+              "media_type": "text/markdown",
+              "size": 13
+            },
+            "url": null,
+            "media_type": null,
+            "size": null,
+            "sha256": null
+          },
+          "refs": [],
+          "supersedes": null,
+          "target": null,
+          "request_for_approval": null,
+          "about": null,
+          "emitted_at": "2026-01-15T09:00:00Z"
+        },
+        "author": {
+          "member": "mb_00000000000000000000000001",
+          "client_session": "s1",
+          "actor": "AGENT"
+        },
+        "received_at": "2026-01-15T09:00:01Z",
+        "seq": 5,
+        "chain": "sg_00000000000000000000000001",
+        "chain_version": 1,
+        "state": "SUPERSEDED",
+        "content_hash": "0000000000000000000000000000000000000000000000000000000000000002"
+      },
+      "artifact": "sg_00000000000000000000000001",
+      "archived": false,
+      "content_b64": "IyBQcmljaW5nCnYxCg=="
+    }
+  }
+}

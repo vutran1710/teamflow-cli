@@ -1,0 +1,8 @@
+{
+  "kind": "live",
+  "message": {
+    "type": "closed",
+    "reason": "NOT_A_MEMBER",
+    "message": "you are no longer a member of this project"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "kind": "rpc",
+  "method": "signal.list",
+  "params": {
+    "project": "pj_00000000000000000000000001",
+    "kind": "ACTION_RESULT"
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "signals": [
+        {
+          "signal": {
+            "id": "sg_00000000000000000000000001",
+            "project": "pj_00000000000000000000000001",
+            "topic": "tp_00000000000000000000000001",
+            "kind": "ACTION_RESULT",
+            "title": "Done: Draft",
+            "body": {
+              "type": "action_result.v1",
+              "action": "ai_00000000000000000000000001",
+              "outcome": "DONE",
+              "summary": "Did the work",
+              "points": [],
+              "blocker": ""
+            },
+            "refs": [],
+            "supersedes": null,
+            "target": null,
+            "request_for_approval": null,
+            "about": null,
+            "emitted_at": "2026-01-15T09:00:00Z"
+          },
+          "author": {
+            "member": "mb_00000000000000000000000001",
+            "client_session": "",
+            "actor": "AGENT"
+          },
+          "received_at": "2026-01-15T09:00:01Z",
+          "seq": 6,
+          "chain": "sg_00000000000000000000000001",
+          "chain_version": 1,
+          "state": "IN_FORCE",
+          "content_hash": "0000000000000000000000000000000000000000000000000000000000000001"
+        }
+      ],
+      "next_after": null
+    }
+  }
+}
