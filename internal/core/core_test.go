@@ -80,13 +80,13 @@ func TestSyncOfflineKeepsTheKeyRefusedDropsIt(t *testing.T) {
 	dead := httptest.NewServer(http.NotFoundHandler())
 	dead.Close()
 	c := open(t, &config.Config{Server: dead.URL, AuthKey: "tfa_x"})
-	if err := c.St.PutProjectKey(P, "tfk_x", "mb", "og", "n", time.Now()); err != nil {
+	if err := c.St.PutProjectKey(c.binding(), P, "tfk_x", "mb", "og", "n", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if c.Sync(ctx, time.Second, "") {
 		t.Fatal("offline must say so")
 	}
-	if _, _, _, _, ok := c.St.ProjectKey(P); !ok {
+	if _, _, _, _, ok := c.St.ProjectKey(c.binding(), P); !ok {
 		t.Fatal("offline drops no key")
 	}
 
@@ -98,8 +98,42 @@ func TestSyncOfflineKeepsTheKeyRefusedDropsIt(t *testing.T) {
 	if !c.Sync(ctx, time.Second, "") {
 		t.Fatal("a refusal is not offline")
 	}
-	if _, _, _, _, ok := c.St.ProjectKey(P); ok {
+	if _, _, _, _, ok := c.St.ProjectKey(c.binding(), P); ok {
 		t.Fatal("a refused key is dropped")
+	}
+}
+
+// A process opened before a sign-in elsewhere still holds the old config: the key it fetches from the old server
+// is written under the old binding, and the process with the new config never sends it to the new server.
+func TestStaleProcessKeyNeverReachesTheNewSignIn(t *testing.T) {
+	ctx := context.Background()
+	answer := func(key string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"jsonrpc": "2.0", "id": 1, "result": {"key": "` + key + `", "project": "` + P + `", "org": "og", "member": "mb", "name": "n"}}`))
+		}))
+	}
+	a, b := answer("tfk_from_a"), answer("tfk_from_b")
+	defer a.Close()
+	defer b.Close()
+	old := open(t, &config.Config{Server: a.URL, AuthKey: "tfa_a", Email: "lan@acme.test"})
+	// Meanwhile another process signs in to server B.
+	if err := config.Save(old.Dir, config.Config{Server: b.URL, AuthKey: "tfa_b", Email: "lan@acme.test"}); err != nil {
+		t.Fatal(err)
+	}
+	// The stale process fetches a key from A after the switch.
+	if k, err := old.ProjectKey(ctx, P); err != nil || k != "tfk_from_a" {
+		t.Fatalf("stale fetch: %q %v", k, err)
+	}
+	fresh, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if ps, _ := fresh.KeyProjects(); len(ps) != 0 {
+		t.Fatalf("the new sign-in sees A's key: %v", ps)
+	}
+	if k, err := fresh.ProjectKey(ctx, P); err != nil || k != "tfk_from_b" {
+		t.Fatalf("the new sign-in fetches its own key: %q %v", k, err)
 	}
 }
 

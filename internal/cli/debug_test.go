@@ -38,7 +38,7 @@ func filled(t *testing.T) string {
 	st, err := store.Open(dir)
 	must(t, err)
 	defer st.Close()
-	must(t, st.PutProjectKey("pj_1", pkey, "mb_1", "og_1", "Pricing", t0))
+	must(t, st.PutProjectKey(store.KeyBinding{}, "pj_1", pkey, "mb_1", "og_1", "Pricing", t0))
 	_, err = st.UpsertSession("s1", "agent", 42, "/work", t0)
 	must(t, err)
 	must(t, st.Share("s1", "pj_1", "mb_1", api.KeyRef(pkey), []string{"tp_1"}))

@@ -358,7 +358,7 @@ func TestTeamProjectJoins(t *testing.T) {
 	if c := onlyCall(t, m.srv, "project.get"); c.Auth != "Bearer "+projKey {
 		t.Fatal("the project is read with its key")
 	}
-	if k, _, _, _, ok := m.store().ProjectKey(P); !ok || k != projKey {
+	if k, _, _, _, ok := m.store().ProjectKey(m.binding(), P); !ok || k != projKey {
 		t.Fatal("the project key is kept")
 	}
 	people, _ := m.store().People()
@@ -419,7 +419,7 @@ func TestLoginElsewhereForgetsProjectKeys(t *testing.T) {
 			srv2.on("auth.login", tc.answer)
 			r := m.run("pw\n", append([]string{"login", "--password-stdin"}, tc.args(m, srv2)...)...)
 			wantCode(t, r, 0)
-			_, _, _, _, ok := m.store().ProjectKey(P)
+			_, _, _, _, ok := m.store().ProjectKey(m.binding(), P)
 			s, _, _ := m.store().Session("s1")
 			if ok != tc.kept || (s.Project != "") != tc.kept {
 				t.Fatalf("key kept %v, session %q; want kept %v", ok, s.Project, tc.kept)
@@ -432,7 +432,7 @@ func TestLoginElsewhereForgetsProjectKeys(t *testing.T) {
 	srv2 := newServer(t)
 	srv2.on("auth.login", "auth.login.1")
 	m.run("pw\n", "login", "-s", srv2.URL(), "-e", "lan@acme.test", "--password-stdin")
-	if _, _, _, _, ok := m.store().ProjectKey(P); ok {
+	if _, _, _, _, ok := m.store().ProjectKey(m.binding(), P); ok {
 		t.Fatal("a key of the old server is kept")
 	}
 	noCall(t, m.srv, "auth.login")
@@ -1027,7 +1027,7 @@ func TestSyncDropsARefusedKey(t *testing.T) {
 	r := m.run("", "artifact", "list", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "NOT_A_MEMBER")
-	if _, _, _, _, ok := m.store().ProjectKey(P); ok {
+	if _, _, _, _, ok := m.store().ProjectKey(m.binding(), P); ok {
 		t.Fatal("the refused key is kept")
 	}
 }

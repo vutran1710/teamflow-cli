@@ -167,7 +167,7 @@ func TestHookReadsWhileExclusiveWriterHolds(t *testing.T) {
 	start := time.Now()
 	hook := open(t, dir)
 	got := hook.Cursors()
-	_, _, _, _, _ = hook.ProjectKey("pj_a")
+	_, _, _, _, _ = hook.ProjectKey(KeyBinding{}, "pj_a")
 	_ = hook.LiveAt("pj_a")
 	el := time.Since(start)
 	_, err = conn.ExecContext(ctx, "COMMIT")
@@ -253,15 +253,60 @@ func TestCursorsNeverGoBack(t *testing.T) {
 	}
 }
 
+// A project key belongs to the server and account that fetched it: under another config it is invisible, and a
+// stale process writing one for its old sign-in never makes it usable under the new one.
+func TestProjectKeysAreBoundToServerAndAccount(t *testing.T) {
+	dir := t.TempDir()
+	st := open(t, dir)
+	a := Binding("https://a.example/", "Lan@Acme.test")
+	b := Binding("https://b.example", "lan@acme.test")
+	if a != Binding("https://a.example", "lan@acme.test") {
+		t.Fatalf("Binding normalises: %+v", a)
+	}
+	must(t, st.PutProjectKey(a, "pj_a", "tfk_a", "mb_1", "org_1", "Alpha", t0))
+	if _, _, _, _, ok := st.ProjectKey(b, "pj_a"); ok {
+		t.Fatal("server A's key is visible under server B")
+	}
+	if ps, _ := st.KeyProjects(b); len(ps) != 0 {
+		t.Fatalf("KeyProjects under B: %v", ps)
+	}
+	other := Binding("https://a.example", "mai@acme.test")
+	if _, _, _, _, ok := st.ProjectKey(other, "pj_a"); ok {
+		t.Fatal("account lan's key is visible to account mai")
+	}
+	if k, _, _, _, ok := st.ProjectKey(a, "pj_a"); !ok || k != "tfk_a" {
+		t.Fatal("the key under its own binding")
+	}
+	// The new sign-in fetches its own key; a stale process (old config) then writes A's key again: B keeps its own.
+	must(t, st.PutProjectKey(b, "pj_a", "tfk_b", "mb_9", "org_9", "Alpha", t0.Add(time.Minute)))
+	stale := open(t, dir)
+	must(t, stale.PutProjectKey(a, "pj_a", "tfk_a", "mb_1", "org_1", "Alpha", t0.Add(2*time.Minute)))
+	if k, _, _, _, ok := st.ProjectKey(b, "pj_a"); !ok || k != "tfk_b" {
+		t.Fatalf("under B: %q %v; a stale process must not replace or reach B's key", k, ok)
+	}
+	if ps, _ := st.KeyProjects(b); len(ps) != 1 {
+		t.Fatalf("KeyProjects under B: %v", ps)
+	}
+	// Dropping B's key (NOT_A_MEMBER under B) leaves A's row alone and B sees none.
+	must(t, st.DropProjectKey(b, "pj_a"))
+	if _, _, _, _, ok := st.ProjectKey(b, "pj_a"); ok {
+		t.Fatal("dropped")
+	}
+	// A row from before bindings (empty) is never used under a real config.
+	if _, _, _, _, ok := st.ProjectKey(Binding("https://c.example", "x@y"), "pj_a"); ok {
+		t.Fatal("unbound")
+	}
+}
+
 func TestReadsOnAClosedStoreAnswerEmpty(t *testing.T) {
 	st := open(t, t.TempDir())
 	must(t, st.SetCursor("pj_a", 1))
-	must(t, st.PutProjectKey("pj_a", "tfk_secret", "mb_1", "org_1", "Alpha", t0))
+	must(t, st.PutProjectKey(KeyBinding{}, "pj_a", "tfk_secret", "mb_1", "org_1", "Alpha", t0))
 	st.Close()
 	if got := st.Cursors(); len(got) != 0 {
 		t.Fatalf("closed store cursors %v", got)
 	}
-	if _, _, _, _, ok := st.ProjectKey("pj_a"); ok {
+	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_a"); ok {
 		t.Fatal("closed store gave a key")
 	}
 	if !st.LiveAt("pj_a").IsZero() {
@@ -274,28 +319,28 @@ func TestReadsOnAClosedStoreAnswerEmpty(t *testing.T) {
 
 func TestProjectKeys(t *testing.T) {
 	st := open(t, t.TempDir())
-	if _, _, _, _, ok := st.ProjectKey("pj_a"); ok {
+	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_a"); ok {
 		t.Fatal("a key before any was put")
 	}
-	must(t, st.PutProjectKey("pj_b", "tfk_b", "mb_1", "org_1", "Beta", t0))
-	must(t, st.PutProjectKey("pj_a", "tfk_a", "mb_1", "org_1", "Alpha", t0.Add(time.Minute)))
-	must(t, st.PutProjectKey("pj_a", "tfk_a2", "mb_2", "org_1", "Alpha 2", t0.Add(2*time.Minute)))
-	key, member, org, name, ok := st.ProjectKey("pj_a")
+	must(t, st.PutProjectKey(KeyBinding{}, "pj_b", "tfk_b", "mb_1", "org_1", "Beta", t0))
+	must(t, st.PutProjectKey(KeyBinding{}, "pj_a", "tfk_a", "mb_1", "org_1", "Alpha", t0.Add(time.Minute)))
+	must(t, st.PutProjectKey(KeyBinding{}, "pj_a", "tfk_a2", "mb_2", "org_1", "Alpha 2", t0.Add(2*time.Minute)))
+	key, member, org, name, ok := st.ProjectKey(KeyBinding{}, "pj_a")
 	if !ok || key != "tfk_a2" || member != "mb_2" || org != "org_1" || name != "Alpha 2" {
 		t.Fatalf("ProjectKey = %q %q %q %q %v", key, member, org, name, ok)
 	}
-	ps, err := st.KeyProjects()
+	ps, err := st.KeyProjects(KeyBinding{})
 	must(t, err)
 	if !reflect.DeepEqual(ps, []string{"pj_b", "pj_a"}) {
 		t.Fatalf("KeyProjects %v, want in fetch order", ps)
 	}
-	must(t, st.DropProjectKey("pj_a"))
-	if _, _, _, _, ok := st.ProjectKey("pj_a"); ok {
+	must(t, st.DropProjectKey(KeyBinding{}, "pj_a"))
+	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_a"); ok {
 		t.Fatal("dropped key still there")
 	}
-	must(t, st.DropProjectKey("pj_zzz")) // dropping a missing key is fine
+	must(t, st.DropProjectKey(KeyBinding{}, "pj_zzz")) // dropping a missing key is fine
 	must(t, st.DropProjectKeys())
-	if ps, _ := st.KeyProjects(); len(ps) != 0 {
+	if ps, _ := st.KeyProjects(KeyBinding{}); len(ps) != 0 {
 		t.Fatalf("keys left %v", ps)
 	}
 }
@@ -321,7 +366,7 @@ func fillProject(t *testing.T, st *Store, p string, seq int64) {
 	must(t, st.PutDeliverables(dl, seq))
 	must(t, st.SetCursor(p, seq))
 	must(t, st.SetLiveAt(p, t0))
-	must(t, st.PutProjectKey(p, "tfk_"+p, "mb_1", "org_1", p, t0))
+	must(t, st.PutProjectKey(KeyBinding{}, p, "tfk_"+p, "mb_1", "org_1", p, t0))
 	_, err := st.UpsertSession("ss_"+p, "agent", 100, "/w", t0)
 	must(t, err)
 	must(t, st.Share("ss_"+p, p, "mb_1", "ref", nil))
@@ -364,7 +409,7 @@ func TestResetProjectDropsOnlyThatProject(t *testing.T) {
 		t.Fatal("pj_a still counts as live")
 	}
 	// the key and the sessions stay; a session's place is clamped to the server's head
-	if _, _, _, _, ok := st.ProjectKey("pj_a"); !ok {
+	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_a"); !ok {
 		t.Fatal("reset dropped the project key")
 	}
 	sa, ok, err := st.Session("ss_pj_a")
@@ -748,7 +793,7 @@ func TestPythonEraStoreIsLeftAlone(t *testing.T) {
 	if c := st.Cursors(); len(c) != 0 {
 		t.Fatalf("the Go store read the Python-era cursors: %v", c)
 	}
-	if _, _, _, _, ok := st.ProjectKey("pj_old"); ok {
+	if _, _, _, _, ok := st.ProjectKey(KeyBinding{}, "pj_old"); ok {
 		t.Fatal("the Go store read a Python-era key")
 	}
 	// the Go schema is in place: the columns and tables the Python store lacks work

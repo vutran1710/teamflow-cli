@@ -248,11 +248,14 @@ func (m *machine) store() *store.Store {
 	return st
 }
 
+// binding is the sign-in newMachine makes: the fake server, lan@acme.test.
+func (m *machine) binding() store.KeyBinding { return store.Binding(m.srv.URL(), "lan@acme.test") }
+
 // key gives the machine its project key for P (as key.fetch would have).
 func (m *machine) key() {
 	m.t.Helper()
 	st := m.store()
-	if err := st.PutProjectKey(P, projKey, M1, "og_00000000000000000000000001", "huy", time.Now()); err != nil {
+	if err := st.PutProjectKey(m.binding(), P, projKey, M1, "og_00000000000000000000000001", "huy", time.Now()); err != nil {
 		m.t.Fatal(err)
 	}
 }
@@ -636,7 +639,7 @@ func TestLogout(t *testing.T) {
 	if cfg == nil || cfg.AuthKey != "" || cfg.Server != m.srv.URL() {
 		t.Fatalf("after logout: %v", cfg)
 	}
-	if ps, _ := m.store().KeyProjects(); len(ps) != 0 {
+	if ps, _ := m.store().KeyProjects(m.binding()); len(ps) != 0 {
 		t.Fatalf("project keys kept: %v", ps)
 	}
 }
@@ -651,7 +654,7 @@ func TestLogoutOfflineStillForgetsLocally(t *testing.T) {
 	if cfg == nil || cfg.AuthKey != "" {
 		t.Fatalf("after logout: %v", cfg)
 	}
-	if ps, _ := m.store().KeyProjects(); len(ps) != 0 {
+	if ps, _ := m.store().KeyProjects(m.binding()); len(ps) != 0 {
 		t.Fatalf("project keys kept: %v", ps)
 	}
 	// Signed out already: still fine, nothing sent.
@@ -742,7 +745,7 @@ func TestNonMemberAndUnknownProject(t *testing.T) {
 				r := m.run("", args...)
 				wantCode(t, r, 1)
 				contains(t, "stderr", r.err, tc.reason)
-				if ps, _ := m.store().KeyProjects(); len(ps) != 0 {
+				if ps, _ := m.store().KeyProjects(m.binding()); len(ps) != 0 {
 					t.Fatalf("a key was kept: %v", ps)
 				}
 			})

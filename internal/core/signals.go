@@ -494,7 +494,7 @@ func (c *Core) Status(ctx context.Context, sid string, display func(string) stri
 		} else {
 			lines = append(lines, c.signedInLine(ctx))
 		}
-		keys, _ := c.St.KeyProjects()
+		keys, _ := c.KeyProjects()
 		lines = append(lines, fmt.Sprintf("project keys on this machine: %d", len(keys)))
 	}
 	if ok, msg := c.St.ProtocolOK(); !ok {

@@ -110,5 +110,14 @@ func Save(dir string, cfg Config) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(dir, FileName))
+	if err := os.Rename(tmp, filepath.Join(dir, FileName)); err != nil {
+		return err
+	}
+	// The rename is durable once the folder is synced.
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

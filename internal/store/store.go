@@ -481,41 +481,54 @@ func (o ops) SharedSessions() ([]Session, error) {
 
 // ------------------------------------------------------------------ project keys
 
-// PutProjectKey records the key this machine fetched for a project (replacing an earlier one).
-func (o ops) PutProjectKey(project, key, member, org, name string, now time.Time) error {
-	_, err := o.exec("INSERT INTO project_keys (project, key, member, org, name, fetched_at) VALUES (?, ?, ?, ?, ?, ?) "+
-		"ON CONFLICT(project) DO UPDATE SET key = excluded.key, member = excluded.member, org = excluded.org, "+
-		"name = excluded.name, fetched_at = excluded.fetched_at", project, key, member, org, name, ts(now))
+// KeyBinding is the sign-in a project key belongs to: the server and the account (email). A key is only ever
+// read under the binding it was fetched with, so a key of one server or account never reaches another, even when
+// a process still holding the old config writes one after a new sign-in.
+type KeyBinding struct{ Server, Account string }
+
+// Binding is the binding of a sign-in: the server without a trailing slash, the email lower-cased.
+func Binding(server, email string) KeyBinding {
+	return KeyBinding{Server: strings.TrimRight(strings.TrimSpace(server), "/"), Account: strings.ToLower(strings.TrimSpace(email))}
+}
+
+// PutProjectKey records the key this machine fetched for a project under b (replacing an earlier one there).
+func (o ops) PutProjectKey(b KeyBinding, project, key, member, org, name string, now time.Time) error {
+	_, err := o.exec("INSERT INTO project_keys (server, account, project, key, member, org, name, fetched_at) "+
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(server, account, project) DO UPDATE SET key = excluded.key, "+
+		"member = excluded.member, org = excluded.org, name = excluded.name, fetched_at = excluded.fetched_at",
+		b.Server, b.Account, project, key, member, org, name, ts(now))
 	return err
 }
 
-// ProjectKey is the project's key and who it acts as; ok is false when there is none (or the store can't say).
-func (o ops) ProjectKey(project string) (key, member, org, name string, ok bool) {
-	ok, err := o.one("SELECT key, member, org, name FROM project_keys WHERE project = ?", []any{project},
-		&key, &member, &org, &name)
+// ProjectKey is the project's key under b and who it acts as; ok is false when there is none (or the store
+// can't say).
+func (o ops) ProjectKey(b KeyBinding, project string) (key, member, org, name string, ok bool) {
+	ok, err := o.one("SELECT key, member, org, name FROM project_keys WHERE server = ? AND account = ? AND project = ?",
+		[]any{b.Server, b.Account, project}, &key, &member, &org, &name)
 	if err != nil || !ok {
 		return "", "", "", "", false
 	}
 	return key, member, org, name, true
 }
 
-// KeyProjects are the projects with a key, in the order they were fetched.
-func (o ops) KeyProjects() ([]string, error) {
+// KeyProjects are the projects with a key under b, in the order they were fetched.
+func (o ops) KeyProjects(b KeyBinding) ([]string, error) {
 	var out []string
-	err := o.each("SELECT project FROM project_keys ORDER BY fetched_at, project", nil, func(r *sql.Rows) error {
-		var p string
-		if err := r.Scan(&p); err != nil {
-			return err
-		}
-		out = append(out, p)
-		return nil
-	})
+	err := o.each("SELECT project FROM project_keys WHERE server = ? AND account = ? ORDER BY fetched_at, project",
+		[]any{b.Server, b.Account}, func(r *sql.Rows) error {
+			var p string
+			if err := r.Scan(&p); err != nil {
+				return err
+			}
+			out = append(out, p)
+			return nil
+		})
 	return out, err
 }
 
-// DropProjectKey forgets a project's key.
-func (o ops) DropProjectKey(project string) error {
-	_, err := o.exec("DELETE FROM project_keys WHERE project = ?", project)
+// DropProjectKey forgets a project's key under b.
+func (o ops) DropProjectKey(b KeyBinding, project string) error {
+	_, err := o.exec("DELETE FROM project_keys WHERE server = ? AND account = ? AND project = ?", b.Server, b.Account, project)
 	return err
 }
 

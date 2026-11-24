@@ -73,6 +73,17 @@ func (c *Core) client(key string, timeout time.Duration) *api.Client {
 	return api.New(c.Cfg.Server, key, timeout).WithRecorder(c.St)
 }
 
+// binding is the sign-in project keys are read and written under: the config's server and account.
+func (c *Core) binding() store.KeyBinding {
+	if c.Cfg == nil {
+		return store.KeyBinding{}
+	}
+	return store.Binding(c.Cfg.Server, c.Cfg.Email)
+}
+
+// KeyProjects are the projects this sign-in has a key for on this machine.
+func (c *Core) KeyProjects() ([]string, error) { return c.St.KeyProjects(c.binding()) }
+
 // AuthAPI is the server with the auth key: account things (your projects, fetching project keys).
 func (c *Core) AuthAPI(timeout time.Duration) (*api.Client, error) {
 	if !c.SignedIn() {
@@ -83,7 +94,7 @@ func (c *Core) AuthAPI(timeout time.Duration) (*api.Client, error) {
 
 // ProjectKey is this machine's key for the project, fetched with the auth key the first time.
 func (c *Core) ProjectKey(ctx context.Context, project string) (string, error) {
-	if key, _, _, _, ok := c.St.ProjectKey(project); ok {
+	if key, _, _, _, ok := c.St.ProjectKey(c.binding(), project); ok {
 		return key, nil
 	}
 	a, err := c.AuthAPI(DefaultTimeout)
@@ -94,7 +105,7 @@ func (c *Core) ProjectKey(ctx context.Context, project string) (string, error) {
 	if err := a.Call(ctx, "key.fetch", protocol.KeyFetch{Project: project}, &got); err != nil {
 		return "", err
 	}
-	if err := c.St.PutProjectKey(got.Project, got.Key, got.Member, got.Org, got.Name, c.Now()); err != nil {
+	if err := c.St.PutProjectKey(c.binding(), got.Project, got.Key, got.Member, got.Org, got.Name, c.Now()); err != nil {
 		return "", err
 	}
 	return got.Key, nil
@@ -119,7 +130,7 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 	projects := []string{only}
 	if only == "" {
 		var err error
-		if projects, err = c.St.KeyProjects(); err != nil {
+		if projects, err = c.KeyProjects(); err != nil {
 			return true
 		}
 	}
@@ -127,7 +138,7 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 		return true
 	}
 	for _, pid := range projects {
-		key, _, _, _, ok := c.St.ProjectKey(pid)
+		key, _, _, _, ok := c.St.ProjectKey(c.binding(), pid)
 		if !ok {
 			continue
 		}
@@ -139,7 +150,7 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 		var ae *api.APIError
 		if errors.As(err, &ae) && (ae.Reason == string(protocol.RejectReasonNotAllowed) ||
 			ae.Reason == string(protocol.RejectReasonNotAMember)) {
-			_ = c.St.DropProjectKey(pid)
+			_ = c.St.DropProjectKey(c.binding(), pid)
 		}
 	}
 	return true
