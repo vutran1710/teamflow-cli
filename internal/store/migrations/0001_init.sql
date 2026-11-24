@@ -1,4 +1,5 @@
--- Teamflow client store (one per home folder; the server never sees it). Mode 0600, in a 0700 folder.
+-- Teamflow client store, store.db (one per home folder; the server never sees it). Mode 0600, in a 0700 folder.
+-- The Go client starts fresh: a Python-era client.sqlite beside it is never opened.
 
 -- Replica of the member's projects, as synced.
 CREATE TABLE projects (
@@ -137,16 +138,6 @@ CREATE TABLE project_keys (
     org        TEXT NOT NULL,
     name       TEXT NOT NULL,
     fetched_at TEXT NOT NULL
-);
-
--- A verdict the person typed themselves (their own prompt); a verdict command needs a fresh one and uses it up.
-CREATE TABLE verdict_grants (
-    n          INTEGER PRIMARY KEY,
-    session    TEXT NOT NULL,
-    signal     TEXT NOT NULL,
-    kind       TEXT NOT NULL,              -- APPROVE or REJECT
-    created_at TEXT NOT NULL,
-    used_at    TEXT
 );
 
 -- A project's Deliverables as last published: version, archived, the seq of the event that carried it, the JSON.

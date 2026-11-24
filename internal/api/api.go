@@ -77,7 +77,12 @@ type Client struct {
 
 // New makes a client for server with key ("" for none); each request gives up after timeout.
 func New(server, key string, timeout time.Duration) *Client {
-	c := &Client{key: key, http: &http.Client{Timeout: timeout}}
+	c := &Client{key: key, http: &http.Client{
+		Timeout: timeout,
+		// Never follow a redirect: Go would replay the POST with its Authorization header, even to plain http. A 3xx
+		// is answered as an error instead.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}
 	c.url, c.err = rpcURL(server)
 	return c
 }
@@ -113,29 +118,23 @@ func mask(key string) string {
 func rpcURL(server string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(server))
 	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("%w: %q is not a server URL", ErrInsecure, redactURL(server))
+		return "", fmt.Errorf("%w: the server is not a URL like https://teamflow.example.com", ErrInsecure)
 	}
+	u.User = nil // a key pasted as userinfo is never sent nor shown
+	u.RawQuery, u.Fragment = "", ""
 	switch strings.ToLower(u.Scheme) {
 	case "https":
 	case "http":
 		if !loopback(u.Hostname()) {
-			return "", fmt.Errorf("%w: refusing %s", ErrInsecure, u.Redacted())
+			return "", fmt.Errorf("%w: refusing %s", ErrInsecure, u.String())
 		}
 	default:
-		return "", fmt.Errorf("%w: refusing %s", ErrInsecure, u.Redacted())
+		return "", fmt.Errorf("%w: refusing %s", ErrInsecure, u.String())
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
-	u.User, u.RawQuery, u.Fragment = nil, "", ""
 	u.Path = strings.TrimRight(u.Path, "/") + protocol.RPCPath
 	u.RawPath = ""
 	return u.String(), nil
-}
-
-func redactURL(s string) string {
-	if u, err := url.Parse(s); err == nil {
-		return u.Redacted()
-	}
-	return "(unreadable)"
 }
 
 func loopback(host string) bool {
@@ -180,16 +179,21 @@ func decode(raw json.RawMessage, out any) error {
 	return nil
 }
 
-func request(id int, method string, params any) (protocol.Request, error) {
+// request is one call's JSON.
+func request(id int, method string, params any) ([]byte, error) {
 	var raw json.RawMessage = json.RawMessage("{}")
 	if params != nil {
 		b, err := json.Marshal(params)
 		if err != nil {
-			return protocol.Request{}, fmt.Errorf("%s params: %w", method, err)
+			return nil, fmt.Errorf("%s params: %w", method, err)
 		}
 		raw = b
 	}
-	return protocol.Request{JSONRPC: protocol.JSONRPCVersion, ID: json.RawMessage(strconv.Itoa(id)), Method: method, Params: raw}, nil
+	return json.Marshal(protocol.Request{JSONRPC: protocol.JSONRPCVersion, ID: json.RawMessage(strconv.Itoa(id)), Method: method, Params: raw})
+}
+
+func tooLarge(n int) error {
+	return fmt.Errorf("%w: %d bytes, the limit is %d", ErrTooLarge, n, protocol.MaxBodyBytes)
 }
 
 // Call makes one call and decodes its result into out (nil: ignore the result).
@@ -200,6 +204,9 @@ func (c *Client) Call(ctx context.Context, method string, params any, out any) e
 	req, err := request(1, method, params)
 	if err != nil {
 		return err
+	}
+	if len(req) > protocol.MaxBodyBytes {
+		return tooLarge(len(req))
 	}
 	body, server, err := c.post(ctx, req)
 	if err != nil {
@@ -222,70 +229,111 @@ func (c *Client) Call(ctx context.Context, method string, params any, out any) e
 	return decode(resp.Result, out)
 }
 
-// Batch sends calls as JSON-RPC batches of at most MaxBatch; one Result per call, in order. On a failure that ends
-// the batch (offline, a refused answer) it returns the results so far and the error.
+// Batch sends calls as JSON-RPC batches of at most MaxBatch calls and MaxBodyBytes; one Result per call, in
+// order. A call too large on its own gets ErrTooLarge and is not sent. On a failure that ends the batch (offline,
+// a refused answer) it returns the results of the calls before the failed request, and the error.
 func (c *Client) Batch(ctx context.Context, calls []Call) ([]Result, error) {
 	if c.err != nil {
 		return nil, c.err
 	}
-	out := make([]Result, 0, len(calls))
-	for start := 0; start < len(calls); start += protocol.MaxBatch {
-		chunk := calls[start:min(start+protocol.MaxBatch, len(calls))]
-		reqs := make([]protocol.Request, len(chunk))
-		for i, call := range chunk {
-			r, err := request(i, call.Method, call.Params)
-			if err != nil {
-				return out, err
-			}
-			reqs[i] = r
-		}
-		body, server, err := c.post(ctx, reqs)
+	// Measure each call with the widest id a chunk uses, so a chunk packed by these sizes fits.
+	wideID := protocol.MaxBatch - 1
+	sizes := make([]int, len(calls))
+	for i, call := range calls {
+		b, err := request(wideID, call.Method, call.Params)
 		if err != nil {
-			return out, err
+			return nil, err
 		}
-		var resps []protocol.Response
-		if err := json.Unmarshal(body, &resps); err != nil {
-			var one protocol.Response // the server could not read the batch at all
-			if json.Unmarshal(body, &one) == nil && one.Error != nil {
-				ae := c.rpcError(one.Error)
-				c.record(server, isUpgrade(ae))
-				return out, ae
+		sizes[i] = len(b)
+	}
+	out := make([]Result, len(calls))
+	for start := 0; start < len(calls); {
+		// pack calls[start:end] (skipping those too large alone) under both limits
+		var chunk []int
+		size := 2 // [ ]
+		end := start
+		for ; end < len(calls) && len(chunk) < protocol.MaxBatch; end++ {
+			if sizes[end]+2 > protocol.MaxBodyBytes {
+				out[end] = Result{Err: tooLarge(sizes[end] + 2)}
+				continue
 			}
-			return out, &APIError{Code: protocol.CodeParseError, Message: "the server's answer is not JSON-RPC"}
+			add := sizes[end]
+			if len(chunk) > 0 {
+				add++ // ,
+			}
+			if size+add > protocol.MaxBodyBytes {
+				break
+			}
+			size += add
+			chunk = append(chunk, end)
 		}
-		upgrade := false
-		byID := make(map[string]protocol.Response, len(resps))
-		for _, r := range resps {
-			byID[string(bytes.TrimSpace(r.ID))] = r
-		}
-		for i := range chunk {
-			r, ok := byID[strconv.Itoa(i)]
-			switch {
-			case !ok:
-				out = append(out, Result{Err: &APIError{Code: protocol.CodeInternalError, Message: "no answer for this call"}})
-			case r.Error == nil && r.Result == nil:
-				out = append(out, Result{Err: &APIError{Code: protocol.CodeParseError, Message: "the server's answer is not JSON-RPC"}})
-			case r.Error != nil:
-				ae := c.rpcError(r.Error)
-				upgrade = upgrade || isUpgrade(ae)
-				out = append(out, Result{Err: ae})
-			default:
-				out = append(out, Result{Result: r.Result})
+		if len(chunk) > 0 {
+			if err := c.batchChunk(ctx, calls, chunk, out); err != nil {
+				return out[:start], err
 			}
 		}
-		c.record(server, upgrade)
+		start = end
 	}
 	return out, nil
 }
 
-// post sends one body and returns the answer's body (nil for 204) and the server's protocol (0: not said).
-func (c *Client) post(ctx context.Context, payload any) ([]byte, int, error) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, 0, err
+// batchChunk sends the calls at idx in one request and puts their results into out.
+func (c *Client) batchChunk(ctx context.Context, calls []Call, idx []int, out []Result) error {
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	for i, at := range idx {
+		b, err := request(i, calls[at].Method, calls[at].Params)
+		if err != nil {
+			return err
+		}
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(b)
 	}
+	buf.WriteByte(']')
+	body, server, err := c.post(ctx, buf.Bytes())
+	if err != nil {
+		return err
+	}
+	var resps []protocol.Response
+	if err := json.Unmarshal(body, &resps); err != nil {
+		var one protocol.Response // the server could not read the batch at all
+		if json.Unmarshal(body, &one) == nil && one.Error != nil {
+			ae := c.rpcError(one.Error)
+			c.record(server, isUpgrade(ae))
+			return ae
+		}
+		return &APIError{Code: protocol.CodeParseError, Message: "the server's answer is not JSON-RPC"}
+	}
+	upgrade := false
+	byID := make(map[string]protocol.Response, len(resps))
+	for _, r := range resps {
+		byID[string(bytes.TrimSpace(r.ID))] = r
+	}
+	for i, at := range idx {
+		r, ok := byID[strconv.Itoa(i)]
+		switch {
+		case !ok:
+			out[at] = Result{Err: &APIError{Code: protocol.CodeInternalError, Message: "no answer for this call"}}
+		case r.Error == nil && r.Result == nil:
+			out[at] = Result{Err: &APIError{Code: protocol.CodeParseError, Message: "the server's answer is not JSON-RPC"}}
+		case r.Error != nil:
+			ae := c.rpcError(r.Error)
+			upgrade = upgrade || isUpgrade(ae)
+			out[at] = Result{Err: ae}
+		default:
+			out[at] = Result{Result: r.Result}
+		}
+	}
+	c.record(server, upgrade)
+	return nil
+}
+
+// post sends one body and returns the answer's body (nil for 204) and the server's protocol (0: not said).
+func (c *Client) post(ctx context.Context, body []byte) ([]byte, int, error) {
 	if len(body) > protocol.MaxBodyBytes {
-		return nil, 0, fmt.Errorf("%w: %d bytes, the limit is %d", ErrTooLarge, len(body), protocol.MaxBodyBytes)
+		return nil, 0, tooLarge(len(body))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
 	if err != nil {

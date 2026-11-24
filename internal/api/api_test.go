@@ -447,3 +447,139 @@ func TestJSONThatIsNotJSONRPCIsAnError(t *testing.T) {
 		t.Fatal("a non-JSON-RPC answer was taken as a batch result")
 	}
 }
+
+// A redirect is never followed: Go would replay a POST with its Authorization header, even to plain http.
+func TestRedirectToHTTPNeverFollowed(t *testing.T) {
+	var plainHits int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&plainHits, 1)
+	}))
+	defer plain.Close()
+	for _, code := range []int{301, 302, 307, 308} {
+		tls := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, plain.URL+protocol.RPCPath, code)
+		}))
+		c := New(tls.URL, testKey, time.Second)
+		c.http.Transport = tls.Client().Transport
+		err := c.Call(context.Background(), "member.me", nil, nil)
+		_, berr := c.Batch(context.Background(), []Call{{Method: "member.me"}})
+		tls.Close()
+		var ae *APIError
+		if !errors.As(err, &ae) || ae.Code != code || berr == nil {
+			t.Fatalf("%d: want an APIError with the status, got %v / %v", code, err, berr)
+		}
+	}
+	if n := atomic.LoadInt32(&plainHits); n != 0 {
+		t.Fatalf("%d requests followed the redirect to plain http", n)
+	}
+}
+
+func TestRefusalNeverShowsURLUserinfo(t *testing.T) {
+	for _, server := range []string{
+		"http://" + testKey + "@teamflow.example.com",
+		"http://user:" + testKey + "@teamflow.example.com",
+		"ftp://" + testKey + "@teamflow.example.com",
+		testKey + "@teamflow.example.com",
+		"https://" + testKey + "@[::1",
+	} {
+		c := New(server, testKey, time.Second)
+		c.http.Transport = refuseTransport{t}
+		err := c.Call(context.Background(), "member.me", nil, nil)
+		if err == nil {
+			t.Fatalf("%q accepted", server)
+		}
+		if strings.Contains(err.Error(), testKey[4:]) {
+			t.Fatalf("the key is in the refusal: %v", err)
+		}
+	}
+	// https with userinfo is accepted, but the userinfo is never sent or shown
+	c := New("https://"+testKey+"@teamflow.example.com", "", time.Second)
+	if strings.Contains(c.url, testKey[4:]) || strings.Contains(c.String(), testKey[4:]) {
+		t.Fatalf("userinfo kept: %s", c)
+	}
+}
+
+// Batches are packed under MaxBodyBytes as well as MaxBatch; a call too large on its own fails alone.
+func TestBatchPacksUnderMaxBodyBytes(t *testing.T) {
+	var sizes []int
+	var mu sync.Mutex
+	srv, requests := rpcServer(t, func(_ string, params json.RawMessage) (any, *protocol.RpcError) {
+		var p struct{ N int }
+		_ = json.Unmarshal(params, &p)
+		return map[string]int{"n": p.N}, nil
+	})
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sizes = append(sizes, int(r.ContentLength))
+		mu.Unlock()
+		inner.ServeHTTP(w, r)
+	})
+	third := strings.Repeat("x", protocol.MaxBodyBytes/3)
+	calls := []Call{
+		{Method: "signal.emit", Params: map[string]any{"n": 0, "pad": third}},
+		{Method: "signal.emit", Params: map[string]any{"n": 1, "pad": third}},
+		{Method: "signal.emit", Params: map[string]any{"n": 2, "pad": strings.Repeat("x", protocol.MaxBodyBytes)}}, // alone too large
+		{Method: "signal.emit", Params: map[string]any{"n": 3, "pad": third}},
+		{Method: "signal.emit", Params: map[string]any{"n": 4}},
+	}
+	res, err := New(srv.URL, testKey, 10*time.Second).Batch(context.Background(), calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != len(calls) {
+		t.Fatalf("%d results", len(res))
+	}
+	if !errors.Is(res[2].Err, ErrTooLarge) {
+		t.Fatalf("the oversized call: %v", res[2].Err)
+	}
+	for _, i := range []int{0, 1, 3, 4} {
+		var out struct{ N int }
+		if err := res[i].Decode(&out); err != nil || out.N != i {
+			t.Fatalf("result %d = %+v, %v", i, out, err)
+		}
+	}
+	if n := atomic.LoadInt32(requests); n != 2 {
+		t.Fatalf("%d requests, want 2 (two thirds fit, the third third and the small one in the next)", n)
+	}
+	for _, s := range sizes {
+		if s > protocol.MaxBodyBytes {
+			t.Fatalf("a request of %d bytes, over %d", s, protocol.MaxBodyBytes)
+		}
+	}
+}
+
+func TestBatchOfOnlyOversizedCallsSendsNothing(t *testing.T) {
+	c := New("https://teamflow.example.com", testKey, time.Second)
+	c.http.Transport = refuseTransport{t}
+	res, err := c.Batch(context.Background(), []Call{{Method: "artifact.write", Params: map[string]string{"c": strings.Repeat("x", protocol.MaxBodyBytes)}}})
+	if err != nil || len(res) != 1 || !errors.Is(res[0].Err, ErrTooLarge) {
+		t.Fatalf("got %v, %v", res, err)
+	}
+}
+
+func TestBatchOfflineMidwayReturnsResultsSoFar(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&n, 1) > 1 {
+			w.WriteHeader(503)
+			return
+		}
+		var reqs []protocol.Request
+		_ = json.NewDecoder(r.Body).Decode(&reqs)
+		outs := make([]protocol.Response, len(reqs))
+		for i, q := range reqs {
+			outs[i] = protocol.Response{JSONRPC: "2.0", ID: q.ID, Result: json.RawMessage(`{}`)}
+		}
+		_ = json.NewEncoder(w).Encode(outs)
+	}))
+	defer srv.Close()
+	calls := make([]Call, protocol.MaxBatch+5)
+	for i := range calls {
+		calls[i] = Call{Method: "signal.emit"}
+	}
+	res, err := New(srv.URL, testKey, time.Second).Batch(context.Background(), calls)
+	if !errors.Is(err, ErrOffline) || len(res) != protocol.MaxBatch {
+		t.Fatalf("got %d results, %v; want the first chunk's %d and ErrOffline", len(res), err, protocol.MaxBatch)
+	}
+}

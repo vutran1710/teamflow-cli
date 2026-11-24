@@ -1,4 +1,4 @@
-// Package store is the client store: one SQLite file (client.sqlite, mode 0600) in the home folder with the
+// Package store is the client store: one SQLite file (store.db, mode 0600) in the home folder with the
 // replica of the member's projects, the spool, the agent sessions, citations, notices and the project keys.
 // All of the client's SQL lives here; the schema is in migrations/NNNN_*.sql.
 //
@@ -29,7 +29,19 @@ import (
 )
 
 // FileName is the store's file in the home folder.
-const FileName = "client.sqlite"
+const FileName = "store.db"
+
+// LegacyFileName is the Python client's store. The Go client starts fresh: it never opens or changes that file.
+const LegacyFileName = "client.sqlite"
+
+// migrationsTable records the applied migrations (its own name, apart from the Python client's schema_migrations).
+const migrationsTable = "go_schema_migrations"
+
+// LegacyPresent says whether dir holds a store left by the Python client (teamflow status mentions it).
+func LegacyPresent(dir string) bool {
+	fi, err := os.Stat(filepath.Join(dir, LegacyFileName))
+	return err == nil && fi.Mode().IsRegular()
+}
 
 // BusyTimeout is how long a writer waits for another writer before ErrBusy.
 const BusyTimeout = 250 * time.Millisecond
@@ -76,7 +88,7 @@ type Store struct {
 // Tx is a write transaction (BEGIN IMMEDIATE): every accessor of Store, all committed together.
 type Tx struct{ ops }
 
-// Open opens (creating and migrating when needed) the store in dir: dir/client.sqlite, WAL, busy_timeout 250 ms,
+// Open opens (creating and migrating when needed) the store in dir: dir/store.db, WAL, busy_timeout 250 ms,
 // mode 0600. The folder is created 0700 when missing; guarding an existing one is home.Ensure's job.
 func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -189,7 +201,7 @@ func (s *Store) migrate() error {
 		return nil
 	}
 	return s.Tx(func(tx *Tx) error {
-		if _, err := tx.exec("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"); err != nil {
+		if _, err := tx.exec("CREATE TABLE IF NOT EXISTS " + migrationsTable + " (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"); err != nil {
 			return err
 		}
 		done, err := tx.applied() // another process may have migrated meanwhile
@@ -207,7 +219,7 @@ func (s *Store) migrate() error {
 			if _, err := tx.exec(string(body)); err != nil {
 				return fmt.Errorf("migration %s: %w", n, err)
 			}
-			if _, err := tx.exec("INSERT INTO schema_migrations VALUES (?, ?)", n, ts(time.Now())); err != nil {
+			if _, err := tx.exec("INSERT INTO "+migrationsTable+" VALUES (?, ?)", n, ts(time.Now())); err != nil {
 				return err
 			}
 		}
@@ -218,13 +230,13 @@ func (s *Store) migrate() error {
 func (o ops) applied() (map[string]bool, error) {
 	done := map[string]bool{}
 	var n int
-	if err := o.row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").Scan(&n); err != nil {
+	if err := o.row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", migrationsTable).Scan(&n); err != nil {
 		return nil, wrap(err)
 	}
 	if n == 0 {
 		return done, nil
 	}
-	err := o.each("SELECT name FROM schema_migrations", nil, func(r *sql.Rows) error {
+	err := o.each("SELECT name FROM "+migrationsTable, nil, func(r *sql.Rows) error {
 		var name string
 		if err := r.Scan(&name); err != nil {
 			return err
@@ -457,7 +469,7 @@ func (o ops) SharedSessions() ([]Session, error) {
 	return o.sessionsWhere("project IS NOT NULL ORDER BY started_at, id")
 }
 
-// ------------------------------------------------------------------ project keys and verdict grants
+// ------------------------------------------------------------------ project keys
 
 // PutProjectKey records the key this machine fetched for a project (replacing an earlier one).
 func (o ops) PutProjectKey(project, key, member, org, name string, now time.Time) error {
@@ -501,27 +513,6 @@ func (o ops) DropProjectKey(project string) error {
 func (o ops) DropProjectKeys() error {
 	_, err := o.exec("DELETE FROM project_keys")
 	return err
-}
-
-// GrantVerdict records a verdict the person typed themselves (kind APPROVE or REJECT).
-func (o ops) GrantVerdict(session, signal, kind string, now time.Time) error {
-	_, err := o.exec("INSERT INTO verdict_grants (session, signal, kind, created_at) VALUES (?, ?, ?, ?)",
-		session, signal, kind, ts(now))
-	return err
-}
-
-// TakeVerdictGrant uses up the person's fresh grant for exactly this verdict in this session; false when none.
-func (o ops) TakeVerdictGrant(session, signal, kind string, now time.Time, maxAge time.Duration) (bool, error) {
-	var n int64
-	ok, err := o.one("SELECT n FROM verdict_grants WHERE session = ? AND signal = ? AND kind = ? AND used_at IS NULL "+
-		"AND created_at >= ? ORDER BY n DESC LIMIT 1", []any{session, signal, kind, ts(now.Add(-maxAge))}, &n)
-	if !ok || err != nil {
-		return false, err
-	}
-	if _, err := o.exec("UPDATE verdict_grants SET used_at = ? WHERE n = ?", ts(now), n); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // ------------------------------------------------------------------ people
@@ -857,8 +848,17 @@ func (o ops) DropActionNotices(project string) error {
 
 // ------------------------------------------------------------------ cursors, reset, live, protocol
 
-// Cursors is project -> last seq synced. A store that can't answer gives an empty map (pull from what is known).
+// Cursors is project -> last seq synced, for hooks: a store that can't answer gives an empty map.
 func (o ops) Cursors() map[string]int64 {
+	out, err := o.CursorsErr()
+	if err != nil {
+		return map[string]int64{}
+	}
+	return out
+}
+
+// CursorsErr is Cursors with the store's error, for the sync (which must not pull from 0 on a busy store).
+func (o ops) CursorsErr() (map[string]int64, error) {
 	out := map[string]int64{}
 	err := o.each("SELECT project, seq FROM cursors", nil, func(r *sql.Rows) error {
 		var p string
@@ -870,9 +870,9 @@ func (o ops) Cursors() map[string]int64 {
 		return nil
 	})
 	if err != nil {
-		return map[string]int64{}
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 // SetCursor moves a project's cursor forward to seq (never back; ResetProject is how it goes back).

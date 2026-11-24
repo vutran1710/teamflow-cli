@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -46,7 +48,7 @@ func TestStoreFilesAreOwnerOnly(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "home")
 	st := open(t, dir)
 	must(t, st.SetCursor("pj_a", 3)) // a write, so the WAL file exists
-	for _, name := range []string{"client.sqlite", "client.sqlite-wal", "client.sqlite-shm"} {
+	for _, name := range []string{FileName, FileName + "-wal", FileName + "-shm"} {
 		fi, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -61,9 +63,9 @@ func TestOpenTightensAnOpenStoreFile(t *testing.T) {
 	dir := t.TempDir()
 	st := open(t, dir)
 	st.Close()
-	must(t, os.Chmod(filepath.Join(dir, "client.sqlite"), 0o644))
+	must(t, os.Chmod(filepath.Join(dir, FileName), 0o644))
 	open(t, dir)
-	fi, _ := os.Stat(filepath.Join(dir, "client.sqlite"))
+	fi, _ := os.Stat(filepath.Join(dir, FileName))
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %o after reopening, want 600", fi.Mode().Perm())
 	}
@@ -90,7 +92,7 @@ func TestReopenKeepsDataAndMigratesOnce(t *testing.T) {
 		t.Fatalf("cursors after reopen %v", got)
 	}
 	var n int
-	must(t, st.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&n))
+	must(t, st.db.QueryRow("SELECT COUNT(*) FROM "+migrationsTable).Scan(&n))
 	if n != len(migrationNames(t)) {
 		t.Fatalf("%d migrations recorded, want %d", n, len(migrationNames(t)))
 	}
@@ -529,28 +531,6 @@ func TestCitations(t *testing.T) {
 	}
 }
 
-func TestVerdictGrants(t *testing.T) {
-	st := open(t, t.TempDir())
-	must(t, st.GrantVerdict("ss_1", "sg_1", "APPROVE", t0))
-	ok, err := st.TakeVerdictGrant("ss_1", "sg_1", "REJECT", t0, time.Minute)
-	must(t, err)
-	if ok {
-		t.Fatal("an APPROVE grant was taken for a REJECT")
-	}
-	if ok, _ := st.TakeVerdictGrant("ss_2", "sg_1", "APPROVE", t0, time.Minute); ok {
-		t.Fatal("another session's grant was taken")
-	}
-	if ok, _ := st.TakeVerdictGrant("ss_1", "sg_1", "APPROVE", t0.Add(2*time.Minute), time.Minute); ok {
-		t.Fatal("a stale grant was taken")
-	}
-	if ok, _ := st.TakeVerdictGrant("ss_1", "sg_1", "APPROVE", t0.Add(30*time.Second), time.Minute); !ok {
-		t.Fatal("a fresh grant was refused")
-	}
-	if ok, _ := st.TakeVerdictGrant("ss_1", "sg_1", "APPROVE", t0.Add(31*time.Second), time.Minute); ok {
-		t.Fatal("a grant was used twice")
-	}
-}
-
 func TestPeople(t *testing.T) {
 	st := open(t, t.TempDir())
 	must(t, st.PutNames(map[string]string{"mb_1": "Ann", "mb_2": "Bo"}))
@@ -706,5 +686,103 @@ func TestProtocolOK(t *testing.T) {
 	must(t, st.SetProtocol(0, false)) // an answer without the header keeps the known protocol
 	if got := st.ServerProtocol(); got != protocol.ProtocolVersion+1 {
 		t.Fatalf("ServerProtocol %d", got)
+	}
+}
+
+// pythonEraStore builds a client.sqlite as the Python client left it: its schema_migrations names 0001..0007 and
+// its tables, with no signals.kind, live or meta.
+func pythonEraStore(t *testing.T, dir string) []byte {
+	t.Helper()
+	path := filepath.Join(dir, LegacyFileName)
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+	must(t, err)
+	stmts := []string{
+		"CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
+		"CREATE TABLE signals (id TEXT PRIMARY KEY, project TEXT NOT NULL, topic TEXT NOT NULL, seq INTEGER NOT NULL, " +
+			"chain TEXT NOT NULL, chain_version INTEGER NOT NULL, state TEXT NOT NULL, changed_seq INTEGER NOT NULL, data TEXT NOT NULL)",
+		"CREATE TABLE cursors (project TEXT PRIMARY KEY, seq INTEGER NOT NULL)",
+		"CREATE TABLE project_keys (project TEXT PRIMARY KEY, key TEXT NOT NULL, member TEXT NOT NULL, org TEXT NOT NULL, " +
+			"name TEXT NOT NULL, fetched_at TEXT NOT NULL)",
+		"INSERT INTO cursors VALUES ('pj_old', 99)",
+		"INSERT INTO project_keys VALUES ('pj_old', 'tfk_old', 'mb_1', 'org_1', 'Old', '2026-01-01T00:00:00+00:00')",
+	}
+	for _, n := range []string{"0001_init.sql", "0002_artifact_archive.sql", "0003_project_keys.sql", "0004_verdict_grants.sql",
+		"0005_session_topics.sql", "0006_people.sql", "0007_deliverables.sql"} {
+		stmts = append(stmts, "INSERT INTO schema_migrations VALUES ('"+n+"', '2026-01-01 00:00:00')")
+	}
+	for _, q := range stmts {
+		_, err := db.Exec(q)
+		must(t, err)
+	}
+	_, err = db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	must(t, err)
+	must(t, db.Close())
+	b, err := os.ReadFile(path)
+	must(t, err)
+	return b
+}
+
+// The Go client starts fresh beside a Python-era store: it never opens or changes client.sqlite.
+func TestPythonEraStoreIsLeftAlone(t *testing.T) {
+	dir := t.TempDir()
+	before := pythonEraStore(t, dir)
+	if !LegacyPresent(dir) {
+		t.Fatal("LegacyPresent missed the Python-era store")
+	}
+	st := open(t, dir)
+	if _, err := os.Stat(filepath.Join(dir, FileName)); err != nil {
+		t.Fatalf("Open did not create %s: %v", FileName, err)
+	}
+	if c := st.Cursors(); len(c) != 0 {
+		t.Fatalf("the Go store read the Python-era cursors: %v", c)
+	}
+	if _, _, _, _, ok := st.ProjectKey("pj_old"); ok {
+		t.Fatal("the Go store read a Python-era key")
+	}
+	// the Go schema is in place: the columns and tables the Python store lacks work
+	must(t, st.PutSignal(signal("sg_1", "pj_a", "tp_1", 1, protocol.SignalStateInForce)))
+	must(t, st.SetLiveAt("pj_a", t0))
+	must(t, st.SetProtocol(1, true))
+	if ok, _ := st.ProtocolOK(); ok {
+		t.Fatal("ProtocolOK ignored the recorded refusal")
+	}
+	st.Close()
+	after, err := os.ReadFile(filepath.Join(dir, LegacyFileName))
+	must(t, err)
+	if !bytes.Equal(before, after) {
+		t.Fatal("client.sqlite changed")
+	}
+	for _, f := range []string{LegacyFileName + "-wal", LegacyFileName + "-shm"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			t.Fatalf("%s appeared: the legacy store was opened", f)
+		}
+	}
+}
+
+func TestLegacyPresentWithoutOne(t *testing.T) {
+	dir := t.TempDir()
+	open(t, dir)
+	if LegacyPresent(dir) {
+		t.Fatal("LegacyPresent with no client.sqlite")
+	}
+	must(t, os.Mkdir(filepath.Join(dir, LegacyFileName), 0o700))
+	if LegacyPresent(dir) {
+		t.Fatal("a folder named client.sqlite counted as a store")
+	}
+}
+
+func TestCursorsErrReportsAStoreThatCantAnswer(t *testing.T) {
+	st := open(t, t.TempDir())
+	must(t, st.SetCursor("pj_a", 3))
+	got, err := st.CursorsErr()
+	if err != nil || got["pj_a"] != 3 {
+		t.Fatalf("CursorsErr = %v, %v", got, err)
+	}
+	st.Close()
+	if got, err := st.CursorsErr(); err == nil || got != nil {
+		t.Fatalf("closed store: CursorsErr = %v, %v; want an error", got, err)
+	}
+	if got := st.Cursors(); len(got) != 0 {
+		t.Fatalf("closed store: Cursors = %v; want empty", got)
 	}
 }
