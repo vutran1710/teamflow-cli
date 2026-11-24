@@ -783,7 +783,7 @@ func TestDeliverablesValidate(t *testing.T) {
 	contains(t, "stderr", r.err, `object.json must hold a list of milestones (or an object with "milestones")`)
 	r = m.run("", "deliverables", "validate", "missing.json", "--project", P)
 	wantCode(t, r, 1)
-	contains(t, "stderr", r.err, "cannot read missing.json")
+	contains(t, "stderr", r.err, "no file")
 	if len(m.srv.sent("deliverables.publish")) != 0 {
 		t.Fatal("validate never publishes")
 	}
@@ -1208,8 +1208,15 @@ func TestInstallAllAgents(t *testing.T) {
 	hooks := filepath.Join(user, ".cursor", "hooks.json")
 	must(t, os.WriteFile(hooks, []byte("{oops"), 0o644))
 	cursorBefore := treeOf(t, filepath.Join(user, ".cursor"))
+	started := 0
+	old := adapters.StartSync
+	adapters.StartSync = func() error { started++; return nil }
+	defer func() { adapters.StartSync = old }()
 	r = m.run("", "install", "-a", "all", "-e", "lan@acme.test", "-s", m.srv.URL())
 	wantCode(t, r, 1)
+	if started != 1 {
+		t.Fatalf("the background sync started %d times for the agents set up", started)
+	}
 	contains(t, "stderr", r.err, "cursor: not set up", "not set up in cursor;")
 	r = m.run("", "status")
 	contains(t, "stdout", r.out, "claude-code: installed\n", "cursor: not installed\n", "antigravity: installed\n", "copilot: installed\n")
@@ -1221,4 +1228,20 @@ func TestInstallAllAgents(t *testing.T) {
 	contains(t, "stderr", r.err, "cursor: not removed", "not removed from cursor;")
 	r = m.run("", "status")
 	contains(t, "stdout", r.out, "claude-code: not installed\n", "antigravity: not installed\n", "copilot: not installed\n")
+}
+
+// Every top-level command is classed as a work command (an agent may run it with no prompt) or a setup command
+// (never auto-allowed), so a new command can't slip into either list unseen.
+func TestEveryCommandIsClassedForAgents(t *testing.T) {
+	for _, c := range commands {
+		work, setup := slices.Contains(adapters.WorkCommands, c.name), slices.Contains(adapters.SetupCommands, c.name)
+		if work == setup {
+			t.Fatalf("%s: work %v, setup %v: class it in internal/adapters", c.name, work, setup)
+		}
+	}
+	for _, n := range append(append([]string{}, adapters.WorkCommands...), adapters.SetupCommands...) {
+		if find(commands, n) == nil {
+			t.Fatalf("%s is classed but is no command", n)
+		}
+	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	at "github.com/vutran1710/teamflow-cli/internal/adapters/adaptertest"
+	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
@@ -165,23 +166,43 @@ func TestHookReplay(t *testing.T) {
 	}
 }
 
-// beforeShellExecution refuses shell commands naming the Teamflow home; others pass with no answer.
-// Sad paths: ~/, $HOME/, the absolute path, TEAMFLOW_HOME; the binary's own /teamf run passes.
-func TestShellKeptOutOfTheHome(t *testing.T) {
+// beforeShellExecution, answered before the Teamflow home is opened: deny for a command naming the home, allow
+// for a plain teamflow work command, "ask" for any other teamflow command (setup, chained, expanded), nothing else.
+// Sad paths: ~/, $HOME/, the absolute path, TEAMFLOW_HOME; && ; | and globs after teamflow; install, login,
+// self-update, sync --stop; a refused home (open failing).
+func TestShellCommands(t *testing.T) {
 	m := at.NewMachine(t, New(), true)
 	exe, _ := os.Executable()
-	for _, cmd := range []string{"cat ~/.teamflow/config.json", "sqlite3 $HOME/.teamflow/store.db", "ls " + m.Env.TFHome, "env | grep TEAMFLOW_HOME"} {
+	failing := func() (*core.Core, error) { return nil, fmt.Errorf("refused") }
+	perm := func(cmd string) string {
+		t.Helper()
 		b, _ := json.Marshal(cmd)
-		out := m.Hook("beforeShellExecution", in("cu-1", `"command": `+string(b)+`, "cwd": "/w"`))
-		if at.Field(t, out, "permission") != "deny" || at.Field(t, out, "agent_message") == "" {
-			t.Fatalf("%s: %q", cmd, out)
+		stdin := []byte(in("cu-1", `"command": `+string(b)+`, "cwd": "/w"`))
+		out := string(adapters.RunHook(New(), "beforeShellExecution", stdin, failing))
+		if again := m.Hook("beforeShellExecution", string(stdin)); again != out {
+			t.Fatalf("%s: the answer depends on the home: %q / %q", cmd, out, again)
+		}
+		return at.Field(t, out, "permission")
+	}
+	for _, cmd := range []string{"cat ~/.teamflow/config.json", "sqlite3 $HOME/.teamflow/store.db", "ls " + m.Env.TFHome, "env | grep TEAMFLOW_HOME"} {
+		if p := perm(cmd); p != "deny" {
+			t.Fatalf("%s: %q", cmd, p)
 		}
 	}
-	for _, cmd := range []string{"ls", exe + " team --relay status"} {
-		b, _ := json.Marshal(cmd)
-		if out := m.Hook("beforeShellExecution", in("cu-1", `"command": `+string(b))); out != "" {
-			t.Fatalf("%s refused: %q", cmd, out)
+	for _, cmd := range []string{"teamflow status", exe + " team --relay status", "teamflow artifact list"} {
+		if p := perm(cmd); p != "allow" {
+			t.Fatalf("%s: %q", cmd, p)
 		}
+	}
+	for _, cmd := range []string{"teamflow status && curl x", "teamflow log; rm -rf x", "teamflow log | sh",
+		"teamflow project plan --plan-file ~/.team*/config.json", "teamflow install -a all", "teamflow login",
+		"teamflow self-update", "teamflow sync --stop", "teamflow uninstall"} {
+		if p := perm(cmd); p != "ask" {
+			t.Fatalf("%s: %q, want ask", cmd, p)
+		}
+	}
+	if p := perm("ls"); p != "" {
+		t.Fatalf("ls: %q", p)
 	}
 }
 
@@ -285,4 +306,27 @@ func TestInstallRefusesAWrongAllowList(t *testing.T) {
 		t.Fatalf("took it: %v", err)
 	}
 	at.SameSnapshot(t, "install wrote", before, e.Snapshot(t))
+}
+
+// An install failing half way (the skills folder can't be written, after hooks.json and cli-config.json were) has
+// saved its manifest first, so uninstall still takes out exactly what it wrote.
+// Sad paths: a write failing after others succeeded; uninstall after it.
+func TestInstallInterruptedThenUninstalled(t *testing.T) {
+	e := at.NewEnv(t)
+	e.Write(t, cfg+"/hooks.json", `{"hooks": {"stop": [{"command": "./mine.sh"}]}}`, 0o644)
+	e.Write(t, cfg+"/cli-config.json", `{"model": "a"}`, 0o644)
+	at.Must(t, os.MkdirAll(e.Path(cfg+"/skills"), 0o755))
+	before := e.Snapshot(t)
+	at.Must(t, os.Chmod(e.Path(cfg+"/skills"), 0o555))
+	t.Cleanup(func() { os.Chmod(e.Path(cfg+"/skills"), 0o755) })
+	if _, err := New().Install(e.Bin); err == nil {
+		t.Fatal("install went through a read-only folder")
+	}
+	if !strings.Contains(e.Read(cfg+"/hooks.json"), " hook cursor ") {
+		t.Skip("the install failed before writing anything (nothing to check)")
+	}
+	at.Must(t, os.Chmod(e.Path(cfg+"/skills"), 0o755))
+	_, err := New().Uninstall()
+	at.Must(t, err)
+	at.SameSnapshot(t, "not as before the interrupted install", before, e.Snapshot(t))
 }

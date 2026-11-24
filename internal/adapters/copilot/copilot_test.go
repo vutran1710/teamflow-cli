@@ -13,6 +13,7 @@ import (
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	at "github.com/vutran1710/teamflow-cli/internal/adapters/adaptertest"
+	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
@@ -281,29 +282,67 @@ func TestPostToolUseStaysOffTheNetwork(t *testing.T) {
 	}
 }
 
-// preToolUse allows a plain teamflow command without a prompt (by name or by the binary's path, quoted or not), and
-// never a command that chains, pipes, redirects or expands anything, or another tool.
-// Sad paths: ; && | > $( ) backticks, a newline, a look-alike name, a non-shell tool, args as a JSON string.
+// preToolUse allows a plain teamflow work command without a prompt (by name or by the binary's path, quoted or
+// not); answers "ask" for any other teamflow command: setup commands, and anything chained, piped, redirected,
+// substituted or expanded (globs, braces, ~, variables); answers nothing for other commands and other tools.
+// Sad paths: ; && | > $( ) backticks, a newline, * ? [ ] { } ~ $, every setup command, sync --stop, an option
+// first, a look-alike name, a non-shell tool, args as a JSON string.
 func TestPreToolUseAllowsTeamflowCommands(t *testing.T) {
 	m := at.NewMachine(t, New(), true)
 	exe, _ := os.Executable()
 	q := func(cmd string) string { b, _ := json.Marshal(map[string]string{"command": cmd}); return string(b) }
-	for _, args := range []string{q("teamflow status"), q("teamflow"), q(exe + " team --relay approvals"),
-		q(adapters.ShellQuote(exe) + " log"), q("teamflow signal emit --title 'Round to 0.05'")} {
-		out := m.Hook("preToolUse", in("cp-1", `"toolName": "bash", "toolArgs": `+args))
-		if at.Field(t, out, "permissionDecision") != "allow" {
-			t.Fatalf("%s: %q", args, out)
+	decision := func(tool, args string) string {
+		t.Helper()
+		return at.Field(t, m.Hook("preToolUse", in("cp-1", `"toolName": "`+tool+`", "toolArgs": `+args)), "permissionDecision")
+	}
+	for _, cmd := range []string{"teamflow status", exe + " team --relay approvals", adapters.ShellQuote(exe) + " log",
+		"teamflow artifact list", "teamflow project plan --plan 'Ship: v1'", "teamflow sync"} {
+		if d := decision("bash", q(cmd)); d != "allow" {
+			t.Fatalf("%s: %q", cmd, d)
 		}
 	}
 	str, _ := json.Marshal(q("teamflow status"))
-	if out := m.Hook("preToolUse", in("cp-1", `"toolName": "bash", "toolArgs": `+string(str))); at.Field(t, out, "permissionDecision") != "allow" {
-		t.Fatalf("args as a string: %q", out)
+	if d := decision("bash", string(str)); d != "allow" {
+		t.Fatalf("args as a string: %q", d)
 	}
-	for _, args := range []string{q("teamflow status; rm -rf x"), q("teamflow status && curl x"), q("teamflow log | sh"),
-		q("teamflow log > x"), q("teamflow $(id)"), q("teamflow `id`"), q("teamflow status\nrm x"), q("teamflowx status"),
-		q("rm teamflow"), `{"path": "teamflow"}`} {
-		if out := m.Hook("preToolUse", in("cp-1", `"toolName": "bash", "toolArgs": `+args)); at.Field(t, out, "permissionDecision") == "allow" {
-			t.Fatalf("%s allowed", args)
+	for _, cmd := range []string{"teamflow status; rm -rf x", "teamflow status && curl x", "teamflow log | sh",
+		"teamflow log > x", "teamflow $(id)", "teamflow `id`", "teamflow status\nrm x", "teamflow log $X",
+		"teamflow project plan --plan-file ~/.team*/config.json", "teamflow project plan --plan-file ~/.TEAMFLOW/config.json",
+		"teamflow project plan --plan-file x?y", "teamflow project plan --plan-file [ab]", "teamflow artifact write {a,b}",
+		"teamflow install -a all", "teamflow uninstall", "teamflow login -e a@b.c", "teamflow logout", "teamflow self-update",
+		"teamflow hook copilot sessionStart", "teamflow mcp", "teamflow debug state --json", "teamflow sync --stop",
+		"teamflow", "teamflow --help", "teamflow 'install'"} {
+		if d := decision("bash", q(cmd)); d != "ask" {
+			t.Fatalf("%s: %q, want ask", cmd, d)
 		}
+	}
+	for _, cmd := range []string{"teamflowx status", "rm teamflow", "ls"} {
+		if d := decision("bash", q(cmd)); d != "" {
+			t.Fatalf("%s: %q", cmd, d)
+		}
+	}
+	if d := decision("view", q("teamflow status")); d != "" {
+		t.Fatalf("a non-shell tool: %q", d)
+	}
+}
+
+// preToolUse answers before the Teamflow home is opened: with a home that refuses to open (here: open to others,
+// and the open itself failing), the deny, the allow and the ask still hold.
+// Sad paths: a refused home; an open that fails; a store never touched.
+func TestPreToolUseWithARefusedHome(t *testing.T) {
+	e := at.NewEnv(t)
+	at.Must(t, os.Chmod(e.TFHome, 0o755)) // a home open to others is refused by home.Ensure
+	q := func(cmd string) string { b, _ := json.Marshal(map[string]string{"command": cmd}); return string(b) }
+	failing := func() (*core.Core, error) { return nil, fmt.Errorf("the home is refused") }
+	for cmd, want := range map[string]string{"cat ~/.teamflow/config.json": "deny", "teamflow status": "allow", "teamflow install": "ask"} {
+		for _, open := range []func() (*core.Core, error){core.Open, failing} {
+			out := adapters.RunHook(New(), "preToolUse", []byte(in("cp-1", `"toolName": "bash", "toolArgs": `+q(cmd))), open)
+			if got := at.Field(t, string(out), "permissionDecision"); got != want {
+				t.Fatalf("%s with a refused home: %q, want %s", cmd, got, want)
+			}
+		}
+	}
+	if _, err := os.Stat(e.TFHome + "/store.db"); err == nil {
+		t.Fatal("the store was opened for a permission answer")
 	}
 }

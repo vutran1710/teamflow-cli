@@ -44,7 +44,14 @@ func check(t *testing.T, e *at.Env) {
 		Permissions struct{ Deny, Allow []string }
 	}
 	at.Must(t, json.Unmarshal([]byte(e.Read(".gemini/antigravity-cli/settings.json")), &s))
-	for _, r := range []string{"command(teamflow)", "command(" + e.Bin + ")"} {
+	for _, r := range s.Permissions.Allow {
+		for _, setup := range append(adapters.SetupCommands, "sync") {
+			if strings.HasSuffix(r, " "+setup+")") {
+				t.Fatalf("a setup command allowed: %s", r)
+			}
+		}
+	}
+	for _, r := range []string{"command(teamflow status)", "command(teamflow artifact)", "command(" + e.Bin + " team)"} {
 		if !slices.Contains(s.Permissions.Allow, r) {
 			t.Fatalf("no allow rule %s: %v", r, s.Permissions.Allow)
 		}

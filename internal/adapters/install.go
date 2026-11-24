@@ -521,21 +521,49 @@ func UpdateJSONWith(path string, perm os.FileMode, change func(ojson.Obj) (ojson
 	return fmt.Errorf("%s keeps changing (the agent is writing it): try again", home.Display(path))
 }
 
-// IsTeamflowCommand says whether a shell command is one plain teamflow invocation (by name, or by binary's path,
-// quoted or not), with nothing a shell would run besides it: no ; & | < > ` $ ( ) \ or newline. Used where an
-// agent's only allow mechanism is a hook's answer (Copilot CLI's preToolUse), so it is strict.
-func IsTeamflowCommand(cmd, binary string) bool {
+// WorkCommands are the teamflow commands an agent may run with no prompt. Every other one (SetupCommands, and
+// `sync --stop`) runs only with the agent's own permission prompt. A CLI test keeps the two lists complete.
+var WorkCommands = []string{"projects", "status", "stop", "approve", "reject", "team", "topic", "artifact",
+	"deliverables", "drift", "project", "org", "profile", "tasks", "log", "sync"}
+
+// SetupCommands change where Teamflow is set up, who is signed in, or the binary itself: never auto-allowed.
+var SetupCommands = []string{"login", "logout", "install", "uninstall", "self-update", "hook", "mcp", "debug"}
+
+// notPlain are the characters that make a command more than one plain teamflow run: chaining, pipes, redirects,
+// substitution and expansion (variables, globs, braces, ~), escapes and line breaks.
+const notPlain = ";&|<>`$()\\\n\r*?[]{}~"
+
+// TeamflowCommand classifies a shell command: teamflow says its first word is teamflow (by name, or binary's path,
+// quoted or not); auto says it may run with no prompt: one plain run (none of notPlain), of a work command, its
+// subcommand first (no option before it), and not `sync --stop`. Where an agent's allow rule is a prefix, a hook
+// answers "ask" for teamflow && !auto. Strict on purpose: the CLI refuses files in the Teamflow home too.
+func TeamflowCommand(cmd, binary string) (teamflow, auto bool) {
 	cmd = strings.TrimSpace(cmd)
-	if cmd == "" || strings.ContainsAny(cmd, ";&|<>`$()\\\n\r") {
-		return false
-	}
+	rest, ok := "", false
 	for _, head := range []string{"teamflow", binary, ShellQuote(binary), "'" + binary + "'", `"` + binary + `"`} {
 		if head == "" {
 			continue
 		}
-		if rest, ok := strings.CutPrefix(cmd, head); ok && (rest == "" || rest[0] == ' ' || rest[0] == '\t') {
-			return true
+		if r, cut := strings.CutPrefix(cmd, head); cut && (r == "" || r[0] == ' ' || r[0] == '\t') {
+			rest, ok = r, true
+			break
 		}
 	}
-	return false
+	if !ok {
+		return false, false
+	}
+	if strings.ContainsAny(cmd, notPlain) {
+		return true, false
+	}
+	words := strings.Fields(rest)
+	for i := range words {
+		words[i] = strings.Trim(words[i], `'"`)
+	}
+	if len(words) == 0 || !slices.Contains(WorkCommands, words[0]) {
+		return true, false
+	}
+	if words[0] == "sync" && slices.Contains(words, "--stop") {
+		return true, false
+	}
+	return true, true
 }

@@ -110,3 +110,18 @@ func TestBeforePromptClaimsNothing(t *testing.T) {
 		t.Fatal("signed out: not recorded")
 	}
 }
+
+// The first AfterTool with the server unreachable gives the full context from the replica and says so.
+// Sad paths: a server down at the first tool; the offline mark keeping the next steps off the network.
+func TestAfterToolOfflineSaysSo(t *testing.T) {
+	ctx := context.Background()
+	c, now := midTurnCore(t, "http://127.0.0.1:1")
+	first, err := c.AfterTool(ctx, "s1")
+	if err != nil || !strings.Contains(first, "## Teamflow: shared project") || !strings.Contains(first, "unreachable") {
+		t.Fatalf("offline first: %q %v", first, err)
+	}
+	*now = now.Add(HookSyncEvery + time.Second)
+	if c.midTurnSync(ctx, P) {
+		t.Fatal("marked offline, yet said online")
+	}
+}

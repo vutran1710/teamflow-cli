@@ -34,6 +34,13 @@ type Adapter interface {
 	SessionID(stdin []byte) (string, error)
 }
 
+// Quick is an adapter that answers some events without the Teamflow home (no store, no config): a permission
+// answer (allow a teamflow command, deny a tool call naming the home) must never depend on the home opening.
+// handled false: the event goes to Hook as usual.
+type Quick interface {
+	Quick(event string, stdin []byte) (out []byte, handled bool)
+}
+
 // Supported are the agents Teamflow supports, in the order they are listed.
 var Supported = []string{"claude-code", "cursor", "antigravity", "copilot"}
 

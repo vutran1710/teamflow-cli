@@ -993,10 +993,8 @@ func (o ops) SetLiveAt(project string, t time.Time) error {
 // set back never keeps the hook off the network: a last sync later than now, or an offline mark further ahead than
 // offlineFor, is stale.
 func (o ops) ClaimHookSync(project string, now time.Time, every, offlineFor time.Duration) (bool, error) {
-	if until := o.meta("hook_offline_until:" + project); until != "" {
-		if u := parseTS(until); u.After(now) && !u.After(now.Add(offlineFor)) {
-			return false, nil
-		}
+	if o.HookOffline(project, now, offlineFor) {
+		return false, nil
 	}
 	res, err := o.exec("INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value "+
 		"WHERE meta.value <= ? OR meta.value > ?", "hook_sync_at:"+project, ts(now), ts(now.Add(-every)), ts(now))
@@ -1005,6 +1003,17 @@ func (o ops) ClaimHookSync(project string, now time.Time, every, offlineFor time
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// HookOffline says whether the project is marked offline for hooks at now (a mark further ahead than offlineFor,
+// from a clock set back, is stale).
+func (o ops) HookOffline(project string, now time.Time, offlineFor time.Duration) bool {
+	until := o.meta("hook_offline_until:" + project)
+	if until == "" {
+		return false
+	}
+	u := parseTS(until)
+	return u.After(now) && !u.After(now.Add(offlineFor))
 }
 
 // SetHookOffline keeps hooks off the network for the project until then (a sync just failed).

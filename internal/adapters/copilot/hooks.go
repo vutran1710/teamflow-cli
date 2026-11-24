@@ -5,8 +5,9 @@ package copilot
 //	sessionStart         the session recorded against its Copilot process; the full context when shared
 //	                     (additionalContext); the background sync started again
 //	userPromptSubmitted  recorded and synced, nothing claimed (Copilot drops a command hook's output here)
-//	preToolUse           a plain teamflow command allowed (permissionDecision allow, no prompt); a tool call
-//	                     naming the Teamflow home refused (deny); nothing else
+//	preToolUse           answered without opening the Teamflow home (Quick): a tool call naming the home refused
+//	                     (deny); a plain teamflow work command allowed (no prompt); any other teamflow command
+//	                     (setup, chained, expanded) "ask"; nothing else
 //	postToolUse          what is new since the session was last told (additionalContext), from the replica,
 //	                     the network at most once per 10 s
 //	agentStop            a new approval request keeps Copilot going once, to ask (decision block)
@@ -80,15 +81,7 @@ func (*Adapter) Hook(event string, stdin []byte, c *core.Core) ([]byte, error) {
 		return additional(text), err
 	case "userPromptSubmitted":
 		return nil, c.BeforePrompt(ctx, sid, Name, agentPID(), in.Cwd)
-	case "preToolUse":
-		exe, _ := os.Executable()
-		if adapters.NamesHome(in.ToolName+" "+string(in.ToolArgs), exe) {
-			return ojson.Marshal(ojson.Obj{{Key: "permissionDecision", Value: "deny"},
-				{Key: "permissionDecisionReason", Value: adapters.HomeRefusal}})
-		}
-		if cmd := shellCommand(in.ToolArgs); cmd != "" && adapters.IsTeamflowCommand(cmd, exe) {
-			return ojson.Marshal(ojson.Obj{{Key: "permissionDecision", Value: "allow"}})
-		}
+	case "preToolUse": // answered by Quick, before the home is opened
 		return nil, nil
 	case "postToolUse":
 		text, err := c.AfterTool(ctx, sid)
@@ -115,8 +108,40 @@ func additional(text string) []byte {
 	return b
 }
 
-// shellCommand is the command of a shell tool call's arguments ({"command": …}, or that object as a JSON string);
-// "" for any other tool.
+// shellTools are Copilot's shell tools (bash on macOS and Linux: checked on 1.0.63).
+var shellTools = map[string]bool{"bash": true, "shell": true}
+
+// Quick answers preToolUse without the Teamflow home, so a broken or refused home never drops the deny or the
+// allow.
+func (*Adapter) Quick(event string, stdin []byte) ([]byte, bool) {
+	if event != "preToolUse" {
+		return nil, false
+	}
+	var in input
+	if json.Unmarshal(stdin, &in) != nil {
+		return nil, true
+	}
+	exe, _ := os.Executable()
+	if adapters.NamesHome(in.ToolName+" "+string(in.ToolArgs), exe) {
+		out, _ := ojson.Marshal(ojson.Obj{{Key: "permissionDecision", Value: "deny"},
+			{Key: "permissionDecisionReason", Value: adapters.HomeRefusal}})
+		return out, true
+	}
+	if !shellTools[in.ToolName] {
+		return nil, true
+	}
+	switch tf, auto := adapters.TeamflowCommand(shellCommand(in.ToolArgs), exe); {
+	case auto:
+		out, _ := ojson.Marshal(ojson.Obj{{Key: "permissionDecision", Value: "allow"}})
+		return out, true
+	case tf:
+		out, _ := ojson.Marshal(ojson.Obj{{Key: "permissionDecision", Value: "ask"}})
+		return out, true
+	}
+	return nil, true
+}
+
+// shellCommand is the command of a shell tool call's arguments ({"command": …}, or that object as a JSON string).
 func shellCommand(args json.RawMessage) string {
 	var v struct {
 		Command string `json:"command"`

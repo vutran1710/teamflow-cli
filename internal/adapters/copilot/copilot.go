@@ -122,6 +122,11 @@ func (*Adapter) Install(binary string) ([]string, error) {
 	m.MarkDirs(ConfigDir(), ".", "hooks", "skills", filepath.Join("skills", "teamf"))
 	// TODO(MCP removal follow-up): this is where the MCP server was registered (<config>/mcp-config.json); agents
 	// use the teamflow CLI instead, allowed by the preToolUse hook.
+	m.MarkFileIfNew("copilot-instructions.md", instrPath())
+	// The manifest first: a write failing half way still leaves uninstall knowing what install made.
+	if err := m.Save(); err != nil {
+		return nil, err
+	}
 	var done []string
 	if err := adapters.SaveJSON(hooksPath(), hooksFile(binary), 0o644); err != nil {
 		return done, err

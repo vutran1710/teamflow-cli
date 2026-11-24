@@ -38,6 +38,11 @@ func RunHook(a Adapter, event string, stdin []byte, open func() (*core.Core, err
 			out = nil
 		}
 	}()
+	if q, ok := a.(Quick); ok {
+		if out, handled := q.Quick(event, stdin); handled {
+			return out
+		}
+	}
 	c, err := open()
 	if err != nil {
 		hookLog(a.Name(), event, err)

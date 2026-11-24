@@ -150,3 +150,39 @@ func TestTeamfSkillFrontmatter(t *testing.T) {
 		t.Fatal("the binary is not quoted in the body")
 	}
 }
+
+// TeamflowCommand: (teamflow, auto) for each form.
+// Sad paths: every notPlain character, every setup command, sync --stop, an option before the subcommand, quotes
+// around a setup command, a look-alike name, teamflow not first.
+func TestTeamflowCommand(t *testing.T) {
+	bin := "/opt/my bin/teamflow"
+	for cmd, want := range map[string][2]bool{
+		"teamflow status":             {true, true},
+		"  teamflow team --relay x":   {true, true},
+		"'/opt/my bin/teamflow' log":  {true, true},
+		`"/opt/my bin/teamflow" log`:  {true, true},
+		"teamflow sync":               {true, true},
+		"teamflow sync --stop":        {true, false},
+		"teamflow --version":          {true, false},
+		"teamflow":                    {true, false},
+		"teamflow 'install'":          {true, false},
+		"teamflow nosuchcommand":      {true, false},
+		"teamflowx status":            {false, false},
+		"cd x && teamflow status":     {false, false},
+		"TEAMFLOW_HOME=/x teamflow s": {false, false},
+	} {
+		if tf, auto := TeamflowCommand(cmd, bin); tf != want[0] || auto != want[1] {
+			t.Fatalf("%q: %v %v, want %v", cmd, tf, auto, want)
+		}
+	}
+	for _, c := range notPlain {
+		if tf, auto := TeamflowCommand("teamflow status "+string(c)+"x", bin); !tf || auto {
+			t.Fatalf("%q let through", c)
+		}
+	}
+	for _, s := range SetupCommands {
+		if _, auto := TeamflowCommand("teamflow "+s+" x", bin); auto {
+			t.Fatalf("setup command %s auto-allowed", s)
+		}
+	}
+}

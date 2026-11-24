@@ -166,15 +166,15 @@ func (c *Core) MidTurn(ctx context.Context, sid string) string {
 
 // midTurnSync syncs the project for a hook inside the agent's turn: not when the background sync is live, at most
 // once per HookSyncEvery, the whole sync bounded by MidTurnTimeout, and not at all for HookOfflineFor after that
-// failed.
-func (c *Core) midTurnSync(ctx context.Context, project string) {
+// failed. False when the server is known unreachable: this sync failed, or the project is marked offline.
+func (c *Core) midTurnSync(ctx context.Context, project string) bool {
 	now := c.Now()
 	if live := c.St.LiveAt(project); !live.IsZero() && now.Sub(live) <= LiveFresh && !live.After(now) {
-		return
+		return true
 	}
 	mine, err := c.St.ClaimHookSync(project, now, HookSyncEvery, HookOfflineFor)
 	if err != nil || !mine {
-		return
+		return !c.St.HookOffline(project, now, HookOfflineFor)
 	}
 	// The whole sync (push, every page of the pull, names) is bounded, not each request.
 	sctx, cancel := context.WithTimeout(ctx, MidTurnTimeout)
@@ -185,6 +185,7 @@ func (c *Core) midTurnSync(ctx context.Context, project string) {
 			c.logHook("marking the project offline", err)
 		}
 	}
+	return online
 }
 
 // AfterTool is the hook after a tool, for agents whose prompt hook cannot add context (Copilot CLI, Cursor CLI):
@@ -195,12 +196,12 @@ func (c *Core) AfterTool(ctx context.Context, sid string) (string, error) {
 	if err != nil || !ok || sess.Project == "" || !c.SignedIn() {
 		return "", err
 	}
-	c.midTurnSync(ctx, sess.Project)
+	online := c.midTurnSync(ctx, sess.Project)
 	if _, ok, err := c.St.LatestState(sess.Project); err != nil || !ok {
 		return "", err
 	}
 	if sess.LastSeq == 0 && sess.StateVersion == 0 {
-		return c.full(sid, true)
+		return c.full(sid, online) // says "working from the local copy" when offline
 	}
 	return c.Delta(sid)
 }

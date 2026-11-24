@@ -202,6 +202,15 @@ func AllowRules(binary string) []string {
 	return rules
 }
 
+// cliRules is cli-config.json with Teamflow's deny and allow rules.
+func cliRules(doc ojson.Obj, binary string, m *adapters.Manifest) (ojson.Obj, error) {
+	doc, err := adapters.AddRules(doc, "cli-config.json", "permissions", "deny", DenyRules(), &m.Deny, m)
+	if err != nil {
+		return nil, err
+	}
+	return adapters.AddRules(doc, "cli-config.json", "permissions", "allow", AllowRules(binary), &m.Allow, m)
+}
+
 // Install sets Teamflow up in Cursor's CLI with binary (an absolute path). Every file is checked before any is
 // written: a malformed or read-only one refuses the whole install.
 func (*Adapter) Install(binary string) ([]string, error) {
@@ -246,18 +255,20 @@ func (*Adapter) Install(binary string) ([]string, error) {
 
 	// TODO(MCP removal follow-up): this is where the MCP server was registered (~/.cursor/mcp.json); agents use the
 	// teamflow CLI instead, allowed below.
+	newHooks := installHooks(hooksDoc, binary, &m)
+	if _, err := cliRules(cli, binary, &m); err != nil {
+		return nil, err
+	}
+	// The manifest first: a write failing half way still leaves uninstall knowing what install made.
+	if err := m.Save(); err != nil {
+		return nil, err
+	}
 	var done []string
-	if err := adapters.SaveJSON(hooksPath(), installHooks(hooksDoc, binary, &m), 0o644); err != nil {
+	if err := adapters.SaveJSON(hooksPath(), newHooks, 0o644); err != nil {
 		return done, err
 	}
 	done = append(done, fmt.Sprintf("hooks %s in %s", strings.Join(Events, ", "), home.Display(hooksPath())))
-	err = adapters.UpdateJSON(cliPath(), 0o644, func(doc ojson.Obj) (ojson.Obj, error) {
-		doc, err := adapters.AddRules(doc, "cli-config.json", "permissions", "deny", DenyRules(), &m.Deny, &m)
-		if err != nil {
-			return nil, err
-		}
-		return adapters.AddRules(doc, "cli-config.json", "permissions", "allow", AllowRules(binary), &m.Allow, &m)
-	})
+	err = adapters.UpdateJSON(cliPath(), 0o644, func(doc ojson.Obj) (ojson.Obj, error) { return cliRules(doc, binary, &m) })
 	if err != nil {
 		return done, err
 	}

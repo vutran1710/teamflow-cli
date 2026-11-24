@@ -5,7 +5,9 @@ package cursor
 //	sessionStart          the session recorded against its Cursor process; the instruction text and, when shared,
 //	                      the full context (additional_context); the background sync started again
 //	beforeSubmitPrompt    recorded and synced, nothing claimed (this hook can only block a prompt, not add to it)
-//	beforeShellExecution  a shell command naming the Teamflow home refused (permission deny)
+//	beforeShellExecution  answered without opening the Teamflow home (Quick): a command naming the home refused
+//	                      (deny); a plain teamflow work command allowed; any other teamflow command (setup,
+//	                      chained, expanded) "ask", whatever the Shell(teamflow) allow rule would match
 //	postToolUse           what is new since the session was last told (additional_context), from the replica, the
 //	                      network at most once per 10 s
 //	stop                  a new approval request keeps the agent going once, to ask (followup_message)
@@ -95,13 +97,7 @@ func (*Adapter) Hook(event string, stdin []byte, c *core.Core) ([]byte, error) {
 			return nil, err
 		}
 		return ojson.Marshal(ojson.Obj{{Key: "continue", Value: true}})
-	case "beforeShellExecution":
-		exe, _ := os.Executable()
-		if adapters.NamesHome(in.Command, exe) {
-			return ojson.Marshal(ojson.Obj{{Key: "permission", Value: "deny"},
-				{Key: "user_message", Value: "Teamflow refused a command naming its home folder."},
-				{Key: "agent_message", Value: adapters.HomeRefusal}})
-		}
+	case "beforeShellExecution": // answered by Quick, before the home is opened
 		return nil, nil
 	case "postToolUse":
 		text, err := c.AfterTool(ctx, sid)
@@ -126,4 +122,33 @@ func context_(text string) []byte {
 	}
 	b, _ := ojson.Marshal(ojson.Obj{{Key: "additional_context", Value: text}})
 	return b
+}
+
+// Quick answers beforeShellExecution without the Teamflow home, so a broken or refused home never drops the deny,
+// the allow or the ask.
+func (*Adapter) Quick(event string, stdin []byte) ([]byte, bool) {
+	if event != "beforeShellExecution" {
+		return nil, false
+	}
+	var in input
+	if json.Unmarshal(stdin, &in) != nil {
+		return nil, true
+	}
+	exe, _ := os.Executable()
+	if adapters.NamesHome(in.Command, exe) {
+		out, _ := ojson.Marshal(ojson.Obj{{Key: "permission", Value: "deny"},
+			{Key: "user_message", Value: "Teamflow refused a command naming its home folder."},
+			{Key: "agent_message", Value: adapters.HomeRefusal}})
+		return out, true
+	}
+	switch tf, auto := adapters.TeamflowCommand(in.Command, exe); {
+	case auto:
+		out, _ := ojson.Marshal(ojson.Obj{{Key: "permission", Value: "allow"}})
+		return out, true
+	case tf:
+		out, _ := ojson.Marshal(ojson.Obj{{Key: "permission", Value: "ask"},
+			{Key: "user_message", Value: "Teamflow: this teamflow command needs your approval (setup, or more than one plain command)."}})
+		return out, true
+	}
+	return nil, true
 }

@@ -334,13 +334,14 @@ func runInstall(r *inv, a *parsed) int {
 			failed = append(failed, ad.Name())
 		}
 	}
-	if len(failed) > 0 {
-		return r.fail("not set up in " + strings.Join(failed, ", ") + "; fix what is said above, then run the install again")
-	}
-	if adapters.StartSync != nil {
+	// The agents that were set up get the background sync even when another refused.
+	if len(failed) < len(chosen) && adapters.StartSync != nil {
 		if err := adapters.StartSync(); err != nil {
 			fmt.Fprintf(r.errw, "the background sync did not start: %v\n", err)
 		}
+	}
+	if len(failed) > 0 {
+		return r.fail("not set up in " + strings.Join(failed, ", ") + "; fix what is said above, then run the install again")
 	}
 	r.println("Done. In a session, ask your agent which Teamflow project it works on (or run /teamf project).")
 	return 0

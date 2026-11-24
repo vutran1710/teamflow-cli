@@ -8,7 +8,7 @@
 //	~/.gemini/config/hooks.json              the "teamflow" hook (SessionStart, PreInvocation, Stop)
 //	~/.gemini/config/AGENTS.md               the instruction text, in a Teamflow block
 //	~/.gemini/config/skills/teamf/SKILL.md   /teamf (the CLI makes each skill a slash command)
-//	~/.gemini/antigravity-cli/settings.json  permissions.allow: command(teamflow), command(<binary>);
+//	~/.gemini/antigravity-cli/settings.json  permissions.allow: command(teamflow <work command>), the same by path;
 //	                                         permissions.deny: read_file, write_file and command rules
 //
 // Checked against https://antigravity.google/docs/hooks.md, /docs/mcp.md,
@@ -115,14 +115,38 @@ func DenyRules(binary string) []string {
 	return rules
 }
 
-// AllowRules let the agent run teamflow commands without a prompt: by name (on the PATH) and by the binary's path.
-// command(prefix) matches word by word (https://antigravity.google/docs/permissions.md).
+// AllowRules let the agent run teamflow work commands without a prompt, by name (on the PATH) and by the binary's
+// path: one rule per work command, since command(prefix) matches word by word
+// (https://antigravity.google/docs/permissions.md), so setup commands (install, login, self-update, …) keep the
+// agent's prompt. sync is left out: its prefix would match `sync --stop`.
+//
+// Not covered, to verify on a real install: whether a prefix rule also matches a chained command
+// (`teamflow status && curl …`). Antigravity's PreToolUse hook could answer "ask" for those, but its output's
+// decision is required, and the docs give no neutral answer for every other command (allow may skip the
+// person's own ask rules), so no PreToolUse hook is added until that is checked.
 func AllowRules(binary string) []string {
-	rules := []string{"command(teamflow)"}
+	heads := []string{"teamflow"}
 	if binary != "" && filepath.Base(binary) != binary {
-		rules = append(rules, "command("+binary+")")
+		heads = append(heads, binary)
+	}
+	var rules []string
+	for _, h := range heads {
+		for _, c := range adapters.WorkCommands {
+			if c != "sync" {
+				rules = append(rules, "command("+h+" "+c+")")
+			}
+		}
 	}
 	return rules
+}
+
+// settingsRules is settings.json with Teamflow's deny and allow rules.
+func settingsRules(doc ojson.Obj, binary string, m *adapters.Manifest) (ojson.Obj, error) {
+	doc, err := adapters.AddRules(doc, "settings.json", "permissions", "deny", DenyRules(binary), &m.Deny, m)
+	if err != nil {
+		return nil, err
+	}
+	return adapters.AddRules(doc, "settings.json", "permissions", "allow", AllowRules(binary), &m.Allow, m)
 }
 
 // Install sets Teamflow up in the Antigravity CLI with binary (an absolute path). Every file is checked before any
@@ -173,6 +197,14 @@ func (*Adapter) Install(binary string) ([]string, error) {
 
 	// TODO(MCP removal follow-up): this is where the MCP server was registered (~/.gemini/config/mcp_config.json);
 	// agents use the teamflow CLI instead, allowed below.
+	if _, err := settingsRules(settings, binary, &m); err != nil {
+		return nil, err
+	}
+	m.MarkFileIfNew("AGENTS.md", agentsPath())
+	// The manifest first: a write failing half way still leaves uninstall knowing what install made.
+	if err := m.Save(); err != nil {
+		return nil, err
+	}
 	var done []string
 	if err := adapters.SaveJSON(hooksPath(), hooks.Set(hookName, hookDef(binary)), 0o644); err != nil {
 		return done, err
@@ -186,13 +218,7 @@ func (*Adapter) Install(binary string) ([]string, error) {
 		return done, err
 	}
 	done = append(done, "/teamf skill at "+home.Display(skillPath()))
-	err = adapters.UpdateJSON(settingsPath(), 0o644, func(doc ojson.Obj) (ojson.Obj, error) {
-		doc, err := adapters.AddRules(doc, "settings.json", "permissions", "deny", DenyRules(binary), &m.Deny, &m)
-		if err != nil {
-			return nil, err
-		}
-		return adapters.AddRules(doc, "settings.json", "permissions", "allow", AllowRules(binary), &m.Allow, &m)
-	})
+	err = adapters.UpdateJSON(settingsPath(), 0o644, func(doc ojson.Obj) (ojson.Obj, error) { return settingsRules(doc, binary, &m) })
 	if err != nil {
 		return done, err
 	}

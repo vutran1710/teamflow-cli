@@ -100,22 +100,29 @@ shaped file before writing anything, and never fails your agent's step.
 - **Copilot CLI** (`$COPILOT_HOME`, else `~/.copilot`): `hooks/teamflow.json` (sessionStart, userPromptSubmitted,
   preToolUse, postToolUse, agentStop, sessionEnd), `copilot-instructions.md` (the instruction block) and
   `skills/teamf/SKILL.md` (`/teamf`, `allowed-tools: shell(teamflow:*)`). Copilot keeps no allow or deny rules in
-  your config, so the preToolUse hook answers: it allows one plain `teamflow …` command (nothing chained, piped,
-  redirected or expanded) without a prompt, and refuses tool calls that name the Teamflow home. Copilot's prompt
-  hook cannot add context, so news arrives at session start, after each tool, and at the turn's end.
+  your config, so the preToolUse hook answers, without opening the Teamflow home: it refuses tool calls that name
+  the home; allows one plain `teamflow <work command>` with no prompt; and answers "ask" for any other teamflow
+  command (setup: install, uninstall, login, logout, self-update, hook, `sync --stop`; or anything chained, piped,
+  redirected, substituted or expanded: `; & | < > $ ` ( ) \ * ? [ ] { } ~`). Copilot's prompt hook cannot add
+  context, so news arrives at session start, after each tool, and at the turn's end.
 - **Cursor CLI** (`~/.cursor`): `hooks.json` (sessionStart, beforeSubmitPrompt, beforeShellExecution, postToolUse,
   stop, sessionEnd, beside your own hooks), `cli-config.json` (`permissions.allow`: `Shell(teamflow)` and
   `Shell(<binary>)`; `permissions.deny`: `Read(<home>)`, `Read(<home>/**)`, `Write(…)` the same),
   `rules/teamflow.mdc` (the instruction text, `alwaysApply`; the sessionStart hook gives it too) and
-  `skills/teamf/SKILL.md`. Shell commands naming the home are refused by the beforeShellExecution hook.
+  `skills/teamf/SKILL.md`. The beforeShellExecution hook (answering without opening the home) refuses shell
+  commands naming the home, and answers "ask" for any teamflow command that is not one plain work command, whatever
+  the `Shell(teamflow)` rule matches.
 - **Antigravity CLI** (`~/.gemini`): `config/hooks.json` (a hook named `teamflow`: SessionStart, PreInvocation,
   Stop), `config/AGENTS.md` (the instruction block), `config/skills/teamf/SKILL.md`, and
-  `antigravity-cli/settings.json` (`permissions.allow`: `command(teamflow)`, `command(<binary>)`;
+  `antigravity-cli/settings.json` (`permissions.allow`: `command(teamflow <work command>)` and the same by the
+  binary's path, one rule per work command, so setup commands keep the prompt;
   `permissions.deny`: `read_file(<home>)`, `write_file(<home>)` and `command(regex:…)` rules for commands naming
   the home).
 
 The same limits as Claude Code's deny rules apply: they stop what names the folder, not a command that reaches it
-another way.
+another way. The CLI itself never reads a file in the Teamflow home for a command (`--plan-file`,
+`--instruction-file`, `deliverables validate`, `artifact write`, `profile avatar`) nor writes one there
+(`artifact pull -o`), however the path names it: the check is on the resolved file, by identity.
 
 ## What it sends, and where
 
