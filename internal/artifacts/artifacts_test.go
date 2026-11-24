@@ -518,3 +518,74 @@ func TestLinkCopyIsChecked(t *testing.T) {
 		t.Errorf("folder: %v", err)
 	}
 }
+
+// Pull never writes into the Teamflow home: not without -o from inside the home (the teammate's name is used
+// there), not through a folder swapped for a link to the home after the checks, and never truncates a home file
+// reached that way.
+// Sad paths: run from inside the home; a new file's parent swapped for a link between check and open; an existing
+// target's parent swapped so the same name is the home's config.json; a hard link to a home file given as -o.
+func TestPullNeverWritesIntoTheHome(t *testing.T) {
+	root := real(t)
+	tf := filepath.Join(root, "tf")
+	must(t, os.Mkdir(tf, 0o700))
+	t.Setenv("TEAMFLOW_HOME", tf)
+	must(t, os.WriteFile(filepath.Join(tf, "config.json"), []byte("KEY"), 0o600))
+	data := []byte("# Spec\n")
+	ref := &protocol.StoredRef{Key: "k", Sha256: sum(data), MediaType: "text/markdown", Size: int64(len(data))}
+	noNew := func(what string) {
+		t.Helper()
+		ents, _ := os.ReadDir(tf)
+		if len(ents) != 1 {
+			t.Fatalf("%s: the home now holds %d files", what, len(ents))
+		}
+		if b, _ := os.ReadFile(filepath.Join(tf, "config.json")); string(b) != "KEY" {
+			t.Fatalf("%s: the config changed: %q", what, b)
+		}
+	}
+
+	t.Chdir(tf)
+	if _, err := Pull(content("spec.md", data, ref, nil), ""); err == nil || !strings.Contains(err.Error(), "Teamflow's home") {
+		t.Fatalf("from inside the home: %v", err)
+	}
+	noNew("from inside the home")
+	t.Chdir(root)
+
+	swap := func(dir string) {
+		pullRace = func(string) {
+			must(t, os.RemoveAll(dir))
+			must(t, os.Symlink(tf, dir))
+		}
+	}
+	t.Cleanup(func() { pullRace = func(string) {} })
+	sub := filepath.Join(root, "sub")
+	must(t, os.Mkdir(sub, 0o755))
+	swap(sub)
+	if _, err := Pull(content("spec.md", data, ref, nil), filepath.Join(sub, "spec.md")); err == nil {
+		t.Fatal("wrote through a parent swapped for a link to the home")
+	}
+	noNew("a new file through a swapped parent")
+
+	other := filepath.Join(root, "other")
+	must(t, os.Mkdir(other, 0o755))
+	must(t, os.WriteFile(filepath.Join(other, "config.json"), []byte("mine"), 0o644))
+	swap(other)
+	if _, err := Pull(content("spec.md", data, ref, nil), filepath.Join(other, "config.json")); err == nil {
+		t.Fatal("replaced a home file through a swapped parent")
+	}
+	noNew("an existing name through a swapped parent")
+	pullRace = func(string) {}
+
+	hard := filepath.Join(root, "hard.json")
+	must(t, os.Link(filepath.Join(tf, "config.json"), hard))
+	if _, err := Pull(content("spec.md", data, ref, nil), hard); err == nil {
+		t.Fatal("replaced a hard link to a home file")
+	}
+	noNew("a hard link")
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}

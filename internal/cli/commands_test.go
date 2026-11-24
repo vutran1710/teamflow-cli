@@ -619,12 +619,7 @@ func TestArtifactLink(t *testing.T) {
 func TestArtifactPull(t *testing.T) {
 	m := artifactMachine(t)
 	content := []byte("# Pricing\nv2\n")
-	sum := sha256.Sum256(content)
-	answer := `{"result": {"artifact": "` + S1 + `", "archived": false, "content_b64": "` + base64.StdEncoding.EncodeToString(content) +
-		`", "signal": {"signal": {"id": "sg_00000000000000000000000002", "project": "` + P + `", "topic": "` + T1 +
-		`", "kind": "ARTIFACT", "title": "spec.md", "body": {"type": "artifact.v1", "name": "spec.md", "kind": "TEXT", "summary": "s", "points": [], "stored": {"key": "k", "sha256": "` +
-		hex.EncodeToString(sum[:]) + `", "media_type": "text/markdown", "size": 13}}, "emitted_at": "2026-01-15T09:00:00Z"}, "author": {"member": "` + M1 +
-		`", "client_session": "", "actor": "AGENT"}, "received_at": "2026-01-15T09:00:00Z", "seq": 6, "chain": "` + S1 + `", "chain_version": 2, "state": "IN_FORCE", "content_hash": ""}}}`
+	answer := pullAnswer(content)
 	m.srv.on("artifact.get", answer)
 	r := m.run("", "artifact", "pull", S1, "-o", "out/spec.md")
 	wantCode(t, r, 0)
@@ -1244,4 +1239,14 @@ func TestEveryCommandIsClassedForAgents(t *testing.T) {
 			t.Fatalf("%s is classed but is no command", n)
 		}
 	}
+}
+
+// pullAnswer is artifact.get's answer for S1 (spec.md, version 2) with content.
+func pullAnswer(content []byte) string {
+	sum := sha256.Sum256(content)
+	return `{"result": {"artifact": "` + S1 + `", "archived": false, "content_b64": "` + base64.StdEncoding.EncodeToString(content) +
+		`", "signal": {"signal": {"id": "sg_00000000000000000000000002", "project": "` + P + `", "topic": "` + T1 +
+		`", "kind": "ARTIFACT", "title": "spec.md", "body": {"type": "artifact.v1", "name": "spec.md", "kind": "TEXT", "summary": "s", "points": [], "stored": {"key": "k", "sha256": "` +
+		hex.EncodeToString(sum[:]) + `", "media_type": "text/markdown", "size": 13}}, "emitted_at": "2026-01-15T09:00:00Z"}, "author": {"member": "` + M1 +
+		`", "client_session": "", "actor": "AGENT"}, "received_at": "2026-01-15T09:00:00Z", "seq": 6, "chain": "` + S1 + `", "chain_version": 2, "state": "IN_FORCE", "content_hash": ""}}}`
 }

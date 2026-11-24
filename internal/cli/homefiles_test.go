@@ -82,7 +82,17 @@ func TestArtifactPathsRefuseTheHome(t *testing.T) {
 		t.Fatal("the config was changed")
 	}
 	noCall(t, m.srv, "artifact.get")
-	r := m.run("", "artifact", "write", filepath.Join(links, "dir", "config.json"), "--topic", "rounding", "--summary", "s", "--project", P)
+	// Without -o, run from inside the home: the teammate's name would land there; refused, nothing written.
+	m.srv.on("artifact.get", pullAnswer([]byte("# Pricing\nv2\n")))
+	t.Chdir(m.dir)
+	r := m.run("", "artifact", "pull", S1)
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "Teamflow's home")
+	if _, err := os.Stat(filepath.Join(m.dir, "spec.md")); err == nil {
+		t.Fatal("pull wrote the teammate's file into the home")
+	}
+	t.Chdir(links)
+	r = m.run("", "artifact", "write", filepath.Join(links, "dir", "config.json"), "--topic", "rounding", "--summary", "s", "--project", P)
 	wantCode(t, r, 1)
 	r = m.run("", "profile", "avatar", filepath.Join(m.dir, "config.json"))
 	wantCode(t, r, 1)

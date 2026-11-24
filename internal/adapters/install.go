@@ -521,13 +521,14 @@ func UpdateJSONWith(path string, perm os.FileMode, change func(ojson.Obj) (ojson
 	return fmt.Errorf("%s keeps changing (the agent is writing it): try again", home.Display(path))
 }
 
-// WorkCommands are the teamflow commands an agent may run with no prompt. Every other one (SetupCommands, and
-// `sync --stop`) runs only with the agent's own permission prompt. A CLI test keeps the two lists complete.
+// WorkCommands are the teamflow commands an agent may run with no prompt. Every other one (SetupCommands) runs
+// only with the agent's own permission prompt. A CLI test keeps the two lists complete.
 var WorkCommands = []string{"projects", "status", "stop", "approve", "reject", "team", "topic", "artifact",
-	"deliverables", "drift", "project", "org", "profile", "tasks", "log", "sync"}
+	"deliverables", "drift", "project", "org", "profile", "tasks", "log"}
 
-// SetupCommands change where Teamflow is set up, who is signed in, or the binary itself: never auto-allowed.
-var SetupCommands = []string{"login", "logout", "install", "uninstall", "self-update", "hook", "mcp", "debug"}
+// SetupCommands change where Teamflow is set up, who is signed in, or the binary itself: never auto-allowed. sync
+// is here until the background sync is built (Task 10), so no spelling of `sync --stop` can slip through.
+var SetupCommands = []string{"login", "logout", "install", "uninstall", "self-update", "hook", "mcp", "debug", "sync"}
 
 // notPlain are the characters that make a command more than one plain teamflow run: chaining, pipes, redirects,
 // substitution and expansion (variables, globs, braces, ~), escapes and line breaks.
@@ -535,7 +536,7 @@ const notPlain = ";&|<>`$()\\\n\r*?[]{}~"
 
 // TeamflowCommand classifies a shell command: teamflow says its first word is teamflow (by name, or binary's path,
 // quoted or not); auto says it may run with no prompt: one plain run (none of notPlain), of a work command, its
-// subcommand first (no option before it), and not `sync --stop`. Where an agent's allow rule is a prefix, a hook
+// subcommand first (no option before it). Where an agent's allow rule is a prefix, a hook
 // answers "ask" for teamflow && !auto. Strict on purpose: the CLI refuses files in the Teamflow home too.
 func TeamflowCommand(cmd, binary string) (teamflow, auto bool) {
 	cmd = strings.TrimSpace(cmd)
@@ -560,9 +561,6 @@ func TeamflowCommand(cmd, binary string) (teamflow, auto bool) {
 		words[i] = strings.Trim(words[i], `'"`)
 	}
 	if len(words) == 0 || !slices.Contains(WorkCommands, words[0]) {
-		return true, false
-	}
-	if words[0] == "sync" && slices.Contains(words, "--stop") {
 		return true, false
 	}
 	return true, true

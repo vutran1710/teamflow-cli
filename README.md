@@ -102,7 +102,7 @@ shaped file before writing anything, and never fails your agent's step.
   `skills/teamf/SKILL.md` (`/teamf`, `allowed-tools: shell(teamflow:*)`). Copilot keeps no allow or deny rules in
   your config, so the preToolUse hook answers, without opening the Teamflow home: it refuses tool calls that name
   the home; allows one plain `teamflow <work command>` with no prompt; and answers "ask" for any other teamflow
-  command (setup: install, uninstall, login, logout, self-update, hook, `sync --stop`; or anything chained, piped,
+  command (setup: install, uninstall, login, logout, self-update, hook, sync until the background sync is built; or anything chained, piped,
   redirected, substituted or expanded: `; & | < > $ ` ( ) \ * ? [ ] { } ~`). Copilot's prompt hook cannot add
   context, so news arrives at session start, after each tool, and at the turn's end.
 - **Cursor CLI** (`~/.cursor`): `hooks.json` (sessionStart, beforeSubmitPrompt, beforeShellExecution, postToolUse,

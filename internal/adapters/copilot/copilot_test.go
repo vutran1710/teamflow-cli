@@ -296,7 +296,7 @@ func TestPreToolUseAllowsTeamflowCommands(t *testing.T) {
 		return at.Field(t, m.Hook("preToolUse", in("cp-1", `"toolName": "`+tool+`", "toolArgs": `+args)), "permissionDecision")
 	}
 	for _, cmd := range []string{"teamflow status", exe + " team --relay approvals", adapters.ShellQuote(exe) + " log",
-		"teamflow artifact list", "teamflow project plan --plan 'Ship: v1'", "teamflow sync"} {
+		"teamflow artifact list", "teamflow project plan --plan 'Ship: v1'"} {
 		if d := decision("bash", q(cmd)); d != "allow" {
 			t.Fatalf("%s: %q", cmd, d)
 		}
@@ -310,7 +310,7 @@ func TestPreToolUseAllowsTeamflowCommands(t *testing.T) {
 		"teamflow project plan --plan-file ~/.team*/config.json", "teamflow project plan --plan-file ~/.TEAMFLOW/config.json",
 		"teamflow project plan --plan-file x?y", "teamflow project plan --plan-file [ab]", "teamflow artifact write {a,b}",
 		"teamflow install -a all", "teamflow uninstall", "teamflow login -e a@b.c", "teamflow logout", "teamflow self-update",
-		"teamflow hook copilot sessionStart", "teamflow mcp", "teamflow debug state --json", "teamflow sync --stop",
+		"teamflow hook copilot sessionStart", "teamflow mcp", "teamflow debug state --json", "teamflow sync --stop", "teamflow sync --stop=true", "teamflow sync -stop", "teamflow sync",
 		"teamflow", "teamflow --help", "teamflow 'install'"} {
 		if d := decision("bash", q(cmd)); d != "ask" {
 			t.Fatalf("%s: %q, want ask", cmd, d)

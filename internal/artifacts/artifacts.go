@@ -548,6 +548,96 @@ func Link(url, name, file string, kind protocol.ArtifactKind) (Content, protocol
 	return c, k, nil
 }
 
+// pullRace lets a test change the file system between the checks and the open (a race an agent could run).
+var pullRace = func(stage string) {}
+
+// writeOutsideHome writes data to target, never into the Teamflow home: the final target is checked (InHome) as
+// given, again after its folders are made, and on the opened file by identity (a folder swapped for a link to the
+// home between check and open, or a hard link to one of its files, is refused before anything is truncated). A
+// link is never written through; an existing file is replaced only when replace (the person named it).
+func writeOutsideHome(target string, data []byte, replace bool) error {
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	if InHome(abs, "") {
+		return HomeRefusal(target)
+	}
+	existed := false
+	if fi, err := os.Lstat(abs); err == nil {
+		switch {
+		case fi.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("%s is a link: not written through; pass -o <file>", target)
+		case !fi.Mode().IsRegular():
+			return fmt.Errorf("%s is not a file", target)
+		case !replace:
+			return fmt.Errorf("%s already exists: not replaced; pass -o <file>", target)
+		}
+		existed = true
+	}
+	if replace {
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return err
+		}
+	}
+	if InHome(abs, "") { // a folder swapped for a link while it was made
+		return HomeRefusal(target)
+	}
+	pullRace("open")
+	// O_NONBLOCK: a FIFO swapped in never makes the open wait. No file there: O_CREATE|O_EXCL, so a file made here
+	// is known to be this call's; over an existing file no O_CREATE, so one removed meanwhile is never made anew.
+	flags := os.O_WRONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	if !existed {
+		flags |= os.O_CREATE | os.O_EXCL
+	}
+	f, err := os.OpenFile(abs, flags, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("%s already exists: not replaced; pass -o <file>", target)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot write %s: %w", target, errors.Unwrap(err))
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	// Checked on the opened file, before anything is truncated.
+	if !fi.Mode().IsRegular() || homeFile(fi, home.Dir()) || InHome(abs, "") {
+		if !existed { // made by this call (O_EXCL): never left behind, not even empty
+			if now, err := os.Lstat(abs); err == nil && os.SameFile(now, fi) {
+				_ = os.Remove(abs)
+			}
+		}
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a file", target)
+		}
+		return HomeRefusal(target)
+	}
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// homeFile says whether fi is one of the files in the Teamflow home (by identity: a hard link to it is it).
+func homeFile(fi os.FileInfo, dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if hfi, err := os.Stat(p); err == nil && os.SameFile(hfi, fi) {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 // Pulled is what Pull did: the file written, or, for a link, its url.
 type Pulled struct {
 	Path, URL, Version string
@@ -591,37 +681,16 @@ func Pull(c protocol.ArtifactContent, output string) (Pulled, error) {
 	if !strings.EqualFold(body.Stored.Sha256, Digest(data)) {
 		return Pulled{}, fmt.Errorf("the content of %s does not match its SHA-256: not saved", out.Version)
 	}
-	target := expand(output)
-	if target != "" && InHome(target, "") {
-		return Pulled{}, HomeRefusal(target)
-	}
 	// Without -o the name is a teammate's: a new file only, never an existing one or a link (it could pick
 	// .envrc or a Makefile). With -o the person chose the file: it may be replaced, but not written through a link.
-	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC | syscall.O_NOFOLLOW
+	target := expand(output)
 	if target == "" {
 		target = filepath.Base(body.Name)
 		if target == "." || target == ".." || target == "/" || body.Name == "" {
 			return Pulled{}, fmt.Errorf("the artifact's name %q is not a file name: pass -o <file>", body.Name)
 		}
-		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL | syscall.O_NOFOLLOW
-	} else if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return Pulled{}, err
 	}
-	if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return Pulled{}, fmt.Errorf("%s is a link: not written through; pass -o <file>", target)
-	}
-	f, err := os.OpenFile(target, flags, 0o644)
-	if errors.Is(err, os.ErrExist) {
-		return Pulled{}, fmt.Errorf("%s already exists: not replaced; pass -o <file>", target)
-	}
-	if err != nil {
-		return Pulled{}, fmt.Errorf("cannot write %s: %w", target, errors.Unwrap(err))
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return Pulled{}, err
-	}
-	if err := f.Close(); err != nil {
+	if err := writeOutsideHome(target, data, output != ""); err != nil {
 		return Pulled{}, err
 	}
 	out.Path = target

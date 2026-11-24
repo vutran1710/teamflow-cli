@@ -118,7 +118,7 @@ func DenyRules(binary string) []string {
 // AllowRules let the agent run teamflow work commands without a prompt, by name (on the PATH) and by the binary's
 // path: one rule per work command, since command(prefix) matches word by word
 // (https://antigravity.google/docs/permissions.md), so setup commands (install, login, self-update, …) keep the
-// agent's prompt. sync is left out: its prefix would match `sync --stop`.
+// agent's prompt.
 //
 // Not covered, to verify on a real install: whether a prefix rule also matches a chained command
 // (`teamflow status && curl …`). Antigravity's PreToolUse hook could answer "ask" for those, but its output's
@@ -132,9 +132,7 @@ func AllowRules(binary string) []string {
 	var rules []string
 	for _, h := range heads {
 		for _, c := range adapters.WorkCommands {
-			if c != "sync" {
-				rules = append(rules, "command("+h+" "+c+")")
-			}
+			rules = append(rules, "command("+h+" "+c+")")
 		}
 	}
 	return rules
