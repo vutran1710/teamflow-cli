@@ -47,7 +47,7 @@ func LegacyPresent(dir string) bool {
 const BusyTimeout = 250 * time.Millisecond
 
 // UpdateMessage is what the person is told when the server refused this client's protocol (UPGRADE_REQUIRED).
-const UpdateMessage = "update teamflow: install the new release (this server needs a newer client)"
+const UpdateMessage = "update teamflow (`teamflow self-update`, or download the new release)"
 
 // ErrBusy means another process held the store for longer than BusyTimeout. The caller answers from what it has.
 var ErrBusy = errors.New("teamflow store busy")

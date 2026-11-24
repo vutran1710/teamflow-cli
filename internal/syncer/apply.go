@@ -151,6 +151,9 @@ func ApprovalRequestedText(id, title string, required, approvers int) string {
 		"or because a teammate's signal asks.", id, fenced(title), required, approvers)
 }
 
+// Fenced is fenced, for the other places a teammate's text is shown inside «» (the approval queue).
+func Fenced(s string) string { return fenced(s) }
+
 // fenced makes a teammate's text safe inside «»: one line (every C0 and C1 control, including NEL, VT and FF,
 // and the line and paragraph separators become spaces), and no fence marks of its own (« becomes ‹; » and its
 // lookalikes ≫ 》 ⟫ become ›).

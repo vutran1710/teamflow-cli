@@ -57,3 +57,15 @@ func TestDebugStateIsRoutedAndHidden(t *testing.T) {
 		t.Fatalf("usage shows the hidden command: %q", errOut.String())
 	}
 }
+
+func TestCommandsAreRouted(t *testing.T) {
+	t.Setenv("TEAMFLOW_HOME", t.TempDir()+"/home")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"projects"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "not signed in") {
+		t.Fatalf("projects: exit %d, stderr %q", code, errOut.String())
+	}
+	out.Reset()
+	if code := run([]string{"--help"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "login") {
+		t.Fatalf("--help: exit %d, %q", code, out.String())
+	}
+}

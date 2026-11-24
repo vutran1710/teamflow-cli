@@ -28,7 +28,7 @@ import (
 var Version = "dev"
 
 // UpdateMessage is what the person is told when the server needs a newer client.
-const UpdateMessage = "update teamflow: install the new release (this server needs a newer client)"
+const UpdateMessage = "update teamflow (`teamflow self-update`, or download the new release)"
 
 var (
 	// ErrOffline means the server could not be reached, or failed (5xx, timeout): try again later.

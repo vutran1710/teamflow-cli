@@ -1,4 +1,4 @@
-// Command teamflow is the Teamflow client: CLI, MCP server and Claude Code hooks.
+// Command teamflow is the Teamflow client: the CLI, the MCP server and the agents' hooks.
 package main
 
 import (
@@ -13,8 +13,6 @@ import (
 // version is set at build time: go build -ldflags "-X main.version=1.2.3".
 var version = "dev"
 
-const usage = "usage: teamflow --version\n"
-
 func main() {
 	api.Version = version // the Teamflow-Client header names this build
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -28,12 +26,5 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 	}
-	if len(args) > 0 && args[0] == "debug" { // hidden: not in the usage text
-		return cli.Debug(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 {
-		fmt.Fprintf(stderr, "teamflow: unknown command %q\n", args[0])
-	}
-	fmt.Fprint(stderr, usage)
-	return 2
+	return cli.Main(args, os.Stdin, stdout, stderr)
 }

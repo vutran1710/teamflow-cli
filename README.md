@@ -1,12 +1,13 @@
 # teamflow-cli
 
-The Teamflow client: one static binary, `teamflow`, that holds the command line, the MCP server Claude Code talks
-to, and the Claude Code hooks. It records what your agents decide and do into a Teamflow project, and tells each
+The Teamflow client: one static binary, `teamflow`, that holds the command line, the MCP server your agent talks
+to, and the agents' hooks. It records what your agents decide and do into a Teamflow project, and tells each
 agent session what changed since its last step.
 
-**Status: early.** This repo currently holds the wire protocol (Go types generated from the schema the Teamflow
-server exports, checked against golden messages) and a `teamflow --version` stub. The commands, the MCP server
-and the hooks land here as they are built. The first release is tagged once the client passes the server's
+**Status: early.** This repo holds the wire protocol (Go types generated from the schema the Teamflow server
+exports, checked against golden messages), the local store and sync, and the command line. The MCP server, the
+agent adapters (Claude Code, Cursor CLI, Antigravity CLI, Copilot CLI), the background sync and self-update land
+here as they are built. The first release is tagged once the client passes the server's
 end-to-end suite.
 
 ## Install
@@ -21,6 +22,31 @@ go install github.com/vutran1710/teamflow-cli/cmd/teamflow@latest
 teamflow --version
 ```
 
+## Commands
+
+```text
+teamflow login -e EMAIL [-s SERVER] [--password-stdin]   sign in (the password is asked for without echo)
+teamflow logout | projects [--json] | status
+teamflow install -a AGENT… -e EMAIL [-s SERVER]          sign in and set Teamflow up in your agents
+teamflow uninstall [-a AGENT…] [--purge]
+teamflow stop                                            stop sharing the current agent session
+teamflow approve SG_ID [NOTE] | reject SG_ID NOTE        your verdict on an approval request
+teamflow team …                                          behind the agent's /teamf command
+teamflow topic delete PROJECT TOPIC [--yes]
+teamflow artifact write|link|pull|archive|list …
+teamflow deliverables [--project P] | deliverables validate FILE [--json]
+teamflow org members|add-member|remove-member …
+teamflow log [--all] [--project P]
+```
+
+`SERVER` defaults to `https://teamflow.vutr.io`. A password is never a command-line argument. A verdict run through
+your agent (inside an agent session) is recorded as given through the agent; run it in your own terminal and it is
+recorded as yours directly.
+
+**Release notes (vs. the Python client):** the placeholder `teamflow tui` is dropped. The local store is new
+(`~/.teamflow/store.db`); a Python-era `client.sqlite` is left alone and can be deleted, so sign in once more with
+`teamflow login`.
+
 ## What it sends, and where
 
 The client talks to one place only: the Teamflow server you sign in to, over HTTPS (`/rpc`, JSON-RPC) and a
@@ -32,20 +58,22 @@ What goes to that server:
 - **On every call:** your key in the `Authorization` header, and a `Teamflow-Client` header with this client's
   name, version and protocol number.
 - **What you and your agents record:** signals (decisions, key points, comments, results), topics, artifacts
-  (only the files an agent or you choose to publish), deliverables and their updates, and the approvals or
-  rejections you type yourself. Each carries the Claude Code session id it came from.
+  (only the files an agent or you choose to publish), deliverables and their updates, and your approvals or
+  rejections (marked when given through your agent). Each carries the agent session id it came from.
 - **Keeping up to date:** your position (cursor) in each project's event log, to fetch what changed.
 
 What stays on your machine:
 
-- Your prompts and code. The hooks read your prompt locally to recognise your own `/teamf` commands; it is not
-  uploaded.
+- Your prompts and code.
 - Your keys and the local copy of your projects, in `~/.teamflow` (or `$TEAMFLOW_HOME`): the folder is mode 0700
-  and its files 0600. Keys never appear in command lines, logs or URLs.
+  and its files 0600 (`config.json` holds the server, your email and the auth key; `store.db` the rest). Keys never appear in command lines, logs or URLs.
 
 ## Repository layout
 
 - `cmd/teamflow`: the binary.
+- `internal/cli`: the commands. `internal/core`: the agent-independent client they call (the store, the config
+  and the server kept in step). `internal/config`: `config.json`. `internal/adapters`: the agent adapter registry.
+  `internal/procs`: process ancestry, to find the agent session a command runs under.
 - `internal/protocol`: the wire types. `*_gen.go` are generated; never edit them.
 - `internal/protocolgen`, `tools/gen`: the generator (`go run ./tools/gen`).
 - `internal/deliverables`: the Deliverables check (a port of the server's, run before anything is sent), tested
