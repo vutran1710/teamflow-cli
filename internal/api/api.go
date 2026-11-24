@@ -75,7 +75,12 @@ type Client struct {
 	err  error // a refused server URL: every call returns it, before sending
 	http *http.Client
 	rec  ProtocolRecorder
+	gate Gate
 }
+
+// Gate decides whether and when one call is sent: it runs send (the call itself) or refuses with its own error.
+// The outbox uses it to send nothing ahead of queued signals (see core).
+type Gate func(ctx context.Context, method string, send func() error) error
 
 // New makes a client for server with key ("" for none); each request gives up after timeout.
 func New(server, key string, timeout time.Duration) *Client {
@@ -93,6 +98,19 @@ func New(server, key string, timeout time.Duration) *Client {
 func (c *Client) WithRecorder(r ProtocolRecorder) *Client {
 	c.rec = r
 	return c
+}
+
+// WithGate passes every single call (Call, never Batch) through g.
+func (c *Client) WithGate(g Gate) *Client {
+	c.gate = g
+	return c
+}
+
+// Ungated is the same client without its gate: the outbox's own sender.
+func (c *Client) Ungated() *Client {
+	u := *c
+	u.gate = nil
+	return &u
 }
 
 // String shows the client with its key masked.
@@ -198,11 +216,19 @@ func tooLarge(n int) error {
 	return fmt.Errorf("%w: %d bytes, the limit is %d", ErrTooLarge, n, protocol.MaxBodyBytes)
 }
 
-// Call makes one call and decodes its result into out (nil: ignore the result).
+// Call makes one call and decodes its result into out (nil: ignore the result), through the client's gate when it
+// has one.
 func (c *Client) Call(ctx context.Context, method string, params any, out any) error {
 	if c.err != nil {
 		return c.err
 	}
+	if c.gate != nil {
+		return c.gate(ctx, method, func() error { return c.call(ctx, method, params, out) })
+	}
+	return c.call(ctx, method, params, out)
+}
+
+func (c *Client) call(ctx context.Context, method string, params any, out any) error {
 	req, err := request(1, method, params)
 	if err != nil {
 		return err
@@ -235,8 +261,24 @@ func (c *Client) Call(ctx context.Context, method string, params any, out any) e
 // order. A call too large on its own gets ErrTooLarge and is not sent. On a failure that ends the batch (offline,
 // a refused answer) it returns the results of the calls before the failed request, and the error.
 func (c *Client) Batch(ctx context.Context, calls []Call) ([]Result, error) {
+	out := make([]Result, 0, len(calls))
+	err := c.BatchEach(ctx, calls, func(_, _ int, res []Result) bool {
+		out = append(out, res...)
+		return false
+	})
+	if err != nil && len(out) == 0 {
+		return nil, err
+	}
+	return out, err
+}
+
+// BatchEach sends calls as Batch does, one request at a time, and hands each request's answers to fn before the
+// next request goes out: calls[start:end] and their results (a call too large on its own is among them, with
+// ErrTooLarge, unsent). fn returning true stops it there; nothing after end is sent. A failure that ends a request
+// (offline, a refused answer) is returned, and that request's calls are not handed over.
+func (c *Client) BatchEach(ctx context.Context, calls []Call, fn func(start, end int, res []Result) (stop bool)) error {
 	if c.err != nil {
-		return nil, c.err
+		return c.err
 	}
 	// Measure each call with the widest id a chunk uses, so a chunk packed by these sizes fits.
 	wideID := protocol.MaxBatch - 1
@@ -244,7 +286,7 @@ func (c *Client) Batch(ctx context.Context, calls []Call) ([]Result, error) {
 	for i, call := range calls {
 		b, err := request(wideID, call.Method, call.Params)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		sizes[i] = len(b)
 	}
@@ -271,13 +313,15 @@ func (c *Client) Batch(ctx context.Context, calls []Call) ([]Result, error) {
 		}
 		if len(chunk) > 0 {
 			if err := c.batchChunk(ctx, calls, chunk, out); err != nil {
-				// partial: the results of every call before this request (answered or refused as too large)
-				return out[:start], err
+				return err
 			}
+		}
+		if fn(start, end, out[start:end]) {
+			return nil
 		}
 		start = end
 	}
-	return out, nil
+	return nil
 }
 
 // batchChunk sends the calls at idx in one request and puts their results into out.
@@ -357,6 +401,10 @@ func (c *Client) post(ctx context.Context, body []byte) ([]byte, int, error) {
 		return nil, 0, &APIError{Code: resp.StatusCode, Message: "unexpected redirect"}
 	}
 	server, _ := strconv.Atoi(strings.TrimSpace(resp.Header.Get(protocol.ProtocolHeader)))
+	if resp.StatusCode == http.StatusTooManyRequests { // busy: transient, like a 5xx, whatever the body says
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return nil, 0, fmt.Errorf("%w: server busy (429), try again later", ErrOffline)
+	}
 	if resp.StatusCode >= 500 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 		return nil, 0, fmt.Errorf("%w: server error %d", ErrOffline, resp.StatusCode)

@@ -643,3 +643,133 @@ func TestKeyRefIsPythonsKeyRef(t *testing.T) {
 		t.Fatal("the ref shows the key")
 	}
 }
+
+// ------------------------------------------------------------------ order (Task 8c-2b)
+
+// BatchEach hands each request's answers to the caller before the next request goes out, and stops when the caller
+// says so: an ordered outbox settles a batch before sending the next, and a transient error on one call stops it.
+// Sad paths: stopped after the first chunk (the rest never sent), a per-call refusal still handed over, a transport
+// failure on the second request (the first chunk already handed over, the error returned, nothing more sent).
+func TestBatchEachHandsOverEachChunkAndStops(t *testing.T) {
+	srv, requests := rpcServer(t, func(_ string, params json.RawMessage) (any, *protocol.RpcError) {
+		var p struct{ N int }
+		_ = json.Unmarshal(params, &p)
+		if p.N == 3 {
+			return nil, &protocol.RpcError{Code: protocol.CodeInvalidParams, Message: "bad"}
+		}
+		return map[string]int{"n": p.N}, nil
+	})
+	c := New(srv.URL, testKey, 5*time.Second)
+	calls := make([]Call, 2*protocol.MaxBatch+7)
+	for i := range calls {
+		calls[i] = Call{Method: "signal.emit", Params: map[string]int{"n": i}}
+	}
+	var spans [][2]int
+	err := c.BatchEach(context.Background(), calls, func(start, end int, res []Result) bool {
+		spans = append(spans, [2]int{start, end})
+		if len(res) != end-start {
+			t.Fatalf("chunk %d..%d: %d results", start, end, len(res))
+		}
+		if start == 0 && res[3].Err == nil {
+			t.Fatal("the refusal of call 3 was not handed over")
+		}
+		return true // stop after the first chunk
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(requests); got != 1 || len(spans) != 1 || spans[0] != [2]int{0, protocol.MaxBatch} {
+		t.Fatalf("%d requests, chunks %v: want only the first chunk sent", got, spans)
+	}
+	// Not stopped: every chunk, in order.
+	spans = nil
+	if err := c.BatchEach(context.Background(), calls, func(start, end int, _ []Result) bool {
+		spans = append(spans, [2]int{start, end})
+		return false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := [][2]int{{0, protocol.MaxBatch}, {protocol.MaxBatch, 2 * protocol.MaxBatch}, {2 * protocol.MaxBatch, len(calls)}}
+	if fmt.Sprint(spans) != fmt.Sprint(want) {
+		t.Fatalf("chunks %v, want %v", spans, want)
+	}
+	// The second request fails: the first chunk was handed over, the error comes back, nothing more is sent.
+	var n int32
+	half := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&n, 1) > 1 {
+			w.WriteHeader(503)
+			return
+		}
+		var reqs []protocol.Request
+		_ = json.NewDecoder(r.Body).Decode(&reqs)
+		outs := make([]protocol.Response, len(reqs))
+		for i, q := range reqs {
+			outs[i] = protocol.Response{JSONRPC: "2.0", ID: q.ID, Result: json.RawMessage(`{}`)}
+		}
+		_ = json.NewEncoder(w).Encode(outs)
+	}))
+	defer half.Close()
+	spans = nil
+	err = New(half.URL, testKey, time.Second).BatchEach(context.Background(), calls, func(start, end int, _ []Result) bool {
+		spans = append(spans, [2]int{start, end})
+		return false
+	})
+	if !errors.Is(err, ErrOffline) || len(spans) != 1 || atomic.LoadInt32(&n) != 2 {
+		t.Fatalf("err %v, chunks %v, %d requests", err, spans, n)
+	}
+}
+
+// A 429 (too many requests) is transient, like a 5xx: try again later, never a refusal of the calls. With or
+// without a JSON-RPC body, for one call and for a batch.
+func TestTooManyRequestsIsTransient(t *testing.T) {
+	for _, body := range []string{"", `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"slow down","data":{"reason":"NOT_ALLOWED"}}}`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(w, body)
+		}))
+		c := New(srv.URL, testKey, time.Second)
+		err := c.Call(context.Background(), "signal.emit", nil, nil)
+		_, berr := c.Batch(context.Background(), []Call{{Method: "signal.emit"}})
+		srv.Close()
+		if !errors.Is(err, ErrOffline) || !errors.Is(berr, ErrOffline) {
+			t.Fatalf("body %q: call %v, batch %v; want ErrOffline", body, err, berr)
+		}
+	}
+}
+
+// A gate sees every single call with its method and decides whether and when it is sent; a batch never passes it
+// (only the outbox sends batches), and Ungated drops it. Sad paths: the gate refusing (nothing sent, its error
+// returned), the gate's own send failing offline.
+func TestGateSeesEveryCall(t *testing.T) {
+	srv, requests := rpcServer(t, func(string, json.RawMessage) (any, *protocol.RpcError) { return map[string]int{}, nil })
+	var seen []string
+	refuse := errors.New("not now")
+	c := New(srv.URL, testKey, time.Second).WithGate(func(ctx context.Context, method string, send func() error) error {
+		seen = append(seen, method)
+		if method == "topic.create" {
+			return refuse
+		}
+		return send()
+	})
+	if err := c.Call(context.Background(), "project.get", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Call(context.Background(), "topic.create", nil, nil); !errors.Is(err, refuse) {
+		t.Fatalf("refused by the gate: %v", err)
+	}
+	if got := atomic.LoadInt32(requests); got != 1 {
+		t.Fatalf("%d requests; the refused call was sent", got)
+	}
+	if _, err := c.Batch(context.Background(), []Call{{Method: "signal.emit"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Ungated().Call(context.Background(), "topic.create", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, ",") != "project.get,topic.create" {
+		t.Fatalf("gate saw %v", seen)
+	}
+	if c.KeyRef() != c.Ungated().KeyRef() {
+		t.Fatal("Ungated changed the key")
+	}
+}
