@@ -517,6 +517,34 @@ func (m *machine) later() {
 	})
 }
 
+// Blocks is an answer (in these tests) as text blocks, as the Python MCP tools gave it: a string as it is, a list one item per
+// block (an empty list: none), anything else as JSON indented by two spaces.
+func Blocks(out any) ([]string, error) {
+	switch v := out.(type) {
+	case nil:
+		return []string{}, nil
+	case string:
+		return []string{v}, nil
+	case []string:
+		return append([]string{}, v...), nil
+	case []ojson.Obj:
+		blocks := []string{}
+		for _, o := range v {
+			text, err := ojson.Indent(o)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, text)
+		}
+		return blocks, nil
+	}
+	text, err := ojson.Indent(out)
+	if err != nil {
+		return nil, err
+	}
+	return []string{text}, nil
+}
+
 func applyEvent(tx *store.Tx, ev protocol.SyncEvent) error { return syncer.Apply(tx, ev, time.Now()) }
 
 func now() time.Time { return time.Now() }

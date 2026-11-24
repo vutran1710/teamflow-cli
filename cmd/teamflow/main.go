@@ -1,4 +1,4 @@
-// Command teamflow is the Teamflow client: the CLI, the MCP server and the agents' hooks.
+// Command teamflow is the Teamflow client: the command line (for people and agents alike) and the agents' hooks.
 package main
 
 import (

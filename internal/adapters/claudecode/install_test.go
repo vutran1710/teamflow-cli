@@ -666,3 +666,50 @@ func TestPreToolUseStaysOffTheNetwork(t *testing.T) {
 		t.Fatalf("50 tool steps made %d syncs", polls)
 	}
 }
+
+// Uninstall checks every file it will write before it changes any: a read-only claude json holding an old Teamflow
+// MCP server (or a read-only settings.json or CLAUDE.md) refuses it, and nothing at all is changed.
+// Sad paths: each of those files read-only, with Teamflow installed.
+func TestUninstallRefusesBeforeChangingAnything(t *testing.T) {
+	for name, path := range map[string]func(e *env) string{
+		"read-only claude json with an old MCP server": func(e *env) string { return e.claudeJSON() },
+		"read-only settings.json":                      func(e *env) string { return e.settings() },
+		"read-only CLAUDE.md":                          func(e *env) string { return e.claudeMD() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, true)
+			_, err := New().Install(e.bin)
+			must(t, err)
+			e.write(t, e.claudeJSON(), `{"mcpServers": {"teamflow": {"command": "/x/teamflow", "args": ["mcp"]}}}`, 0o600)
+			must(t, os.Chmod(path(e), 0o400))
+			before := e.snapshot(t)
+			if lines, err := New().Uninstall(); err == nil {
+				t.Fatalf("uninstalled: %v", lines)
+			}
+			if after := e.snapshot(t); !sameFiles(before, after) {
+				t.Fatalf("files changed on a refusal: %v", diffFiles(before, after))
+			}
+		})
+	}
+}
+
+// After install takes an old Teamflow MCP server out, the manifest no longer claims the claude json or its
+// mcpServers as Teamflow's (a later uninstall must not remove the person's claude json).
+func TestInstallForgetsTheOldMCPServersContainers(t *testing.T) {
+	e := newEnv(t, true)
+	e.write(t, e.claudeJSON(), `{"mcpServers": {"teamflow": {"command": "/x/teamflow", "args": ["mcp"]}}, "numStartups": 1}`, 0o600)
+	e.write(t, filepath.Join(e.cfg, ".teamflow-install.json"), `{"created": ["claude.json", "mcpServers"], "deny": []}`, 0o644)
+	_, err := New().Install(e.bin)
+	must(t, err)
+	man := read(t, filepath.Join(e.cfg, ".teamflow-install.json"))
+	if strings.Contains(man, "claude.json") || strings.Contains(man, "mcpServers") {
+		t.Fatalf("stale manifest entries: %s", man)
+	}
+	// The person adds a server of their own afterwards; uninstall keeps their claude json and its servers.
+	e.write(t, e.claudeJSON(), `{"mcpServers": {"mine": {"command": "x"}}, "numStartups": 1}`, 0o600)
+	_, err = New().Uninstall()
+	must(t, err)
+	if !strings.Contains(read(t, e.claudeJSON()), `"mine"`) {
+		t.Fatal("the person's claude json was changed")
+	}
+}

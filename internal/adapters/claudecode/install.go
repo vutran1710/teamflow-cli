@@ -198,6 +198,8 @@ func (a *Adapter) Install(binary string) ([]string, error) {
 		} else if line != "" {
 			done = append(done, line)
 		}
+		// Taken out: the claude json and its mcpServers are no longer Teamflow's to remove.
+		m.Created = slices.DeleteFunc(m.Created, func(c string) bool { return c == "claude.json" || c == "mcpServers" })
 	}
 	if _, err := os.Lstat(claudeMD()); errors.Is(err, fs.ErrNotExist) {
 		m.Created = append(m.Created, "CLAUDE.md")
@@ -461,6 +463,16 @@ func (a *Adapter) Uninstall() ([]string, error) {
 	}
 	if _, err := adapters.HasBlock(claudeMD()); err != nil {
 		return nil, err
+	}
+	// Every file it may write or remove, checked before any is changed: a refusal leaves everything as it was.
+	check := []string{settingsPath(), claudeMD(), teamfPath(), oldTeamPath(), manifestPath()}
+	if hasOldMCP() {
+		check = append(check, ClaudeJSON())
+	}
+	for _, p := range check {
+		if err := adapters.Writable(p); err != nil {
+			return nil, err
+		}
 	}
 	var done []string
 	s, changed, _, err := stripHooks(settings, &m)

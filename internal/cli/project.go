@@ -93,6 +93,7 @@ var artifactCmd = &command{name: "artifact", help: "Project artifacts: files tea
 		nargs: exactly(1), run: runArtifactLink},
 	{name: "pull", args: "<artifact>", help: "Save an artifact's content (the version in force, or --exact for one version).",
 		flags: []flagSpec{{name: "output", short: "o", help: "Where to save it (default: its name, here)"},
+			{name: "overwrite", kind: flag, help: "Replace the file at -o when it exists"},
 			{name: "exact", kind: flag, help: "This exact version, not the one in force"}}, nargs: exactly(1), run: runArtifactPull},
 	{name: "archive", args: "<artifact>", help: "Archive an artifact (initiator only): hidden from lists and plan updates, still readable.",
 		flags: []flagSpec{{name: "note", help: "Why, at most 240 characters"}, {name: "unarchive", kind: flag, help: "Bring it back"}},
@@ -179,6 +180,10 @@ func (r *inv) artifactLine(c *command, out any, err error, a *parsed) int {
 		n, _ := size.(int64)
 		return r.fail(artifacts.LinkHint(n, get("name"), a.get("topic"), a.pos[0]))
 	}
+	if get("queued") == "true" { // the server unreachable: in the spool, sent when it is back
+		r.println(strings.Join([]string{get("signal"), get("name"), get("kind"), "QUEUED"}, "\t"))
+		return 0
+	}
 	if get("accepted") != "true" {
 		return r.fail("refused: " + get("reason") + " " + get("message"))
 	}
@@ -198,7 +203,7 @@ func runArtifactPull(r *inv, a *parsed) int {
 	if err != nil {
 		return r.failErr(err)
 	}
-	pulled, err := artifacts.Pull(got, a.get("output"))
+	pulled, err := artifacts.Pull(got, a.get("output"), a.has("overwrite"))
 	if err != nil {
 		return r.failErr(err)
 	}

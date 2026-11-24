@@ -356,7 +356,7 @@ func TestPull(t *testing.T) {
 	data := []byte("# Spec\n")
 	ref := &protocol.StoredRef{Key: "k", Sha256: sum(data), MediaType: "text/markdown", Size: int64(len(data))}
 
-	got, err := Pull(content("spec.md", data, ref, nil), "")
+	got, err := Pull(content("spec.md", data, ref, nil), "", false)
 	if err != nil || got.Path != "spec.md" || got.Line() != "spec.md\tsg_2 (v2)" {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -364,7 +364,7 @@ func TestPull(t *testing.T) {
 		t.Fatalf("wrote %q", b)
 	}
 	out := filepath.Join(dir, "sub", "copy.md")
-	if got, err := Pull(content("spec.md", data, ref, nil), out); err != nil || got.Path != out {
+	if got, err := Pull(content("spec.md", data, ref, nil), out, false); err != nil || got.Path != out {
 		t.Fatalf("-o: %+v %v", got, err)
 	}
 	if b, _ := os.ReadFile(out); !bytes.Equal(b, data) {
@@ -372,24 +372,24 @@ func TestPull(t *testing.T) {
 	}
 
 	// A teammate's name never chooses a folder: only its last part is used.
-	if got, err := Pull(content("../../evil.md", data, ref, nil), ""); err != nil || got.Path != "evil.md" {
+	if got, err := Pull(content("../../evil.md", data, ref, nil), "", false); err != nil || got.Path != "evil.md" {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "..", "..", "evil.md")); err == nil {
 		t.Fatal("written outside the folder")
 	}
 	for _, name := range []string{"..", ".", "", "/"} {
-		if _, err := Pull(content(name, data, ref, nil), ""); err == nil || !strings.Contains(err.Error(), "-o") {
+		if _, err := Pull(content(name, data, ref, nil), "", false); err == nil || !strings.Contains(err.Error(), "-o") {
 			t.Errorf("name %q: %v", name, err)
 		}
 	}
 
 	// A link: nothing written, the url given back.
 	url := "https://x.test/talk.mp4"
-	if got, err := Pull(content("talk.mp4", nil, nil, &url), ""); err != nil || got.Path != "" || got.Line() != url {
+	if got, err := Pull(content("talk.mp4", nil, nil, &url), "", false); err != nil || got.Path != "" || got.Line() != url {
 		t.Fatalf("link: %+v %v", got, err)
 	}
-	if got, _ := Pull(content("x", nil, nil, nil), ""); got.Line() != "no stored content" {
+	if got, _ := Pull(content("x", nil, nil, nil), "", false); got.Line() != "no stored content" {
 		t.Fatalf("nothing: %q", got.Line())
 	}
 
@@ -402,7 +402,7 @@ func TestPull(t *testing.T) {
 		}
 	}
 	must(os.WriteFile(filepath.Join(dir, "Makefile"), []byte("mine"), 0o644))
-	if _, err := Pull(content("Makefile", data, ref, nil), ""); err == nil || !strings.Contains(err.Error(), "-o") {
+	if _, err := Pull(content("Makefile", data, ref, nil), "", false); err == nil || !strings.Contains(err.Error(), "-o") {
 		t.Fatalf("existing: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "Makefile")); string(b) != "mine" {
@@ -412,25 +412,33 @@ func TestPull(t *testing.T) {
 	must(os.WriteFile(victim, []byte("mine"), 0o644))
 	must(os.Symlink(victim, filepath.Join(dir, "link.md")))
 	for _, out := range []string{"", filepath.Join(dir, "link.md")} {
-		if _, err := Pull(content("link.md", data, ref, nil), out); err == nil {
+		if _, err := Pull(content("link.md", data, ref, nil), out, true); err == nil {
 			t.Fatalf("written through a link (-o %q)", out)
 		}
 	}
 	if b, _ := os.ReadFile(victim); string(b) != "mine" {
 		t.Fatal("written through a link")
 	}
-	// -o replaces a plain file the person named
-	if _, err := Pull(content("x.md", data, ref, nil), filepath.Join(dir, "Makefile")); err != nil {
-		t.Fatalf("-o over a file: %v", err)
+	// -o over a plain file the person named: refused without --overwrite (left as it was), replaced with it
+	before, _ := os.ReadFile(filepath.Join(dir, "Makefile"))
+	if _, err := Pull(content("x.md", data, ref, nil), filepath.Join(dir, "Makefile"), false); err == nil ||
+		!strings.Contains(err.Error(), "--overwrite") {
+		t.Fatalf("-o over a file without --overwrite: %v", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "Makefile")); !bytes.Equal(before, after) {
+		t.Fatal("replaced without --overwrite")
+	}
+	if _, err := Pull(content("x.md", data, ref, nil), filepath.Join(dir, "Makefile"), true); err != nil {
+		t.Fatalf("-o over a file with --overwrite: %v", err)
 	}
 	// Content with no stored SHA-256 to check it against is refused.
-	if _, err := Pull(content("nosum.md", data, nil, nil), ""); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+	if _, err := Pull(content("nosum.md", data, nil, nil), "", false); err == nil || !strings.Contains(err.Error(), "SHA-256") {
 		t.Fatalf("no digest: %v", err)
 	}
 
 	// Content that is not what the server stored is refused, and nothing is written.
 	bad := sum([]byte("other"))
-	_, err = Pull(content("tampered.md", data, &protocol.StoredRef{Sha256: bad}, nil), "")
+	_, err = Pull(content("tampered.md", data, &protocol.StoredRef{Sha256: bad}, nil), "", false)
 	if err == nil || !strings.Contains(err.Error(), "SHA-256") {
 		t.Fatalf("mismatch: %v", err)
 	}
@@ -440,12 +448,12 @@ func TestPull(t *testing.T) {
 	c := content("b.md", nil, nil, nil)
 	notB64 := "%%%"
 	c.ContentB64 = &notB64
-	if _, err := Pull(c, ""); err == nil {
+	if _, err := Pull(c, "", false); err == nil {
 		t.Fatal("content that is not base64 is an error")
 	}
 	c = content("b.md", data, nil, nil)
 	c.Signal.Signal.Body = protocol.CommentBody{Type: "comment.v1", Text: "x"}
-	if _, err := Pull(c, ""); err == nil || !strings.Contains(err.Error(), "not an artifact") {
+	if _, err := Pull(c, "", false); err == nil || !strings.Contains(err.Error(), "not an artifact") {
 		t.Fatalf("not an artifact: %v", err)
 	}
 }
@@ -545,7 +553,7 @@ func TestPullNeverWritesIntoTheHome(t *testing.T) {
 	}
 
 	t.Chdir(tf)
-	if _, err := Pull(content("spec.md", data, ref, nil), ""); err == nil || !strings.Contains(err.Error(), "Teamflow's home") {
+	if _, err := Pull(content("spec.md", data, ref, nil), "", false); err == nil || !strings.Contains(err.Error(), "Teamflow's home") {
 		t.Fatalf("from inside the home: %v", err)
 	}
 	noNew("from inside the home")
@@ -561,7 +569,7 @@ func TestPullNeverWritesIntoTheHome(t *testing.T) {
 	sub := filepath.Join(root, "sub")
 	must(t, os.Mkdir(sub, 0o755))
 	swap(sub)
-	if _, err := Pull(content("spec.md", data, ref, nil), filepath.Join(sub, "spec.md")); err == nil {
+	if _, err := Pull(content("spec.md", data, ref, nil), filepath.Join(sub, "spec.md"), true); err == nil {
 		t.Fatal("wrote through a parent swapped for a link to the home")
 	}
 	noNew("a new file through a swapped parent")
@@ -570,7 +578,7 @@ func TestPullNeverWritesIntoTheHome(t *testing.T) {
 	must(t, os.Mkdir(other, 0o755))
 	must(t, os.WriteFile(filepath.Join(other, "config.json"), []byte("mine"), 0o644))
 	swap(other)
-	if _, err := Pull(content("spec.md", data, ref, nil), filepath.Join(other, "config.json")); err == nil {
+	if _, err := Pull(content("spec.md", data, ref, nil), filepath.Join(other, "config.json"), true); err == nil {
 		t.Fatal("replaced a home file through a swapped parent")
 	}
 	noNew("an existing name through a swapped parent")
@@ -578,7 +586,7 @@ func TestPullNeverWritesIntoTheHome(t *testing.T) {
 
 	hard := filepath.Join(root, "hard.json")
 	must(t, os.Link(filepath.Join(tf, "config.json"), hard))
-	if _, err := Pull(content("spec.md", data, ref, nil), hard); err == nil {
+	if _, err := Pull(content("spec.md", data, ref, nil), hard, true); err == nil {
 		t.Fatal("replaced a hard link to a home file")
 	}
 	noNew("a hard link")
@@ -618,7 +626,7 @@ func TestPullNeverHangsOnAFIFO(t *testing.T) {
 				}
 			}
 			done := make(chan error, 1)
-			go func() { _, err := Pull(content("spec.md", data, ref, nil), target); done <- err }()
+			go func() { _, err := Pull(content("spec.md", data, ref, nil), target, existing); done <- err }()
 			select {
 			case err := <-done:
 				if err == nil {

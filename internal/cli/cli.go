@@ -411,7 +411,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil {
 		commandUsage(stderr, path, c)
 		fmt.Fprintf(stderr, "\nError: %s\n", err)
-		if p != nil && p.has("json") { // the agent reads stdout: the failure is there too, with the news
+		if c.jsonRun != nil && jsonAsked(rest) { // the agent reads stdout: the failure is there too, with the news
 			r.json = true
 			r.printJSON(ops.With(ojson.Obj{{Key: "error", Value: err.Error()}}, r.news()))
 		} else if c.jsonRun != nil {
@@ -424,4 +424,17 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runAgent(r, c, p)
 	}
 	return c.run(r, p)
+}
+
+// jsonAsked says whether --json is among a command's arguments (before any --), whether or not they parse.
+func jsonAsked(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--":
+			return false
+		case "--json":
+			return true
+		}
+	}
+	return false
 }

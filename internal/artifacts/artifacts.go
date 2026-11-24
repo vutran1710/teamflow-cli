@@ -554,8 +554,9 @@ var pullRace = func(stage string) {}
 // writeOutsideHome writes data to target, never into the Teamflow home: the final target is checked (InHome) as
 // given, again after its folders are made, and on the opened file by identity (a folder swapped for a link to the
 // home between check and open, or a hard link to one of its files, is refused before anything is truncated). A
-// link is never written through; an existing file is replaced only when replace (the person named it).
-func writeOutsideHome(target string, data []byte, replace bool) error {
+// link is never written through; an existing file is replaced only when replace (the person said --overwrite);
+// mkdir makes its folders (a path the person named with -o).
+func writeOutsideHome(target string, data []byte, replace, mkdir bool) error {
 	abs, err := filepath.Abs(target)
 	if err != nil {
 		return err
@@ -571,11 +572,11 @@ func writeOutsideHome(target string, data []byte, replace bool) error {
 		case !fi.Mode().IsRegular():
 			return fmt.Errorf("%s is not a file", target)
 		case !replace:
-			return fmt.Errorf("%s already exists: not replaced; pass -o <file>", target)
+			return fmt.Errorf("%s already exists: not replaced; pass --overwrite to replace it, or -o <another file>", target)
 		}
 		existed = true
 	}
-	if replace {
+	if mkdir {
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 			return err
 		}
@@ -592,7 +593,7 @@ func writeOutsideHome(target string, data []byte, replace bool) error {
 	}
 	f, err := os.OpenFile(abs, flags, 0o644)
 	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("%s already exists: not replaced; pass -o <file>", target)
+		return fmt.Errorf("%s already exists: not replaced; pass --overwrite to replace it, or -o <another file>", target)
 	}
 	if err != nil {
 		return fmt.Errorf("cannot write %s: %w", target, errors.Unwrap(err))
@@ -658,8 +659,9 @@ func (p Pulled) Line() string {
 // Pull saves an artifact version's stored content to output, or to its name in the current folder; a link is
 // given back as its url. The name is a teammate's: only its last part is used, so it never picks a folder.
 // Content that does not match its stored SHA-256, or has none, is refused, and nothing is written. Without
-// output an existing file is never replaced; a link is never written through.
-func Pull(c protocol.ArtifactContent, output string) (Pulled, error) {
+// output an existing file is never replaced, and with it only when overwrite (--overwrite); a link is never written
+// through.
+func Pull(c protocol.ArtifactContent, output string, overwrite bool) (Pulled, error) {
 	body, ok := c.Signal.Signal.Body.(protocol.ArtifactBody)
 	if !ok {
 		return Pulled{}, fmt.Errorf("%s is not an artifact", c.Signal.Signal.ID)
@@ -682,7 +684,8 @@ func Pull(c protocol.ArtifactContent, output string) (Pulled, error) {
 		return Pulled{}, fmt.Errorf("the content of %s does not match its SHA-256: not saved", out.Version)
 	}
 	// Without -o the name is a teammate's: a new file only, never an existing one or a link (it could pick
-	// .envrc or a Makefile). With -o the person chose the file: it may be replaced, but not written through a link.
+	// .envrc or a Makefile). With -o the person chose the file: it is replaced only with --overwrite, never through a
+	// link.
 	target := expand(output)
 	if target == "" {
 		target = filepath.Base(body.Name)
@@ -690,7 +693,7 @@ func Pull(c protocol.ArtifactContent, output string) (Pulled, error) {
 			return Pulled{}, fmt.Errorf("the artifact's name %q is not a file name: pass -o <file>", body.Name)
 		}
 	}
-	if err := writeOutsideHome(target, data, output != ""); err != nil {
+	if err := writeOutsideHome(target, data, overwrite && output != "", output != ""); err != nil {
 		return Pulled{}, err
 	}
 	out.Path = target

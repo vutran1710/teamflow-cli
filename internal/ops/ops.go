@@ -43,15 +43,6 @@ func New(ctx context.Context, c *core.Core, sess *store.Session, why error) *Cal
 	return &Call{ctx: ctx, c: c, sess: sess, err: why}
 }
 
-// Names are the actions, by name.
-func Names() []string {
-	out := make([]string, 0, len(registry))
-	for n := range registry {
-		out = append(out, n)
-	}
-	return out
-}
-
 // Do runs the action name with its input (any value that encodes to the action's JSON input object). Input it does
 // not know is refused, as is an action that does not exist.
 func (k *Call) Do(name string, input any) (any, error) {
@@ -167,34 +158,6 @@ func With(out any, news News) any {
 		o = o.Set(kv.Key, kv.Value)
 	}
 	return o
-}
-
-// Blocks is an answer as text blocks, as the Python MCP tools gave it: a string as it is, a list one item per
-// block (an empty list: none), anything else as JSON indented by two spaces.
-func Blocks(out any) ([]string, error) {
-	switch v := out.(type) {
-	case nil:
-		return []string{}, nil
-	case string:
-		return []string{v}, nil
-	case []string:
-		return append([]string{}, v...), nil
-	case []ojson.Obj:
-		blocks := []string{}
-		for _, o := range v {
-			text, err := ojson.Indent(o)
-			if err != nil {
-				return nil, err
-			}
-			blocks = append(blocks, text)
-		}
-		return blocks, nil
-	}
-	text, err := ojson.Indent(out)
-	if err != nil {
-		return nil, err
-	}
-	return []string{text}, nil
 }
 
 // ErrText is a failure as it reads: the refusal's own words.

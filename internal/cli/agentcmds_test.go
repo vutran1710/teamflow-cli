@@ -834,7 +834,7 @@ func TestArtifactPullNeverReachesTheHome(t *testing.T) {
 	}
 	for name, out := range cases {
 		t.Run(name, func(t *testing.T) {
-			r := m.run("", "artifact", "pull", S1, "-o", out, "--json")
+			r := m.run("", "artifact", "pull", S1, "-o", out, "--overwrite", "--json") // even with --overwrite
 			wantCode(t, r, 1)
 			if o := jsonObject(t, r); o["error"] == nil || o["saved_to"] != nil {
 				t.Fatalf("written: %v", o)
@@ -857,7 +857,21 @@ func TestArtifactPullNeverReachesTheHome(t *testing.T) {
 	if b, _ := os.ReadFile(out); string(b) != "# Pricing\nv2\n" {
 		t.Fatalf("content %q", b)
 	}
-	wantCode(t, m.run("", "artifact", "pull", S1, "-o", out), 0) // named again: replaced
+	// Named again: refused without --overwrite (the file kept), replaced with it.
+	must(t, os.WriteFile(out, []byte("mine"), 0o644))
+	r := m.run("", "artifact", "pull", S1, "-o", out)
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "already exists", "--overwrite")
+	if b, _ := os.ReadFile(out); string(b) != "mine" {
+		t.Fatal("replaced without --overwrite")
+	}
+	if o := jsonObject(t, m.run("", "artifact", "pull", S1, "-o", out, "--json")); o["error"] == nil {
+		t.Fatalf("--json replaced without --overwrite: %v", o)
+	}
+	wantCode(t, m.run("", "artifact", "pull", S1, "-o", out, "--overwrite"), 0)
+	if b, _ := os.ReadFile(out); string(b) != "# Pricing\nv2\n" {
+		t.Fatalf("--overwrite did not replace: %q", b)
+	}
 }
 
 // TestEveryAgentCommandIsAutoAllowed: every command of commands.json is a work command (an agent runs it with no
@@ -897,5 +911,84 @@ func TestTheAgentTextsAreTheExport(t *testing.T) {
 	}
 	if strings.Contains(protocol.AgentInstructions, "MCP") || strings.Contains(protocol.AgentInstructions, "_tool") {
 		t.Error("the instruction text names MCP tools")
+	}
+}
+
+// TestArtifactLinkGoesThroughTheSpool: inside an agent session a link is recorded like any signal: offline it is
+// queued (not refused), and once the server is back it is sent exactly once, after the signal queued before it.
+// Sad paths: offline; a restart between; a second command after the flush (no resend).
+func TestArtifactLinkGoesThroughTheSpool(t *testing.T) {
+	m := agentMachine(t)
+	writeFile(t, "s.json", oneSignal)
+	m.srv.offline(true)
+	wantCode(t, m.run("", "signal", "emit", "--file", "s.json"), 0)
+	r := m.run("", "artifact", "link", "https://media.example.com/demo.mp4", "--name", "demo.mp4", "--topic", "Rounding", "--summary", "A demo")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "demo.mp4\tVIDEO\tQUEUED")
+	o := jsonObject(t, m.run("", "artifact", "link", "https://media.example.com/b.mp4", "--name", "b.mp4", "--topic", "Rounding", "--summary", "B", "--json"))
+	if o["queued"] != true || o["error"] != nil {
+		t.Fatalf("--json offline %v", o)
+	}
+	if n, _ := m.store().SpoolSize(); n != 3 {
+		t.Fatalf("spool %d, want 3", n)
+	}
+	m.srv.offline(false)
+	st := m.store()
+	if err := st.SetHookOffline(P, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimHookSync(P, time.Now().Add(time.Hour), 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, m.run("", "whoami"), 0) // a later command, a fresh process: the spool flushes
+	sent := m.srv.sent("signal.emit")
+	if len(sent) != 3 {
+		t.Fatalf("sent %d, want 3", len(sent))
+	}
+	var kinds []string
+	for _, c := range sent {
+		kinds = append(kinds, params(t, c)["signal"].(map[string]any)["kind"].(string))
+	}
+	if strings.Join(kinds, ",") != "DECISION,ARTIFACT,ARTIFACT" {
+		t.Fatalf("order %v", kinds)
+	}
+	_ = m.run("", "whoami")
+	if n := len(m.srv.sent("signal.emit")); n != 3 {
+		t.Fatalf("resent: %d", n)
+	}
+	// Online, inside the session: still one spooled send, answered at once.
+	r = m.run("", "artifact", "link", "https://media.example.com/c.mp4", "--name", "c.mp4", "--topic", "Rounding", "--summary", "C")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "c.mp4\tVIDEO\tIN_FORCE")
+	if n, _ := m.store().SpoolSize(); n != 0 {
+		t.Fatalf("spool %d", n)
+	}
+}
+
+// TestJSONOnAParseError: an option the command does not know, an option missing its value: with --json anywhere
+// among the arguments, the error and the news still come out as one JSON object (exit 2); without it, as text.
+func TestJSONOnAParseError(t *testing.T) {
+	for _, args := range [][]string{{"signal", "list", "--json", "--bogus"}, {"signal", "list", "--bogus", "--json"},
+		{"signal", "list", "--json", "--topic"}} {
+		m := agentMachine(t)
+		noticed(t, m, "notice-on-parse-error")
+		r := m.run("", args...)
+		wantCode(t, r, 2)
+		o := jsonObject(t, r)
+		if o["error"] == nil || fmt.Sprint(o["notices"]) != "[notice-on-parse-error]" {
+			t.Fatalf("%v: %v", args, o)
+		}
+	}
+	m := agentMachine(t)
+	r := m.run("", "signal", "list", "--bogus")
+	wantCode(t, r, 2)
+	contains(t, "stderr", r.err, "No such option: --bogus")
+	if strings.HasPrefix(strings.TrimSpace(r.out), "{") {
+		t.Fatalf("JSON without --json: %s", r)
+	}
+	r = m.run("", "signal", "list", "--", "--json") // after --, an argument, not the option
+	wantCode(t, r, 2)
+	if strings.HasPrefix(strings.TrimSpace(r.out), "{") {
+		t.Fatalf("JSON for a --json after --: %s", r)
 	}
 }

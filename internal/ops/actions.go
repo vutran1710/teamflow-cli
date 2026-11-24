@@ -812,14 +812,26 @@ func artifactPublish(k *Call, in artifactPublishIn) (any, error) {
 	if err := approval(d, in.Approvers, in.Required); err != nil {
 		return nil, err
 	}
-	r, err := k.c.ArtifactPublish(k.ctx, pid, sid, d, k.actor())
-	if err != nil {
-		return nil, err
+	var out ojson.Obj
+	if sid != "" {
+		// Inside the agent session on that project: through the spool, as every signal it records (queued while
+		// offline, never ahead of signals queued before it).
+		answers, err := k.c.Emit(k.ctx, sid, []map[string]any{d})
+		if err != nil {
+			return nil, err
+		}
+		out = append(ojson.Obj{}, answers[0]...)
+	} else {
+		r, err := k.c.ArtifactPublish(k.ctx, pid, sid, d, k.actor())
+		if err != nil {
+			return nil, err
+		}
+		out = core.ResultObj(r)
 	}
-	out := core.ResultObj(r)
 	out = append(out, ojson.KV{"name", in.Name}, ojson.KV{"kind", string(kind)})
-	if r.Accepted {
-		if st, ok, _ := k.c.St.Signal(r.Signal); ok {
+	if acc, _ := out.Get("accepted"); acc == true {
+		id, _ := out.Get("signal")
+		if st, ok, _ := k.c.St.Signal(fmt.Sprint(id)); ok {
 			out = append(out, ojson.KV{"artifact", st.Chain}, ojson.KV{"version", st.ChainVersion})
 		}
 	}

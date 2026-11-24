@@ -535,7 +535,7 @@ func jsonArtifactPull(r *inv, a *parsed) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	pulled, err := artifacts.Pull(got, a.get("output"))
+	pulled, err := artifacts.Pull(got, a.get("output"), a.has("overwrite"))
 	if err != nil {
 		return nil, err
 	}
