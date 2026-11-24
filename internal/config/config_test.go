@@ -128,3 +128,25 @@ func TestSaveIsAtomic(t *testing.T) {
 		t.Fatalf("left behind: %v", entries)
 	}
 }
+
+// A Save interrupted before its rename leaves a temp file beside the last good config.json: the next process loads
+// the good one, and the next Save still works.
+func TestInterruptedSaveLeavesTheLastGoodConfig(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, Config{Server: "https://tf.example", AuthKey: "tfa_good", Email: "a@b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".config-123456.json"), []byte(`{"server": "https://other", "auth_k`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(dir)
+	if err != nil || cfg == nil || cfg.AuthKey != "tfa_good" || cfg.Server != "https://tf.example" {
+		t.Fatalf("after an interrupted save: %v %v", cfg, err)
+	}
+	if err := Save(dir, Config{Server: "https://tf.example", AuthKey: "tfa_next", Email: "a@b"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := Load(dir); cfg.AuthKey != "tfa_next" {
+		t.Fatalf("the next save: %v", cfg)
+	}
+}

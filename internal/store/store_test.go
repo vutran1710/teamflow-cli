@@ -981,3 +981,34 @@ func TestCursorsErrReportsAStoreThatCantAnswer(t *testing.T) {
 		t.Fatalf("closed store: Cursors = %v; want empty", got)
 	}
 }
+
+// A process killed mid-run leaves store.db with a -wal (and -shm) holding committed writes not yet checkpointed.
+// The next process opens it and finds every key.
+func TestKeysSurviveAKilledProcessWAL(t *testing.T) {
+	dir := t.TempDir()
+	st := open(t, dir)
+	if _, err := st.db.Exec("PRAGMA wal_autocheckpoint=0"); err != nil {
+		t.Fatal(err)
+	}
+	must(t, st.PutProjectKey(bnd, "pj_a", "tfk_a", "mb_1", "og_1", "Alpha", t0))
+	must(t, st.PutProjectKey(bnd, "pj_b", "tfk_b", "mb_1", "og_1", "Beta", t0))
+	wal, err := os.ReadFile(filepath.Join(dir, FileName+"-wal"))
+	must(t, err)
+	if len(wal) == 0 {
+		t.Fatal("the writes should still be in the WAL")
+	}
+	// The "killed" process's files, copied while it still holds them (no close, no checkpoint).
+	crashed := t.TempDir()
+	for _, f := range []string{FileName, FileName + "-wal", FileName + "-shm"} {
+		b, err := os.ReadFile(filepath.Join(dir, f))
+		must(t, err)
+		must(t, os.WriteFile(filepath.Join(crashed, f), b, 0o600))
+	}
+	again := open(t, crashed)
+	if k, _, _, _, ok := again.ProjectKey(bnd, "pj_a"); !ok || k != "tfk_a" {
+		t.Fatalf("pj_a after the crash: %q %v", k, ok)
+	}
+	if ps, _ := again.KeyProjects(bnd); len(ps) != 2 {
+		t.Fatalf("keys after the crash: %v", ps)
+	}
+}

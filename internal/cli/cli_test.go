@@ -849,3 +849,22 @@ func TestCorruptConfigRefusesCleanly(t *testing.T) {
 		t.Fatalf("sent %v", m.srv.methods())
 	}
 }
+
+// An auth key the server no longer takes (expired) after a restart: status says to sign in again, the commands
+// refuse with the server's reason, and nothing crashes.
+func TestExpiredAuthKeySaysSignInAgain(t *testing.T) {
+	m := newMachine(t, true)
+	expired := `{"error": {"code": -32000, "message": "your sign-in has expired: sign in again", "data": {"reason": "NOT_ALLOWED"}}}`
+	m.srv.on("account.me", expired)
+	m.srv.on("account.projects", expired)
+	m.srv.on("key.fetch", expired)
+	r := m.run("", "status")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "sign-in: refused (NOT_ALLOWED); run `teamflow login` again")
+	for _, args := range [][]string{{"projects"}, {"artifact", "list", "--project", P}} {
+		r = m.run("", args...)
+		wantCode(t, r, 1)
+		contains(t, "stderr", r.err, "NOT_ALLOWED: your sign-in has expired: sign in again")
+		lacks(t, "stderr", r.err, "panic", "goroutine")
+	}
+}

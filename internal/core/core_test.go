@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -264,6 +265,86 @@ func TestLoginToAMalformedServerChangesNothing(t *testing.T) {
 	}
 	if _, _, _, _, ok := c.St.ProjectKey(b, P); !ok {
 		t.Fatal("a refused login forgot the keys")
+	}
+}
+
+// After a reboot or restart nothing is in memory: a fresh Core opened from the same home finds the sign-in (server,
+// auth key, email) and every bound project key, and uses them without fetching anything again. No credential lives
+// only in memory: the auth key is in config.json, project keys in store.db.
+func TestRestartReloadsEveryCredential(t *testing.T) {
+	ctx := context.Background()
+	fetches := 0
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			Params struct {
+				Project string `json:"project"`
+			} `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "auth.login":
+			_, _ = w.Write([]byte(`{"jsonrpc": "2.0", "id": 1, "result": {"auth_key": "tfa_saved", "account": {"id": "ac", "email": "Lan@Acme.test", "name": "lan", "alias": "", "avatar": null, "created_at": "2026-01-15T09:00:00Z", "disabled_at": null}, "expires_at": "2026-01-15T09:00:01Z"}}`))
+		case "key.fetch":
+			fetches++
+			if r.Header.Get("Authorization") != "Bearer tfa_saved" {
+				t.Errorf("key.fetch with %q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc": "2.0", "id": 1, "result": {"key": "tfk_` + req.Params.Project + `", "project": "` + req.Params.Project + `", "org": "og", "member": "mb", "name": "n"}}`))
+		case "project.get":
+			if r.Header.Get("Authorization") != "Bearer tfk_"+P {
+				t.Errorf("project.get with %q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc": "2.0", "id": 1, "result": {}}`))
+		default:
+			t.Errorf("unexpected %s", req.Method)
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+	first := open(t, nil)
+	if _, err := first.Login(ctx, strings.ToUpper(srvURL[:4])+srvURL[4:]+"/", "lan@acme.test", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	const P2 = "pj_00000000000000000000000002"
+	for _, p := range []string{P, P2} {
+		if _, err := first.ProjectKey(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first.Close()
+	if fetches != 2 {
+		t.Fatalf("fetches %d", fetches)
+	}
+
+	// The restart: a new process, the same home.
+	again, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if !again.SignedIn() || again.Cfg.Server != srvURL || again.Cfg.AuthKey != "tfa_saved" || again.Cfg.Email != "Lan@Acme.test" {
+		t.Fatalf("the sign-in after a restart: %v", again.Cfg)
+	}
+	ps, err := again.KeyProjects()
+	if err != nil || len(ps) != 2 {
+		t.Fatalf("keys after a restart: %v %v", ps, err)
+	}
+	for _, p := range []string{P, P2} {
+		if k, err := again.ProjectKey(ctx, p); err != nil || k != "tfk_"+p {
+			t.Fatalf("key of %s after a restart: %q %v", p, k, err)
+		}
+	}
+	a, err := again.API(ctx, P, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Call(ctx, "project.get", protocol.ProjectGet{Project: P}, nil); err != nil {
+		t.Fatalf("the reloaded key is usable: %v", err)
+	}
+	if fetches != 2 {
+		t.Fatalf("a restart fetched keys again (%d)", fetches)
 	}
 }
 
