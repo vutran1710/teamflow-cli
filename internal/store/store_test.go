@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1010,5 +1012,77 @@ func TestKeysSurviveAKilledProcessWAL(t *testing.T) {
 	}
 	if ps, _ := again.KeyProjects(bnd); len(ps) != 2 {
 		t.Fatalf("keys after the crash: %v", ps)
+	}
+}
+
+// ClaimNotices hands each unshown notice out once, even to callers racing on their own connections (two MCP calls
+// at once, a hook beside them): the claim and the mark are one statement.
+func TestClaimNoticesHandsEachOutOnce(t *testing.T) {
+	dir := t.TempDir()
+	st := open(t, dir)
+	must(t, st.Notice("ss_1", protocol.NoticeTypeApprovalRequested, "sg_1", "approve sg_1", t0))
+	must(t, st.Notice("ss_1", protocol.NoticeTypeDriftFound, "dr_1", "drift", t0))
+	must(t, st.Notice("ss_1", protocol.NoticeTypeTopicDeleted, "tp_1", "topic gone", t0))
+	must(t, st.Notice("ss_2", protocol.NoticeTypeDriftFound, "dr_1", "other session", t0))
+	got, err := st.ClaimNotices("ss_1", true)
+	must(t, err)
+	if len(got) != 1 || got[0].About != "sg_1" {
+		t.Fatalf("approval claim %+v", got)
+	}
+	got, err = st.ClaimNotices("ss_1", false)
+	must(t, err)
+	if len(got) != 2 || got[0].Text != "drift" || got[1].Text != "topic gone" {
+		t.Fatalf("other claim (in order) %+v", got)
+	}
+	if again, _ := st.ClaimNotices("ss_1", false); len(again) != 0 {
+		t.Fatalf("claimed twice %+v", again)
+	}
+	if all, _ := st.Notices("ss_1", false); len(all) != 3 {
+		t.Fatalf("a claimed notice stays in the inbox: %+v", all)
+	}
+
+	// Racing claimers on separate stores (connections): every notice exactly once.
+	for i := range 20 {
+		must(t, st.Notice("ss_3", protocol.NoticeTypeDriftFound, fmt.Sprint("dr_", i), fmt.Sprint("n", i), t0))
+	}
+	var mu sync.Mutex
+	seen := map[string]int{}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := Open(dir)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer s.Close()
+			for range 5 {
+				ns, err := s.ClaimNotices("ss_3", false)
+				if err != nil && !errors.Is(err, ErrBusy) {
+					t.Error(err)
+				}
+				mu.Lock()
+				for _, n := range ns {
+					seen[n.Text]++
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	rest, err := st.ClaimNotices("ss_3", false)
+	must(t, err)
+	for _, n := range rest {
+		seen[n.Text]++
+	}
+	if len(seen) != 20 {
+		t.Fatalf("claimed %d of 20", len(seen))
+	}
+	for text, n := range seen {
+		if n != 1 {
+			t.Fatalf("%s claimed %d times", text, n)
+		}
 	}
 }

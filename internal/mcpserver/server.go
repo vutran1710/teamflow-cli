@@ -48,7 +48,7 @@ var ErrNoSession = errors.New("no agent session found; is Teamflow installed for
 // Run serves the tools over in and out (the agent's pipes: stdin and stdout) until the agent closes them.
 func Run(ctx context.Context, open Opener, find SessionFinder, version string, in io.Reader, out io.Writer) error {
 	err := New(open, find, version).Run(ctx, &mcp.IOTransport{Reader: io.NopCloser(in), Writer: nopWriteCloser{out}})
-	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "EOF") {
+	if err == nil || errors.Is(err, io.EOF) {
 		return nil // the agent closed the pipe: done
 	}
 	return err
@@ -144,10 +144,27 @@ func (t *tools) run(ctx context.Context, fn func(k *call) (any, error)) (*mcp.Ca
 		}
 	}
 	out, err := fn(k)
-	if err != nil {
-		return nil, nil, toolError(err)
+	if err != nil { // a failure carries what is new too: every result does
+		text := toolError(err).Error()
+		if news := k.news(); len(news) > 0 {
+			if extra, jerr := ojson.Indent(news); jerr == nil {
+				text += "\n\n" + extra
+			}
+		}
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
 	}
-	out = k.refreshed(out)
+	if news := k.news(); len(news) > 0 {
+		o, isObj := out.(ojson.Obj)
+		if !isObj {
+			o = ojson.Obj{{"result", out}}
+		} else {
+			o = append(ojson.Obj{}, o...)
+		}
+		for _, kv := range news {
+			o = o.Set(kv.Key, kv.Value)
+		}
+		out = o
+	}
 	content, err := contents(out)
 	if err != nil {
 		return nil, nil, toolError(err)
@@ -155,31 +172,20 @@ func (t *tools) run(ctx context.Context, fn func(k *call) (any, error)) (*mcp.Ca
 	return &mcp.CallToolResult{Content: content}, nil, nil
 }
 
-// refreshed is a result with what is new for the session: approval requests that reached it (raised once, so the
-// agent asks the person mid-turn) and its other unshown notices. Checking never breaks the call itself.
-func (k *call) refreshed(out any) any {
+// news is what is new for the session, claimed so no other call gets it too: approval requests that reached it
+// (so the agent asks the person mid-turn) and its other unshown notices. Checking never breaks the call itself.
+func (k *call) news() ojson.Obj {
 	if k.sess == nil {
-		return out
+		return nil
 	}
-	news := ""
+	var o ojson.Obj
 	if k.sess.Project != "" {
-		news = k.c.AfterTurn(k.ctx, k.sess.ID)
+		if news := k.c.AfterTurn(k.ctx, k.sess.ID); news != "" {
+			o = append(o, ojson.KV{Key: "approval_requests", Value: news})
+		}
 	}
-	notices := k.c.NewNotices(k.sess.ID)
-	if news == "" && len(notices) == 0 {
-		return out
-	}
-	o, isObj := out.(ojson.Obj)
-	if !isObj {
-		o = ojson.Obj{{"result", out}}
-	} else {
-		o = append(ojson.Obj{}, o...)
-	}
-	if news != "" {
-		o = o.Set("approval_requests", news)
-	}
-	if len(notices) > 0 {
-		o = o.Set("notices", notices)
+	if notices := k.c.NewNotices(k.sess.ID); len(notices) > 0 {
+		o = append(o, ojson.KV{Key: "notices", Value: notices})
 	}
 	return o
 }

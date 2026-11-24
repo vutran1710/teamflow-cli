@@ -321,26 +321,21 @@ func (c *Core) Inbox(sid string) ([]string, error) {
 }
 
 // AfterTurn is the approval requests that reached the session since it last heard of them (its project only),
-// synced first, as the approval queue's text; each is raised once. "" when there are none.
+// synced first, as the approval queue's text; each is raised once (claimed atomically: a hook that raises approval
+// requests must claim them the same way, with store.ClaimNotices). "" when there are none.
 func (c *Core) AfterTurn(ctx context.Context, sid string) string {
 	sess, ok, err := c.St.Session(sid)
 	if err != nil || !ok || sess.Project == "" || !c.SignedIn() {
 		return ""
 	}
 	c.Sync(ctx, HookTimeout, sess.Project)
-	ns, err := c.St.Notices(sid, true)
-	if err != nil {
+	ns, err := c.St.ClaimNotices(sid, true) // taken once, even by calls racing
+	if err != nil || len(ns) == 0 {
 		return ""
 	}
-	var shown []int64
 	asked := map[string]bool{}
 	for _, n := range ns {
-		if n.Type == protocol.NoticeTypeApprovalRequested {
-			shown, asked[n.About] = append(shown, n.N), true
-		}
-	}
-	if len(shown) == 0 || c.St.NoticesShown(shown) != nil {
-		return ""
+		asked[n.About] = true
 	}
 	waiting, err := c.Approvals(sid, false)
 	if err != nil {
@@ -361,20 +356,13 @@ func (c *Core) AfterTurn(ctx context.Context, sid string) string {
 // NewNotices are the session's other notices not shown yet (stale citations, drifts, rejections after a queue,
 // topic deletions, actions…), marked shown: an agent with no hooks hears of them at its next tool call, once.
 func (c *Core) NewNotices(sid string) []string {
-	ns, err := c.St.Notices(sid, true)
-	if err != nil {
+	ns, err := c.St.ClaimNotices(sid, false) // taken once, even by calls racing
+	if err != nil || len(ns) == 0 {
 		return nil
 	}
-	var shown []int64
-	var out []string
-	for _, n := range ns {
-		if n.Type == protocol.NoticeTypeApprovalRequested {
-			continue
-		}
-		shown, out = append(shown, n.N), append(out, n.Text)
-	}
-	if len(shown) == 0 || c.St.NoticesShown(shown) != nil {
-		return nil
+	out := make([]string, len(ns))
+	for i, n := range ns {
+		out[i] = n.Text
 	}
 	return out
 }

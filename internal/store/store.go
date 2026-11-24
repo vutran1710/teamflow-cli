@@ -1141,6 +1141,34 @@ func (o ops) Notices(session string, unshownOnly bool) ([]Notice, error) {
 	return out, err
 }
 
+// ClaimNotices takes the session's unshown notices (only approval requests when approvals, else every other type)
+// and marks them shown in one statement, so two callers racing (parallel tool calls, a hook beside them) never
+// both get one. In order.
+func (o ops) ClaimNotices(session string, approvals bool) ([]Notice, error) {
+	op := "!="
+	if approvals {
+		op = "="
+	}
+	var out []Notice
+	err := o.each("UPDATE notices SET shown = 1 WHERE session = ? AND shown = 0 AND type "+op+" ? RETURNING n, type, about, text",
+		[]any{session, string(protocol.NoticeTypeApprovalRequested)}, func(r *sql.Rows) error {
+			var n Notice
+			var typ string
+			var about sql.NullString
+			if err := r.Scan(&n.N, &typ, &about, &n.Text); err != nil {
+				return err
+			}
+			n.Type, n.About = protocol.NoticeType(typ), about.String
+			out = append(out, n)
+			return nil
+		})
+	if err != nil {
+		return nil, wrap(err)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].N < out[j].N })
+	return out, nil
+}
+
 // NoticesShown marks notices as shown.
 func (o ops) NoticesShown(ns []int64) error {
 	for _, n := range ns {
