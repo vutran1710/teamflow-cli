@@ -160,7 +160,7 @@ What stays on your machine:
 ## How signals are sent
 
 Everything this machine records on a project's shared record leaves in the order it was made: one ordered outbox
-per project, one sender at a time.
+per project and sign-in, one sender at a time.
 
 ```mermaid
 sequenceDiagram
@@ -168,7 +168,7 @@ sequenceDiagram
     participant A as Agent (or you)
     participant T as teamflow command / hook
     participant O as Outbox (spool table in store.db)
-    participant L as Sender lock (send-<key ref>.lock)
+    participant L as Sender lock (send-<outbox ref>.lock)
     participant S as Teamflow server
 
     A->>T: teamflow signal emit --file s.json
@@ -206,16 +206,17 @@ flowchart TD
     R -- accepted --> D[leaves the outbox; its session is told it reached the team]
     R -- "refused for good (invalid, a reasoned refusal, too large)" --> X[leaves the outbox; its session is told why]
     R -- "transient (offline, 5xx, 429, no or unreadable answer,<br/>update needed, key no longer a member's)" --> STOP[stays; the flush stops; later items wait]
+    STOP -- "the server failed on it 10 times<br/>over 24 hours or more" --> GU[dropped; its session is told]
 ```
 
 Plain text, for viewers without Mermaid:
 
 ```
-agent / you ──> teamflow <cmd> ──> outbox (store.db, per project key, in order)
+agent / you ──> teamflow <cmd> ──> outbox (store.db, per sign-in and project, in order)
                                      │
                flush points: the command that queued it; human acts and other writes;
                              later commands and agent hooks (a sync flushes before it pulls)
-                                     │  one sender at a time: send-<key ref>.lock (flock) in the Teamflow home
+                                     │  one sender at a time: send-<outbox ref>.lock (flock) in the Teamflow home
                                      ▼
              routine items ──> [call, call, …] ≤ 50 calls, ≤ 8 MiB ──> server ──> one result per call
              human act     ──> flush everything before it, then {one call}, alone
@@ -223,17 +224,23 @@ agent / you ──> teamflow <cmd> ──> outbox (store.db, per project key, in
                accepted ─────────> leaves; its session hears "reached the team"
                refused for good ─> leaves; its session hears why
                transient ────────> stays; the flush stops; everything after it waits
+                                   (the server failing on it 10 times over ≥ 24 h: dropped, session told)
 ```
 
 In detail:
 
 - **The outbox.** Signals an agent records (`signal emit`, `action result`, `action revoke`, `artifact link` inside
   its session) and human acts (`approve`, `reject`, `drift resolve`, `drift dismiss`) are queued in the `spool`
-  table of `store.db`, under the project's key, and sent from there in order. A queued item survives a restart, a
-  reboot or a killed process.
+  table of `store.db`, in the outbox of the project under your sign-in (server and account), and sent from there
+  in order, under whatever key that sign-in holds for the project when they go. A queued item survives a restart,
+  a reboot, a killed process, a logout and login as the same account, and a project key dropped and fetched
+  again. Another account signing in on this machine never sends your items: they stay, and `teamflow status` and
+  `teamflow outbox` show them.
 - **Flush points.** The command that queued an item flushes at once; so do human acts and writes that are not
   queued. Later commands and the agent hooks sync the project (inside an agent's turn at most once every 10 s, and
-  not for 30 s after the server was unreachable), and a sync flushes the outbox before it pulls.
+  not for 30 s after the server was unreachable), and a sync flushes the outbox before it pulls, within the sync's
+  own time limit (a hook's few seconds): what does not fit waits for the next one. A sync also fetches a new key
+  for a project whose items wait but whose key was dropped.
 - **Batches.** Routine items go as one JSON-RPC array per request, packed by count (at most 50) and size (at most
   8 MiB). Each request's results are recorded before the next request goes out, so a crash between requests
   resends nothing already answered.
@@ -242,11 +249,15 @@ In detail:
   a stuck item, another sender busy), the act waits in its place and is never sent ahead: the command exits 0 and
   says `queued: will be sent after N earlier signals` (`--json`: `"queued": true, "ahead": N`). It is sent alone,
   in order, by a later flush. When the stop needs you (`update teamflow`, a key no longer a member's), the command
-  fails with that reason, and the act still waits in the outbox.
+  fails with that reason, and the act still waits in the outbox. When another `teamflow` holds the sender lock,
+  the act is handed to it (`handed to the outbox: … sends it in its turn`): it may already be sent when the
+  command answers. What became of an act made outside any agent session (a refusal later, say) is shown on your
+  next `teamflow` command.
 - **Writes that are not queued** (artifact write and archive, Deliverables, topic, plan and member changes, a link
   published outside an agent session) flush the outbox first and are sent only when it is empty. Otherwise they
-  are not sent: `not sent: N earlier signals are still queued …; try again once they are sent`.
-- **One sender at a time.** A flush holds a lock file in the Teamflow home (`send-<key ref>.lock`, `flock`), so
+  are not sent: `not sent: N earlier signals are still queued …; try again once they are sent`. When another
+  `teamflow` holds the sender lock past the wait and nothing is queued, they are sent (nothing to overtake).
+- **One sender at a time.** A flush holds a lock file in the Teamflow home (`send-<outbox ref>.lock`, `flock`), so
   commands and hooks in different processes never interleave. A sync waits 250 ms for it, a command sending its
   own items 3 s; past that it leaves its items queued for the holder (which reads the outbox again before it
   lets go) or the next flush. The kernel drops the lock when its holder exits, even when killed, so a crashed
@@ -257,9 +268,19 @@ In detail:
   stale version, a call over 8 MiB, an item that can't be read) drops only that item, tells the session that made
   it why, and the flush goes on. Within one array the server has already handled the calls after a transient
   one; their results are kept.
+- **A stuck item is given up on.** An item the server keeps failing on (no answer for it, an answer this client
+  can't read, an internal error, an HTTP 500) would hold everything after it back. After 10 such failures
+  spanning at least 24 hours it is dropped and its session is told (record it again if it still matters). An
+  unreachable server (no connection, a timeout, 502, 503, 504, 429), `UPGRADE_REQUIRED` and a key that is no
+  longer a member's never count, however long they last.
+- **`teamflow outbox`** lists everything waiting (every sign-in's): id, method, project, sign-in, age, tries and
+  failures. `teamflow outbox drop <id>` takes one out after a confirmation (or `--yes`): it is never sent. It is a
+  setup command, never allowed to an agent without asking you.
 - **Retries are idempotent.** A resend carries the same signal ids, and the server answers a signal id it has
   seen with its first result, so nothing is recorded twice. A drift act has no id the server keeps: resent after
-  a lost answer, it may come back refused as already settled.
+  a lost answer, it comes back refused as `DRIFT_CLOSED`. The client then pulls and looks: if the drift is closed
+  with this act's status and note (and, for a resolve, the people it named), the first send took and the session
+  hears it reached the team; otherwise the refusal stands.
 - **Offline.** Hooks work from the local replica; signals and human acts wait in the outbox; nothing is lost.
 
 ## Repository layout
@@ -276,7 +297,7 @@ In detail:
   against the shared vectors in `protocol/deliverables/vectors.json`.
 - `internal/artifacts`: reading a file to publish (at most 5 MB; larger ones are published as links), its kind
   and media type, and pulling a stored version back.
-- `internal/sendlock`: the outbox's sender lock (one sender per project key across processes).
+- `internal/sendlock`: the outbox's sender lock (one sender per outbox across processes).
 - `internal/syncer`: the outbox flush (in order, batches, human acts alone), and pulling events into the replica.
 - `protocol/`: the protocol exported from the Teamflow server: `schema.json`, `methods.json`, golden messages,
   Deliverables test vectors, hook fixtures and agent texts (instructions, `/teamf`, the commands). `VERSION` names the server commit and
