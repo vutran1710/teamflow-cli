@@ -14,6 +14,7 @@ import (
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/config"
+	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
 
@@ -891,7 +892,9 @@ func (f *fakeAdapter) Uninstall() ([]string, error) {
 	f.installed = false
 	return []string{"removed ~/." + f.name + "/settings"}, nil
 }
-func (f *fakeAdapter) Installed() bool { return f.installed }
+func (f *fakeAdapter) Installed() bool                                 { return f.installed }
+func (f *fakeAdapter) Hook(string, []byte, *core.Core) ([]byte, error) { return nil, nil }
+func (f *fakeAdapter) SessionID([]byte) (string, error)                { return "", nil }
 
 func TestInstallWithNoAdapterYet(t *testing.T) {
 	m := newMachine(t, false)

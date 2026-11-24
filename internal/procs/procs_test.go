@@ -64,3 +64,22 @@ func TestStartTime(t *testing.T) {
 		t.Fatal("a pid that does not exist has no start time")
 	}
 }
+
+// Name is a process's command name (how a hook knows its agent's process): this test binary's own, a child's, and
+// nothing for a process that does not exist.
+func TestName(t *testing.T) {
+	cmd := exec.Command("sleep", "5")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	if got := Name(cmd.Process.Pid); got != "sleep" {
+		t.Fatalf("Name(sleep) = %q", got)
+	}
+	if got := Name(1 << 30); got != "" {
+		t.Fatalf("Name of no process = %q", got)
+	}
+	if got := Name(-1); got != "" {
+		t.Fatalf("Name(-1) = %q", got)
+	}
+}

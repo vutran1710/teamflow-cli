@@ -63,3 +63,15 @@ func StartTime(pid int) (time.Time, bool) {
 	}
 	return time.Time{}, false
 }
+
+// Name is pid's command name (/proc/<pid>/comm), or "" when it can't be read.
+func Name(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}

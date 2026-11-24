@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+
+	"github.com/vutran1710/teamflow-cli/internal/core"
 )
 
 // Adapter wires Teamflow into one agent.
@@ -23,6 +25,13 @@ type Adapter interface {
 	Uninstall() ([]string, error)
 	// Installed says whether Teamflow is set up in the agent.
 	Installed() bool
+	// Hook answers one of the agent's hook calls: event is the agent's own event name, stdin what the agent sent.
+	// It maps the agent's events to Teamflow's (session start, before each prompt, before a tool, the turn's end,
+	// session end) and returns what the hook prints for the agent (nil: nothing). Run it through RunHook, which
+	// never lets an error fail the agent's step.
+	Hook(event string, stdin []byte, c *core.Core) ([]byte, error)
+	// SessionID is the agent's session id in a hook's input.
+	SessionID(stdin []byte) (string, error)
 }
 
 // Supported are the agents Teamflow supports, in the order they are listed.

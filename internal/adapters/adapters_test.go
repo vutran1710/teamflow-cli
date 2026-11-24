@@ -3,6 +3,8 @@ package adapters
 import (
 	"slices"
 	"testing"
+
+	"github.com/vutran1710/teamflow-cli/internal/core"
 )
 
 type fakeAdapter struct {
@@ -66,3 +68,6 @@ func TestSupported(t *testing.T) {
 		t.Fatal("IsSupported")
 	}
 }
+
+func (f *fakeAdapter) Hook(string, []byte, *core.Core) ([]byte, error) { return nil, nil }
+func (f *fakeAdapter) SessionID([]byte) (string, error)                { return "s", nil }
