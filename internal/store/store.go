@@ -461,6 +461,11 @@ func (o ops) SessionOfPIDs(pids []int, live func(Session) bool) (Session, bool, 
 	return Session{}, false, nil
 }
 
+// SessionsSince are the sessions seen at or after t (the background sync's quiet exit).
+func (o ops) SessionsSince(t time.Time) ([]Session, error) {
+	return o.sessionsWhere("updated_at >= ?", ts(t))
+}
+
 // PreviousSession is the latest other session seen in process pid.
 func (o ops) PreviousSession(pid int, notID string) (Session, bool, error) {
 	return o.sessionWhere("agent_pid = ? AND id != ? ORDER BY updated_at DESC LIMIT 1", pid, notID)

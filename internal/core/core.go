@@ -146,7 +146,8 @@ func (c *Core) API(ctx context.Context, project string, timeout time.Duration) (
 
 // Sync pushes the spool and pulls the events of each project this machine has a key for (or only `only`), then
 // fetches the names of members the replica has none for. False when offline. A key the server no longer takes
-// (NOT_ALLOWED, NOT_A_MEMBER) is dropped.
+// (NOT_ALLOWED, NOT_A_MEMBER) is dropped. A project the background sync is live on (heard within LiveFresh) is
+// not pulled: the replica is fresh; only its outbox is sent, when something waits in it.
 func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) bool {
 	b, err := c.binding()
 	if err != nil { // not signed in: no key to sync with
@@ -180,8 +181,14 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 				continue
 			}
 		}
+		ob := store.OutboxOf(b, pid)
+		if c.LiveFresh(pid) {
+			if n, err := c.St.Waiting(ob); err == nil && n == 0 {
+				continue
+			}
+		}
 		a := c.client(key, timeout)
-		err := c.syncOne(ctx, a, store.OutboxOf(b, pid), pid, timeout)
+		err := c.syncOne(ctx, a, ob, pid, timeout)
 		if errors.Is(err, api.ErrOffline) {
 			return false
 		}
@@ -192,6 +199,14 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 		}
 	}
 	return true
+}
+
+// LiveFresh says whether the background sync heard from the project's live socket within LiveFresh (a time ahead of
+// now, from a clock set back, is not fresh).
+func (c *Core) LiveFresh(project string) bool {
+	now := c.Now()
+	live := c.St.LiveAt(project)
+	return !live.IsZero() && now.Sub(live) <= LiveFresh && !live.After(now)
 }
 
 func (c *Core) syncOne(ctx context.Context, a *api.Client, ob store.Outbox, pid string, timeout time.Duration) error {

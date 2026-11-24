@@ -169,7 +169,7 @@ func (c *Core) MidTurn(ctx context.Context, sid string) string {
 // failed. False when the server is known unreachable: this sync failed, or the project is marked offline.
 func (c *Core) midTurnSync(ctx context.Context, project string) bool {
 	now := c.Now()
-	if live := c.St.LiveAt(project); !live.IsZero() && now.Sub(live) <= LiveFresh && !live.After(now) {
+	if c.LiveFresh(project) {
 		return true
 	}
 	mine, err := c.St.ClaimHookSync(project, now, HookSyncEvery, HookOfflineFor)
