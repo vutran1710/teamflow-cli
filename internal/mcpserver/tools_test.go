@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
@@ -695,5 +697,87 @@ func TestSaveToNeverReachesTheHome(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(existing); string(b) == "mine" {
 		t.Fatal("overwrite did not write")
+	}
+}
+
+// A FIFO swapped in at the target after it was checked never hangs the server (it serves every agent call on one
+// stdio stream): the open does not wait for a reader, and anything but a plain file is refused.
+func TestSaveToNeverHangsOnAFIFO(t *testing.T) {
+	m := newMachine(t, true)
+	m.withStore(func(st *store.Store) error { return seedArtifact(st) })
+	m.srv.on("artifact.get", resultHas(t, "artifact.get", `"content_b64": "`))
+	work := t.TempDir()
+	target := filepath.Join(work, "out.md")
+	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	saveRace = func(stage string) {
+		if stage == "open" {
+			_ = os.Remove(target)
+			if err := syscall.Mkfifo(target, 0o644); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Cleanup(func() { saveRace = func(string) {} })
+	done := make(chan reply, 1)
+	go func() { done <- m.call("artifact_get", map[string]any{"id": S1, "save_to": target, "overwrite": true}) }()
+	select {
+	case r := <-done:
+		if !r.err {
+			t.Fatalf("written into a FIFO: %s", r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("artifact_get hung on a FIFO swapped in at save_to")
+	}
+}
+
+// A parent folder swapped for a link to the home after the checks: the file the open made there is refused and
+// removed, never left (even empty) among the person's keys.
+func TestSaveToLeavesNothingInTheHomeOnAParentSwap(t *testing.T) {
+	m := newMachine(t, true)
+	m.withStore(func(st *store.Store) error { return seedArtifact(st) })
+	m.srv.on("artifact.get", resultHas(t, "artifact.get", `"content_b64": "`))
+	work := t.TempDir()
+	dir := filepath.Join(work, "out")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	saveRace = func(stage string) {
+		if stage == "open" {
+			if err := os.Rename(dir, dir+".moved"); err != nil {
+				t.Error(err)
+			}
+			if err := os.Symlink(m.dir, dir); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Cleanup(func() { saveRace = func(string) {} })
+	r := m.call("artifact_get", map[string]any{"id": S1, "save_to": filepath.Join(dir, "x.md")})
+	if !r.err {
+		t.Fatalf("written through a swapped parent: %s", r)
+	}
+	if _, err := os.Lstat(filepath.Join(m.dir, "x.md")); err == nil {
+		t.Fatal("an empty file was left in the home")
+	}
+	// The person's own file of that name in the home is never removed by a refusal.
+	saveRace = func(string) {}
+	_ = os.Remove(dir)
+	_ = os.Rename(dir+".moved", dir)
+	mine := filepath.Join(m.dir, "config.json")
+	before, _ := os.ReadFile(mine)
+	saveRace = func(stage string) {
+		if stage == "open" {
+			_ = os.Rename(dir, dir+".moved2")
+			_ = os.Symlink(m.dir, dir)
+		}
+	}
+	r = m.call("artifact_get", map[string]any{"id": S1, "save_to": filepath.Join(dir, "config.json"), "overwrite": true})
+	if !r.err {
+		t.Fatalf("overwrote through a swapped parent: %s", r)
+	}
+	if after, err := os.ReadFile(mine); err != nil || string(after) != string(before) {
+		t.Fatalf("the home's config.json was changed or removed: %v", err)
 	}
 }

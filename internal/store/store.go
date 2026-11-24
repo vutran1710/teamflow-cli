@@ -1169,6 +1169,17 @@ func (o ops) ClaimNotices(session string, approvals bool) ([]Notice, error) {
 	return out, nil
 }
 
+// UnclaimNotices gives claimed notices back (shown again 0): a caller that claimed them and then failed before
+// telling the session leaves them for the next turn, so nothing claimed is ever lost.
+func (o ops) UnclaimNotices(ns []Notice) error {
+	for _, n := range ns {
+		if _, err := o.exec("UPDATE notices SET shown = 0 WHERE n = ?", n.N); err != nil {
+			return wrap(err)
+		}
+	}
+	return nil
+}
+
 // NoticesShown marks notices as shown.
 func (o ops) NoticesShown(ns []int64) error {
 	for _, n := range ns {

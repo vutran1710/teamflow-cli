@@ -833,6 +833,7 @@ func (k *call) saveTo(path string, data []byte, overwrite bool) (string, error) 
 	if intoHome() {
 		return "", refused
 	}
+	existed := false
 	if fi, err := os.Lstat(abs); err == nil {
 		switch {
 		case fi.Mode()&os.ModeSymlink != 0:
@@ -842,6 +843,7 @@ func (k *call) saveTo(path string, data []byte, overwrite bool) (string, error) 
 		case !overwrite:
 			return "", bad("%s already exists: pass overwrite to replace it, or choose another path", target)
 		}
+		existed = true
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", err
@@ -849,8 +851,11 @@ func (k *call) saveTo(path string, data []byte, overwrite bool) (string, error) 
 	if intoHome() { // a folder swapped for a link while it was made
 		return "", refused
 	}
-	flags := os.O_WRONLY | os.O_CREATE | syscall.O_NOFOLLOW
-	if !overwrite {
+	saveRace("open")
+	// O_NONBLOCK: a FIFO swapped in after the checks never makes the open wait for a reader (it would hang the
+	// stdio server). O_EXCL whenever there was no file, so a file this call makes is known to be its own.
+	flags := os.O_WRONLY | os.O_CREATE | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	if !existed {
 		flags |= os.O_EXCL
 	}
 	f, err := os.OpenFile(abs, flags, 0o644)
@@ -862,7 +867,16 @@ func (k *call) saveTo(path string, data []byte, overwrite bool) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if homeFile(fi, k.c.Dir) { // checked on the open file, before anything is truncated
+	// Checked on the open file, before anything is truncated: a plain file, and none of the home's.
+	if !fi.Mode().IsRegular() || homeFile(fi, k.c.Dir) {
+		if !existed { // made by this call (O_EXCL): never left behind, not even empty
+			if now, err := os.Lstat(abs); err == nil && os.SameFile(now, fi) {
+				_ = os.Remove(abs)
+			}
+		}
+		if !fi.Mode().IsRegular() {
+			return "", bad("%s is not a file", target)
+		}
 		return "", refused
 	}
 	if err := f.Truncate(0); err != nil {
@@ -873,6 +887,9 @@ func (k *call) saveTo(path string, data []byte, overwrite bool) (string, error) 
 	}
 	return target, f.Close()
 }
+
+// saveRace lets a test change the file system between saveTo's checks and its open (a race an agent could run).
+var saveRace = func(stage string) {}
 
 // resolved is p with the links of its deepest existing part resolved (the rest appended as written).
 func resolved(p string) string {

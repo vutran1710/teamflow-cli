@@ -338,7 +338,8 @@ func (c *Core) AfterTurn(ctx context.Context, sid string) string {
 		asked[n.About] = true
 	}
 	waiting, err := c.Approvals(sid, false)
-	if err != nil {
+	if err != nil { // claimed but not told: give them back, so the next turn raises them
+		_ = c.St.UnclaimNotices(ns)
 		return ""
 	}
 	var items []protocol.StoredSignal
