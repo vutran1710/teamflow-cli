@@ -806,3 +806,82 @@ func TestStoreWriteOutageKeepsTheHead(t *testing.T) {
 		})
 	}
 }
+
+// As the real server answers a refusal of signal.emit: a result {"accepted": false, "reason": …}, never an
+// RpcError (router._call). A store-write outage: the head past the limit keeps failing; behind it, one item is
+// refused so (TOPIC_CLOSED) and one is answered from an earlier send. Neither is a fresh acceptance: the head
+// stays. Both paths: the head alone (confirmGiveUp) and in one request with them (settle).
+func TestRefusalAsAResultBehindKeepsTheHead(t *testing.T) {
+	for _, alone := range []bool{true, false} {
+		t.Run(fmt.Sprint("head alone ", alone), func(t *testing.T) {
+			st := openStore(t)
+			f, srv := newFake(t)
+			spool(t, st, S1, protocol.SignalKindDecision, "head")
+			spool(t, st, S2, protocol.SignalKindNote, "refused behind")
+			spool(t, st, S3, protocol.SignalKindNote, "stored before")
+			pastLimit(t, st, S1)
+			if !alone {
+				must(t, st.SetAlone(S1, false))
+			}
+			must(t, st.Tried([]string{S3}))
+			f.set(func() {
+				f.results[S3] = json.RawMessage(`{"signal": "` + S3 + `", "accepted": true, "message": "", "state": "IN_FORCE"}`)
+				f.callErr = func(id string) *protocol.RpcError {
+					if id == S1 {
+						return &protocol.RpcError{Code: protocol.CodeInternalError, Message: "D1 write failed"}
+					}
+					return nil
+				}
+				f.answer = func(e protocol.SignalEmit, _ json.RawMessage) protocol.SignalResult {
+					if e.Signal.ID != S2 {
+						t.Errorf("a fresh store of %s during a write outage", e.Signal.ID)
+					}
+					return protocol.SignalResult{Signal: e.Signal.ID, Accepted: false,
+						Reason: ptr(protocol.RejectReasonTopicClosed), Message: "the topic is closed"}
+				}
+			})
+			for i := range 4 {
+				at(t, t0.Add(time.Duration(30+i)*time.Hour))
+				_, _ = Push(context.Background(), st, client(srv), ob)
+			}
+			if got := spooled(t, st); strings.Join(got, ",") != S1 {
+				t.Fatalf("left %v: the head must stay, the items behind leave", got)
+			}
+			rej := ofType(notices(t, st, "s1"), protocol.NoticeTypeSignalRejected)
+			if len(rej) != 1 || rej[0].About != S2 || !strings.Contains(rej[0].Text, "TOPIC_CLOSED") {
+				t.Fatalf("rejections %+v: only the refused item, never the head", rej)
+			}
+		})
+	}
+}
+
+// An item past the limit that is not the outbox's head (the true head ahead of it, in the same request, is kept)
+// is never given up, even with fresh acceptances behind it: only the head is ever a candidate.
+func TestOnlyTheHeadIsGivenUp(t *testing.T) {
+	st := openStore(t)
+	f, srv := newFake(t)
+	spool(t, st, S2, protocol.SignalKindNote, "true head")
+	spool(t, st, S1, protocol.SignalKindDecision, "past the limit, second")
+	ids := notes(t, st, 0, 2)
+	pastLimit(t, st, S1)
+	must(t, st.SetAlone(S1, false))
+	f.set(func() {
+		f.callErr = func(id string) *protocol.RpcError {
+			if id == S1 || id == S2 {
+				return &protocol.RpcError{Code: protocol.CodeInternalError, Message: "boom"}
+			}
+			return nil
+		}
+	})
+	at(t, t0.Add(30*time.Hour))
+	_, _ = Push(context.Background(), st, client(srv), ob)
+	if got := spooled(t, st); strings.Join(got, ",") != S2+","+S1 {
+		t.Fatalf("left %v", got)
+	}
+	if rej := ofType(notices(t, st, "s1"), protocol.NoticeTypeSignalRejected); len(rej) != 0 {
+		t.Fatalf("given up: %+v", rej)
+	}
+	if strings.Join(ofTypeAbout(notices(t, st, "s1"), protocol.NoticeTypeSignalSent), ",") != strings.Join(ids, ",") {
+		t.Fatal("the fresh items behind were not answered")
+	}
+}
