@@ -104,25 +104,25 @@ func anyStrings(v any) []string {
 	return out
 }
 
-func TestVerdictActor(t *testing.T) {
+// TestVerdictsAreAlwaysTheMembers: a verdict is the person's own however it is sent (their terminal, their agent
+// running the command on their word, or the /teamf relay): actor MEMBER, always, with the session id when one is
+// found. Nothing detects "via agent".
+func TestVerdictsAreAlwaysTheMembers(t *testing.T) {
 	cases := []struct {
 		name    string
 		setup   func(m *machine)
 		args    []string
-		actor   string
 		session string
 	}{
-		// MEMBER only when everything says a person typed it: a terminal, no agent session, no agent marker, no relay.
-		{"the person in a plain terminal", tty, []string{"approve", S1}, "MEMBER", ""},
-		{"a pid reused from a dead agent's session", func(m *machine) { tty(m); m.staleSession("old", P) }, []string{"approve", S1}, "MEMBER", ""},
-		{"stdin not a terminal", func(*machine) {}, []string{"approve", S1}, "AGENT", ""},
-		{"TEAMFLOW_ACTOR=agent", func(m *machine) { tty(m); m.t.Setenv("TEAMFLOW_ACTOR", "agent") }, []string{"approve", S1}, "AGENT", ""},
-		{"CLAUDECODE=1", func(m *machine) { tty(m); m.t.Setenv("CLAUDECODE", "1") }, []string{"approve", S1}, "AGENT", ""},
-		{"CURSOR_AGENT=1", func(m *machine) { tty(m); m.t.Setenv("CURSOR_AGENT", "1") }, []string{"approve", S1}, "AGENT", ""},
-		{"--via-agent", tty, []string{"approve", "--via-agent", S1}, "AGENT", ""},
-		{"inside an agent session", func(m *machine) { tty(m); m.inSession("s1", P, nil) }, []string{"approve", S1}, "AGENT", "s1"},
-		{"the relay", func(m *machine) { tty(m); m.inSession("s1", P, nil) }, []string{"team", "--relay", "approve " + S1}, "AGENT", "s1"},
-		{"the relay without a session", tty, []string{"team", "--relay", "approve " + S1}, "AGENT", ""},
+		{"the person in a plain terminal", tty, []string{"approve", S1}, ""},
+		{"a pid reused from a dead agent's session", func(m *machine) { tty(m); m.staleSession("old", P) }, []string{"approve", S1}, ""},
+		{"stdin not a terminal", func(*machine) {}, []string{"approve", S1}, ""},
+		{"TEAMFLOW_ACTOR=agent", func(m *machine) { m.t.Setenv("TEAMFLOW_ACTOR", "agent") }, []string{"approve", S1}, ""},
+		{"CLAUDECODE=1", func(m *machine) { m.t.Setenv("CLAUDECODE", "1") }, []string{"approve", S1}, ""},
+		{"inside an agent session", func(m *machine) { m.inSession("s1", P, nil) }, []string{"approve", S1}, "s1"},
+		{"the relay", func(m *machine) { m.inSession("s1", P, nil) }, []string{"team", "--relay", "approve " + S1}, "s1"},
+		{"the relay without a session", func(*machine) {}, []string{"team", "--relay", "approve " + S1}, ""},
+		{"a reject from inside an agent session", func(m *machine) { m.inSession("s1", P, nil) }, []string{"reject", S1, "no"}, "s1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,13 +132,23 @@ func TestVerdictActor(t *testing.T) {
 			tc.setup(m)
 			r := m.run("", tc.args...)
 			wantCode(t, r, 0)
-			contains(t, "stdout", r.out, "approved "+S1)
 			p := params(t, onlyCall(t, m.srv, "signal.emit"))
-			if p["actor"] != tc.actor || p["client_session"] != tc.session {
+			if p["actor"] != "MEMBER" || p["client_session"] != tc.session {
 				t.Fatalf("actor %v session %v", p["actor"], p["client_session"])
+			}
+			if c := onlyCall(t, m.srv, "signal.emit"); c.Batch {
+				t.Fatal("a verdict travels alone, never in an array body")
 			}
 		})
 	}
+	t.Run("--via-agent is gone", func(t *testing.T) {
+		m := newMachine(t, true)
+		approvalReplica(t, m)
+		r := m.run("", "approve", "--via-agent", S1)
+		wantCode(t, r, 2)
+		contains(t, "stderr", r.err, "No such option: --via-agent")
+		noCall(t, m.srv, "signal.emit")
+	})
 }
 
 func tty(m *machine) { terminal(m.t, true, "") }

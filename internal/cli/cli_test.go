@@ -199,10 +199,6 @@ func newMachine(t *testing.T, signedIn bool) *machine {
 		t.Fatal(err)
 	}
 	t.Setenv("TEAMFLOW_HOME", dir)
-	t.Setenv("TEAMFLOW_ACTOR", "")
-	for _, marker := range agentMarkers { // these tests may run inside an agent
-		t.Setenv(marker, "")
-	}
 	m := &machine{t: t, dir: dir, srv: newServer(t)}
 	if signedIn {
 		if err := config.Save(dir, config.Config{Server: m.srv.URL(), AuthKey: auth, Email: "lan@acme.test"}); err != nil {

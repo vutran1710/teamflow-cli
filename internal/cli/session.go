@@ -30,31 +30,27 @@ func runStop(r *inv, _ *parsed) int {
 
 // ------------------------------------------------------------------ approve, reject
 
-var viaAgentFlag = flagSpec{name: "via-agent", kind: flag, help: "Recorded as given through the person's agent (set by agent commands)"}
-
 var approveCmd = &command{
 	name: "approve", args: "<sg_id> [note]",
 	help:  "Approve a PENDING signal you were asked to approve. Through your agent, only on your own explicit words.",
-	flags: []flagSpec{viaAgentFlag}, nargs: atLeast(1),
+	nargs: atLeast(1),
 	run: func(r *inv, a *parsed) int {
-		return r.verdict(protocol.SignalKindApprove, a.pos[0], strings.Join(a.pos[1:], " "), a.has("via-agent"))
+		return r.verdict(protocol.SignalKindApprove, a.pos[0], strings.Join(a.pos[1:], " "))
 	},
 }
 
 var rejectCmd = &command{
 	name: "reject", args: "<sg_id> <note>",
 	help:  "Reject a PENDING signal you were asked to approve, saying why.",
-	flags: []flagSpec{viaAgentFlag}, nargs: atLeast(2),
+	nargs: atLeast(2),
 	run: func(r *inv, a *parsed) int {
-		return r.verdict(protocol.SignalKindReject, a.pos[0], strings.Join(a.pos[1:], " "), a.has("via-agent"))
+		return r.verdict(protocol.SignalKindReject, a.pos[0], strings.Join(a.pos[1:], " "))
 	},
 }
 
-// verdict records the person's APPROVE or REJECT. Approvals are trusted to the person and their agent, and the
-// record says which: it fails toward "via agent". The actor is MEMBER only when everything says a person typed it
-// in their own terminal: stdin is a terminal, no agent session is found above this process, no agent marker is
-// set, and it came neither through the relay nor with --via-agent. Otherwise AGENT. It is sent alone.
-func (r *inv) verdict(kind protocol.SignalKind, signal, note string, viaAgent bool) int {
+// verdict records the person's APPROVE or REJECT: their own however it is sent (actor MEMBER), with the agent
+// session's id when it runs inside one. It is sent alone.
+func (r *inv) verdict(kind protocol.SignalKind, signal, note string) int {
 	if kind == protocol.SignalKindReject && strings.TrimSpace(note) == "" {
 		return r.fail("say why you reject it: reject " + signal + " <why>")
 	}
@@ -62,15 +58,11 @@ func (r *inv) verdict(kind protocol.SignalKind, signal, note string, viaAgent bo
 	if err != nil {
 		return r.failErr(err)
 	}
-	actor, sid := protocol.ActorAgent, ""
-	sess, inSession := r.session()
-	if inSession {
+	sid := ""
+	if sess, ok := r.session(); ok {
 		sid = sess.ID
 	}
-	if !inSession && !viaAgent && !r.relay && !underAgent() && isTerminal() {
-		actor = protocol.ActorMember
-	}
-	res, err := c.Verdict(r.ctx, sid, signal, kind, note, actor)
+	res, err := c.Verdict(r.ctx, sid, signal, kind, note)
 	if err != nil {
 		return r.failErr(err)
 	}
@@ -102,15 +94,8 @@ const teamUsage = "usage: project [<project> [topic …]] | stop | status | appr
 
 func runTeam(r *inv, a *parsed) int {
 	args := a.pos
-	viaAgent := false
-	for len(args) > 0 && (args[0] == "--relay" || args[0] == "--via-agent") {
-		switch args[0] {
-		case "--relay": // typed by the person as the agent's Teamflow command
-			r.relay = true
-		case "--via-agent":
-			viaAgent = true
-		}
-		args = args[1:]
+	if len(args) > 0 && args[0] == "--relay" { // typed by the person as the agent's Teamflow command
+		r.relay, args = true, args[1:]
 	}
 	if len(args) == 1 && strings.ContainsAny(args[0], " \t\"'\\") { // the command's arguments arrive as one word
 		split, err := shellSplit(args[0])
@@ -141,9 +126,9 @@ func runTeam(r *inv, a *parsed) int {
 	case sub == "approvals" && onlyAll(rest):
 		return r.approvals(len(rest) > 0)
 	case sub == "approve" && len(rest) >= 1:
-		return r.verdict(protocol.SignalKindApprove, rest[0], strings.Join(rest[1:], " "), viaAgent)
+		return r.verdict(protocol.SignalKindApprove, rest[0], strings.Join(rest[1:], " "))
 	case sub == "reject" && len(rest) >= 2:
-		return r.verdict(protocol.SignalKindReject, rest[0], strings.Join(rest[1:], " "), viaAgent)
+		return r.verdict(protocol.SignalKindReject, rest[0], strings.Join(rest[1:], " "))
 	}
 	return r.fail(teamUsage)
 }

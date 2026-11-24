@@ -52,7 +52,7 @@ func TestSignedOutRefusesBeforeSending(t *testing.T) {
 	if _, err := c.Projects(ctx); !errors.Is(err, ErrNotSignedIn) {
 		t.Fatalf("Projects: %v", err)
 	}
-	if _, err := c.Verdict(ctx, "", "sg_x", protocol.SignalKindApprove, "", protocol.ActorMember); !errors.Is(err, ErrNotSignedIn) {
+	if _, err := c.Verdict(ctx, "", "sg_x", protocol.SignalKindApprove, ""); !errors.Is(err, ErrNotSignedIn) {
 		t.Fatalf("Verdict: %v", err)
 	}
 	if !c.Sync(ctx, time.Second, "") {
@@ -66,11 +66,11 @@ func TestSignedOutRefusesBeforeSending(t *testing.T) {
 func TestVerdictTakesOnlyVerdictsAndRejectsNeedAReason(t *testing.T) {
 	ctx := context.Background()
 	c := open(t, &config.Config{Server: "http://127.0.0.1:1", AuthKey: "tfa_x"})
-	if _, err := c.Verdict(ctx, "", "sg_x", protocol.SignalKind("DECISION"), "", protocol.ActorMember); err == nil ||
+	if _, err := c.Verdict(ctx, "", "sg_x", protocol.SignalKind("DECISION"), ""); err == nil ||
 		!strings.Contains(err.Error(), "not a verdict") {
 		t.Fatalf("a DECISION is not a verdict: %v", err)
 	}
-	if _, err := c.Verdict(ctx, "", "sg_x", protocol.SignalKindReject, " ", protocol.ActorMember); err == nil ||
+	if _, err := c.Verdict(ctx, "", "sg_x", protocol.SignalKindReject, " "); err == nil ||
 		!strings.Contains(err.Error(), "says why") {
 		t.Fatalf("a reject without a reason: %v", err)
 	}

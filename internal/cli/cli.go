@@ -55,22 +55,6 @@ func findSession(st *store.Store) (store.Session, bool) {
 	return s, ok
 }
 
-// agentMarkers are environment variables an agent sets for the commands it runs; any of them set means this runs
-// under an agent. TODO(Task 9): confirm the Cursor CLI, Copilot CLI and Antigravity CLI markers against a real
-// install of each (CLAUDECODE is Claude Code's; AI_AGENT is the cross-agent convention).
-var agentMarkers = []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "AI_AGENT", "CURSOR_AGENT", "CURSOR_TRACE_ID",
-	"COPILOT_CLI", "COPILOT_AGENT", "ANTIGRAVITY_AGENT", "GEMINI_CLI"}
-
-// underAgent says whether an agent marker is set.
-func underAgent() bool {
-	for _, m := range agentMarkers {
-		if os.Getenv(m) != "" {
-			return true
-		}
-	}
-	return os.Getenv("TEAMFLOW_ACTOR") == "agent"
-}
-
 // kind of a flag's value.
 type kind int
 
