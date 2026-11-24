@@ -206,7 +206,7 @@ flowchart TD
     R -- accepted --> D[leaves the outbox; its session is told it reached the team]
     R -- "refused for good (invalid, a reasoned refusal, too large)" --> X[leaves the outbox; its session is told why]
     R -- "transient (offline, 5xx, 429, no or unreadable answer,<br/>update needed, key no longer a member's)" --> STOP[stays; the flush stops; later items wait]
-    STOP -- "a signal the server failed on itself<br/>10 times over 24 hours or more" --> GU[dropped; its session is told]
+    STOP -- "a signal the server failed on itself 10 times over 24 h+,<br/>and the item behind it is answered" --> GU[dropped; its session is told]
 ```
 
 Plain text, for viewers without Mermaid:
@@ -224,7 +224,8 @@ agent / you ──> teamflow <cmd> ──> outbox (store.db, per sign-in and pro
                accepted ─────────> leaves; its session hears "reached the team"
                refused for good ─> leaves; its session hears why
                transient ────────> stays; the flush stops; everything after it waits
-                                   (a signal the server failed on itself 10 times over ≥ 24 h: dropped, told)
+                                   (a signal failed on itself 10 times over ≥ 24 h, the item behind it
+                                    answered: dropped, its session told)
 ```
 
 In detail:
@@ -271,13 +272,15 @@ In detail:
   one; their results are kept.
 - **A stuck signal is given up on.** A signal the server keeps failing on (no answer for it, an answer this
   client can't read, an internal error, an HTTP 500) would hold everything after it back. A failure counts only
-  when it is the item's own: other calls in its request were answered, or it went alone and the server then
-  answers another call (`member.me`). When a whole request fails, or every call in it, nothing counts and the
-  head goes alone next time, so a bad head is isolated before it is counted. After 10 own failures spanning at
-  least 24 hours the signal is dropped and its session is told (record it again if it still matters). An outage
-  (no connection, a timeout, 502, 503, 504, 429, the server failing on everything), `UPGRADE_REQUIRED` and a key
-  that is no longer a member's never count, however long they last. A human act (a verdict, a drift act) is
-  never dropped this way: only you drop it, with `teamflow outbox drop`.
+  when it is the item's own: it went alone, or other calls in its request were answered (an unreadable answer
+  inside a batch never counts). When a whole request fails, or every call in it, nothing counts and the head goes
+  alone next time. Once a signal has 10 counted failures spanning at least 24 hours, the item right behind it is
+  sent: if the server answers that one (accepted, or its own refusal), the server works and the signal is the
+  problem, so it is dropped and its session is told (record it again if it still matters); if that one fails the
+  same way (a part of the server is down), both stay. A signal with nothing queued behind it is never dropped. An
+  outage (no connection, a timeout, 502, 503, 504, 429), `UPGRADE_REQUIRED` and a key that is no longer a
+  member's never count, however long they last. A human act (a verdict, a drift act) is never dropped this way:
+  only you drop it, with `teamflow outbox drop`.
 - **`teamflow outbox`** lists everything waiting (every sign-in's): id, method, project, sign-in, age, tries and
   failures. `teamflow outbox drop <id>` takes one out after a confirmation (or `--yes`): it is never sent. It is a
   setup command, never allowed to an agent without asking you.
