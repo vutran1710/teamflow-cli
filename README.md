@@ -206,7 +206,7 @@ flowchart TD
     R -- accepted --> D[leaves the outbox; its session is told it reached the team]
     R -- "refused for good (invalid, a reasoned refusal, too large)" --> X[leaves the outbox; its session is told why]
     R -- "transient (offline, 5xx, 429, no or unreadable answer,<br/>update needed, key no longer a member's)" --> STOP[stays; the flush stops; later items wait]
-    STOP -- "a signal the server failed on itself 10 times over 24 h+,<br/>and the item behind it is answered" --> GU[dropped; its session is told]
+    STOP -- "a signal the server failed on itself 10 times over 24 h+,<br/>and the item behind it freshly accepted" --> GU[dropped; its session is told]
 ```
 
 Plain text, for viewers without Mermaid:
@@ -225,7 +225,7 @@ agent / you ──> teamflow <cmd> ──> outbox (store.db, per sign-in and pro
                refused for good ─> leaves; its session hears why
                transient ────────> stays; the flush stops; everything after it waits
                                    (a signal failed on itself 10 times over ≥ 24 h, the item behind it
-                                    answered: dropped, its session told)
+                                    freshly accepted: dropped, its session told)
 ```
 
 In detail:
@@ -275,15 +275,19 @@ In detail:
   when it is the item's own: it went alone, or other calls in its request were answered (an unreadable answer
   inside a batch never counts). When a whole request fails, or every call in it, nothing counts and the head goes
   alone next time. Once a signal has 10 counted failures spanning at least 24 hours, the item right behind it is
-  sent: if the server answers that one (accepted, or its own refusal), the server works and the signal is the
-  problem, so it is dropped and its session is told (record it again if it still matters); if that one fails the
-  same way (a part of the server is down), both stay. A signal with nothing queued behind it is never dropped. An
+  sent: if the server freshly accepts it (never sent before, so not the stored answer to an earlier send), the
+  server stores again and the signal is the problem, so it is dropped and its session is told (record it again if
+  it still matters). If that one is refused, answered from an earlier send, or fails the same way (a part of the
+  server is down), the stuck signal stays; a refused item leaves the outbox, and the next one is tried next time. A signal with nothing queued behind it is never dropped. An
   outage (no connection, a timeout, 502, 503, 504, 429), `UPGRADE_REQUIRED` and a key that is no longer a
   member's never count, however long they last. A human act (a verdict, a drift act) is never dropped this way:
   only you drop it, with `teamflow outbox drop`.
 - **`teamflow outbox`** lists everything waiting (every sign-in's): id, method, project, sign-in, age, tries and
   failures. `teamflow outbox drop <id>` takes one out after a confirmation (or `--yes`): it is never sent. It is a
   setup command, never allowed to an agent without asking you.
+- **Order is best-effort when a single call fails.** The server numbers calls as they arrive: a call whose answer
+  is lost and that goes again later (or the item sent behind a stuck signal, when that signal then goes through)
+  can be numbered after an item queued behind it. Strict order across clients is a later design item.
 - **Retries are idempotent.** A resend carries the same signal ids, and the server answers a signal id it has
   seen with its first result, so nothing is recorded twice. A drift act has no id the server keeps: resent after
   a lost answer, the server refuses it as it refuses any act on a closed drift (`DRIFT_CLOSED` for a resolve,
