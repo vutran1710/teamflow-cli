@@ -9,7 +9,10 @@ package core
 //   - Other writes to the shared record (artifact write and archive, Deliverables, topic and plan changes, members)
 //     are not queued: they pass the client's gate, which flushes the outbox first and refuses to send (NotSent)
 //     while anything is still queued, so they never overtake it.
-//   - One sender at a time per project key, across processes: the sender lock (sendlock) in the Teamflow home.
+//   - The outbox belongs to a sign-in and a project, not a key: what was queued goes out under whatever key that
+//     sign-in holds for the project when it is sent (after a logout and login, a refused key fetched again);
+//     another sign-in's items are kept, never sent by this one, and listed (`teamflow outbox`, `teamflow status`).
+//   - One sender at a time per outbox, across processes: the sender lock (sendlock) in the Teamflow home.
 //     A sync (every command, every hook) waits SyncLockWait for it, then leaves the outbox to the holder; a
 //     command sending its own items waits SendLockWait, then leaves them queued.
 
@@ -23,6 +26,7 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/sendlock"
+	"github.com/vutran1710/teamflow-cli/internal/store"
 	"github.com/vutran1710/teamflow-cli/internal/syncer"
 )
 
@@ -60,8 +64,17 @@ var NotSharedWrites = map[string]bool{
 	"admin.org_import": true, "admin.directory_import": true,
 }
 
+// outbox is the outbox of project pid under this machine's sign-in.
+func (c *Core) outbox(pid string) (store.Outbox, error) {
+	b, err := c.binding()
+	if err != nil {
+		return store.Outbox{}, err
+	}
+	return store.OutboxOf(b, pid), nil
+}
+
 // Queued is a human act (or a signal) kept in the outbox behind Ahead earlier items: recorded, and sent in its
-// place by a later flush (the next command, hook or sync). It is not a failure.
+// place by a later flush (the next command, hook or sync). It is not a failure, unless Hard.
 type Queued struct {
 	Item  string // the queued item's id
 	Ahead int    // items waiting before it
@@ -75,9 +88,10 @@ func (q *Queued) Error() string {
 	return queuedMessage(q.Ahead, q.Cause)
 }
 
-// Hard says whether the wait needs the person: the server refused this client or key (update teamflow, the
+// Hard says whether the wait needs the person: the server refused this client or this key (update teamflow, the
 // membership revoked), not a server that is unreachable, busy or briefly failing. A command reports it as a
-// failure; the item still waits in the outbox, never lost.
+// failure; the item still waits in the outbox, never lost. (NOT_ALLOWED on an item is that item's refusal: it
+// leaves the outbox, never waits.)
 func (q *Queued) Hard() bool { return hard(q.Cause) }
 
 func hard(err error) bool {
@@ -85,21 +99,23 @@ func hard(err error) bool {
 	if !errors.As(err, &ae) {
 		return false
 	}
-	return errors.Is(err, api.ErrUpgradeRequired) || ae.Reason == string(protocol.RejectReasonNotAMember) ||
-		ae.Reason == string(protocol.RejectReasonNotAllowed)
+	return errors.Is(err, api.ErrUpgradeRequired) || ae.Reason == string(protocol.RejectReasonNotAMember)
 }
 
 func queuedMessage(ahead int, cause error) string {
-	msg := "queued: will be sent when the server is back"
 	switch {
-	case ahead == 1:
-		msg = "queued: will be sent after 1 earlier signal"
-	case ahead > 1:
-		msg = fmt.Sprintf("queued: will be sent after %d earlier signals", ahead)
 	case errors.Is(cause, sendlock.ErrBusy):
-		msg = "queued: another teamflow is sending this project's signals; it goes out in order"
+		// Another process holds the lock: it may already have sent it, so this never claims it waits.
+		return "handed to the outbox: another teamflow is sending this project's signals and sends it in its turn " +
+			"(the session hears when it reaches the team)"
+	case ahead == 0:
+		return "queued: will be sent when the server is back"
 	}
-	if cause != nil && !errors.Is(cause, sendlock.ErrBusy) && ahead > 0 {
+	msg := fmt.Sprintf("queued: will be sent after %d earlier signals", ahead)
+	if ahead == 1 {
+		msg = "queued: will be sent after 1 earlier signal"
+	}
+	if cause != nil {
 		msg += " (" + why(cause) + ")"
 	}
 	return msg
@@ -121,9 +137,6 @@ type NotSent struct {
 }
 
 func (e *NotSent) Error() string {
-	if e.Waiting == 0 {
-		return fmt.Sprintf("not sent: %s (%s)", e.Method, why(e.Cause))
-	}
 	s := "s are"
 	if e.Waiting == 1 {
 		s = " is"
@@ -133,20 +146,26 @@ func (e *NotSent) Error() string {
 	if e.Cause != nil {
 		msg += " (" + why(e.Cause) + ")"
 	}
-	return msg + "; try again once they are sent"
+	return msg + "; try again once they are sent (`teamflow outbox` lists them)"
 }
 
 func (e *NotSent) Unwrap() error { return e.Cause }
 
-// lockOutbox takes the sender lock of the outbox of key.
-func (c *Core) lockOutbox(ctx context.Context, key string, wait time.Duration) (func(), error) {
-	return sendlock.Acquire(ctx, c.Dir, api.KeyRef(key), wait)
+// lockOutbox takes the sender lock of the outbox ob.
+func (c *Core) lockOutbox(ctx context.Context, ob store.Outbox, wait time.Duration) (func(), error) {
+	return sendlock.Acquire(ctx, c.Dir, ob.Ref(), wait)
 }
 
-// pushOutbox sends the outbox of a's key when the sender lock is free within SyncLockWait; otherwise its holder
-// sends it, and pushOutbox does nothing.
-func (c *Core) pushOutbox(ctx context.Context, a *api.Client, key string) error {
-	release, err := c.lockOutbox(ctx, key, SyncLockWait)
+// pushOutbox sends the outbox ob with a (the sign-in's current key for its project) when the sender lock is free
+// within SyncLockWait, all of it within timeout (a hook's budget); otherwise its holder sends it, and pushOutbox
+// does nothing.
+func (c *Core) pushOutbox(ctx context.Context, a *api.Client, ob store.Outbox, timeout time.Duration) error {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	release, err := c.lockOutbox(ctx, ob, SyncLockWait)
 	if errors.Is(err, sendlock.ErrBusy) {
 		return nil
 	}
@@ -154,18 +173,18 @@ func (c *Core) pushOutbox(ctx context.Context, a *api.Client, key string) error 
 		return err
 	}
 	defer release()
-	_, err = syncer.Push(ctx, c.St, a.Ungated())
+	_, err = syncer.Push(ctx, c.St, a.Ungated(), ob)
 	return err
 }
 
-// sendMine queues the caller's own items (add) and flushes the outbox of key, holding the sender lock across both
-// (waiting SendLockWait for it), so no other sender takes them and answers them elsewhere. It returns the
-// answers to mine that came back and why the flush stopped (sendlock.ErrBusy: another sender holds the lock; the
-// items are queued for it). err is a failure to queue them: nothing was queued.
-func (c *Core) sendMine(ctx context.Context, key string, timeout time.Duration, mine map[string]bool,
+// sendMine queues the caller's own items (add) and flushes the outbox ob with key, holding the sender lock across
+// both (waiting SendLockWait for it), so no other sender takes them and answers them elsewhere. It returns the
+// answers to mine that came back and why the flush stopped (sendlock.ErrBusy: another sender holds the lock and
+// sends them). err is a failure to queue them: nothing was queued.
+func (c *Core) sendMine(ctx context.Context, ob store.Outbox, key string, timeout time.Duration, mine map[string]bool,
 	add func() error) (f syncer.Flushed, stopped, err error) {
 	f = syncer.Flushed{Answers: map[string]syncer.Answer{}}
-	release, lerr := c.lockOutbox(ctx, key, SendLockWait)
+	release, lerr := c.lockOutbox(ctx, ob, SendLockWait)
 	if lerr != nil && !errors.Is(lerr, sendlock.ErrBusy) {
 		return f, nil, lerr
 	}
@@ -178,25 +197,29 @@ func (c *Core) sendMine(ctx context.Context, key string, timeout time.Duration, 
 	if lerr != nil {
 		return f, lerr, nil
 	}
-	f, stopped = syncer.Flush(ctx, c.St, c.client(key, timeout), mine)
+	f, stopped = syncer.Flush(ctx, c.St, c.client(key, timeout), ob, mine)
 	return f, stopped, nil
 }
 
 // gate is the gate of a project key's client: a write to the shared record that is not queued is sent only with
-// the outbox empty, under the sender lock, after flushing it.
-func (c *Core) gate(key string) api.Gate {
+// the outbox empty, under the sender lock, after flushing it. When another sender holds the lock past
+// SendLockWait, the write goes only if nothing is queued (nothing to overtake).
+func (c *Core) gate(ob store.Outbox, key string) api.Gate {
 	return func(ctx context.Context, method string, send func() error) error {
 		if !SharedWrites[method] {
 			return send()
 		}
-		release, err := c.lockOutbox(ctx, key, SendLockWait)
+		release, err := c.lockOutbox(ctx, ob, SendLockWait)
 		if err != nil {
-			n, _ := c.St.Waiting(api.KeyRef(key))
+			n, werr := c.St.Waiting(ob)
+			if werr == nil && n == 0 && errors.Is(err, sendlock.ErrBusy) {
+				return send()
+			}
 			return &NotSent{Method: method, Waiting: n, Cause: err}
 		}
 		defer release()
-		_, ferr := syncer.Flush(ctx, c.St, c.client(key, DefaultTimeout), nil)
-		n, err := c.St.Waiting(api.KeyRef(key))
+		_, ferr := syncer.Flush(ctx, c.St, c.client(key, DefaultTimeout), ob, nil)
+		n, err := c.St.Waiting(ob)
 		if err != nil {
 			return err
 		}
@@ -209,9 +232,13 @@ func (c *Core) gate(key string) api.Gate {
 
 // humanAct records a human act (a verdict's signal.emit, drift.resolve, drift.dismiss) on project pid: queued at
 // the end of the project's outbox, then everything before it is flushed in batches and the act goes alone. Its
-// answer is the server's result, or its refusal; a *Queued when the flush stopped before it (it waits in its place,
-// never sent ahead): Hard when the stop needs the person (an old client, a key no longer good).
+// answer is the server's result, or its refusal; a *Queued when the flush stopped before it (it waits in its
+// place, never sent ahead): Hard when the stop needs the person (an old client, a key no longer good).
 func (c *Core) humanAct(ctx context.Context, pid, sid, id, method string, params any) (json.RawMessage, error) {
+	ob, err := c.outbox(pid)
+	if err != nil {
+		return nil, err
+	}
 	key, err := c.ProjectKey(ctx, pid)
 	if err != nil {
 		return nil, err
@@ -220,9 +247,8 @@ func (c *Core) humanAct(ctx context.Context, pid, sid, id, method string, params
 	if err != nil {
 		return nil, err
 	}
-	ref := api.KeyRef(key)
-	f, stopped, err := c.sendMine(ctx, key, DefaultTimeout, map[string]bool{id: true}, func() error {
-		return c.St.OutboxAdd(id, method, sid, ref, string(raw), c.Now())
+	f, stopped, err := c.sendMine(ctx, ob, key, DefaultTimeout, map[string]bool{id: true}, func() error {
+		return c.St.OutboxAdd(id, method, sid, ob, string(raw), c.Now())
 	})
 	if err != nil {
 		return nil, err
@@ -230,17 +256,53 @@ func (c *Core) humanAct(ctx context.Context, pid, sid, id, method string, params
 	if a, ok := f.Answers[id]; ok {
 		return a.Result, a.Err
 	}
-	ahead, queued, err := c.St.Ahead(ref, id)
+	ahead, _, err := c.St.Ahead(ob, id)
 	if err != nil {
 		return nil, err
-	}
-	if !queued { // another sender took it meanwhile: its session hears of it
-		return nil, &Queued{Item: id, Cause: stopped}
 	}
 	return nil, &Queued{Item: id, Ahead: ahead, Cause: stopped}
 }
 
-// isOffline says whether a flush stopped because the server could not be reached (a queued answer, not an error).
-func isOffline(err error) bool {
-	return errors.Is(err, api.ErrOffline) || errors.Is(err, sendlock.ErrBusy)
+// OutboxItem is an item waiting in an outbox, for the person (`teamflow outbox`, `teamflow status`).
+type OutboxItem struct {
+	store.OutboxRow
+	Mine bool // queued under this sign-in (others are never sent by it)
+}
+
+// Outbox is every item waiting on this machine, every sign-in's, in order.
+func (c *Core) Outbox() ([]OutboxItem, error) {
+	rows, err := c.St.OutboxAll()
+	if err != nil {
+		return nil, err
+	}
+	b, berr := c.binding()
+	out := make([]OutboxItem, len(rows))
+	for i, r := range rows {
+		out[i] = OutboxItem{OutboxRow: r, Mine: berr == nil && r.Server == b.Server && r.Account == b.Account}
+	}
+	return out, nil
+}
+
+// OutboxDrop takes one item out of the outbox (the person's decision: it is never sent), under its outbox's
+// sender lock so a sender never has it on the wire meanwhile. False when no such item waits.
+func (c *Core) OutboxDrop(ctx context.Context, id string) (bool, error) {
+	rows, err := c.St.OutboxAll()
+	if err != nil {
+		return false, err
+	}
+	for _, r := range rows {
+		if r.Signal != id {
+			continue
+		}
+		release, err := c.lockOutbox(ctx, r.Outbox, SendLockWait)
+		if err != nil {
+			return false, err
+		}
+		defer release()
+		if _, ok, err := c.St.Ahead(r.Outbox, id); err != nil || !ok { // sent meanwhile
+			return false, err
+		}
+		return true, c.St.SpoolDone(id)
+	}
+	return false, nil
 }

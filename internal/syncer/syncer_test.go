@@ -70,14 +70,40 @@ const (
 
 var t0 = time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
 
+// ob is the outbox the tests queue in: lan's on P.
+var ob = store.OutboxOf(store.Binding("https://tf.example", "lan@acme.test"), P)
+
+var (
+	dirsMu sync.Mutex
+	dirs   = map[*store.Store]string{}
+)
+
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(t.TempDir())
+	dir := t.TempDir()
+	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	dirsMu.Lock()
+	dirs[st] = dir
+	dirsMu.Unlock()
 	t.Cleanup(func() { st.Close() })
 	return st
+}
+
+// reopen is another handle on st's store, as another process would open it.
+func reopen(t *testing.T, st *store.Store) *store.Store {
+	t.Helper()
+	dirsMu.Lock()
+	dir := dirs[st]
+	dirsMu.Unlock()
+	other, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { other.Close() })
+	return other
 }
 
 func must(t *testing.T, err error) {
@@ -92,19 +118,20 @@ func must(t *testing.T, err error) {
 // fake is a Teamflow server: signal.emit keeps the first result per signal id (as the real one does), sync.poll
 // answers from pages.
 type fake struct {
-	t        *testing.T
-	mu       sync.Mutex
-	bodies   []json.RawMessage                                                // every request body, in order
-	results  map[string]json.RawMessage                                       // signal id -> the first result
-	answer   func(protocol.SignalEmit, json.RawMessage) protocol.SignalResult // nil: accept, IN_FORCE
-	callErr  func(sig string) *protocol.RpcError                              // a per-call error
-	poll     func(protocol.SyncPoll) any                                      // sync.poll's answer
-	polls    []protocol.SyncPoll
-	fail     func(n int) int  // HTTP status to answer request n (1-based) with, 0: answer as usual
-	lose     func(n int) bool // handle request n, then drop the connection (the answer is lost)
-	onReq    func(n int)      // runs before request n is handled (outside the lock)
-	order    []string         // every call's signal or drift id, in the order the server read them (retries too)
-	requests int
+	t         *testing.T
+	mu        sync.Mutex
+	bodies    []json.RawMessage                                                // every request body, in order
+	results   map[string]json.RawMessage                                       // signal id -> the first result
+	answer    func(protocol.SignalEmit, json.RawMessage) protocol.SignalResult // nil: accept, IN_FORCE
+	callErr   func(sig string) *protocol.RpcError                              // a per-call error
+	poll      func(protocol.SyncPoll) any                                      // sync.poll's answer
+	polls     []protocol.SyncPoll
+	fail      func(n int) int                 // HTTP status to answer request n (1-based) with, 0: answer as usual
+	lose      func(n int) bool                // handle request n, then drop the connection (the answer is lost)
+	onReq     func(n int)                     // runs before request n is handled (outside the lock)
+	rawAnswer func(id string) json.RawMessage // a raw result for a signal (nil: as usual)
+	order     []string                        // every call's signal or drift id, in the order the server read them (retries too)
+	requests  int
 }
 
 func newFake(t *testing.T) (*fake, *httptest.Server) {
@@ -149,6 +176,12 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 			if f.callErr != nil {
 				if e := f.callErr(raw.Signal.ID); e != nil {
 					out.Error = e
+					return out
+				}
+			}
+			if f.rawAnswer != nil {
+				if b := f.rawAnswer(raw.Signal.ID); b != nil {
+					out.Result = b
 					return out
 				}
 			}
@@ -224,6 +257,20 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+// set changes the fake under its lock (a handler may still be running).
+func (f *fake) set(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn()
+}
+
+// got is the order the server read the calls in.
+func (f *fake) got() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.order...)
+}
+
 // shapes is each request's shape: the batch length, or "alone".
 func (f *fake) shapes() []string {
 	f.mu.Lock()
@@ -248,10 +295,10 @@ func client(srv *httptest.Server) *api.Client { return api.New(srv.URL, key, 5*t
 // spool queues a signal of kind for session s1 with the test key.
 func spool(t *testing.T, st *store.Store, id string, kind protocol.SignalKind, title string) {
 	t.Helper()
-	spoolWith(t, st, id, kind, title, api.KeyRef(key))
+	spoolWith(t, st, id, kind, title, ob)
 }
 
-func spoolWith(t *testing.T, st *store.Store, id string, kind protocol.SignalKind, title, ref string) {
+func spoolWith(t *testing.T, st *store.Store, id string, kind protocol.SignalKind, title string, ref store.Outbox) {
 	t.Helper()
 	e := protocol.NewSignalEmit()
 	e.ClientSession, e.Actor, e.ProjectVersion = "s1", protocol.ActorAgent, 1
@@ -268,7 +315,7 @@ func spoolWith(t *testing.T, st *store.Store, id string, kind protocol.SignalKin
 
 func spooled(t *testing.T, st *store.Store) []string {
 	t.Helper()
-	items, err := st.Spooled(api.KeyRef(key))
+	items, err := st.Spooled(ob)
 	must(t, err)
 	var out []string
 	for _, it := range items {
@@ -300,7 +347,7 @@ func TestPushTellsTheSessionItReachedTheTeam(t *testing.T) {
 	st := openStore(t)
 	_, srv := newFake(t)
 	spool(t, st, S1, protocol.SignalKindDecision, "Round prices to 0.05")
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != 1 {
 		t.Fatalf("pushed %d, want 1", n)
@@ -316,7 +363,7 @@ func TestPushTellsTheSessionItReachedTheTeam(t *testing.T) {
 	if ns[0].Text != want {
 		t.Fatalf("text %q\nwant %q", ns[0].Text, want)
 	}
-	if n, err := Push(context.Background(), st, client(srv)); err != nil || n != 0 { // told once; nothing left
+	if n, err := Push(context.Background(), st, client(srv), ob); err != nil || n != 0 { // told once; nothing left
 		t.Fatalf("second push: %d, %v", n, err)
 	}
 	if len(notices(t, st, "s1")) != 1 {
@@ -332,7 +379,7 @@ func TestPushRejectedAfterItWasQueued(t *testing.T) {
 			Message: "the action is not done: nothing to revoke"}
 	}
 	spool(t, st, S1, protocol.SignalKindActionRevoke, "Revoke")
-	_, err := Push(context.Background(), st, client(srv))
+	_, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	ns := notices(t, st, "s1")
 	want := "Your signal " + S1 + " was rejected after it was queued: UNKNOWN_ACTION. the action is not done: nothing to revoke"
@@ -351,7 +398,7 @@ func TestPushRejectedWithoutAReason(t *testing.T) {
 		return protocol.SignalResult{Signal: e.Signal.ID}
 	}
 	spool(t, st, S1, protocol.SignalKindNote, "n")
-	_, err := Push(context.Background(), st, client(srv))
+	_, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	ns := notices(t, st, "s1")
 	if len(ns) != 1 || ns[0].Text != "Your signal "+S1+" was rejected after it was queued: rejected." {
@@ -366,7 +413,7 @@ func TestPushIsIdempotent(t *testing.T) {
 	f.lose = func(n int) bool { return n == 1 }
 	spool(t, st, S1, protocol.SignalKindDecision, "One")
 	spool(t, st, S2, protocol.SignalKindDecision, "Two")
-	if _, err := Push(context.Background(), st, client(srv)); !errors.Is(err, api.ErrOffline) {
+	if _, err := Push(context.Background(), st, client(srv), ob); !errors.Is(err, api.ErrOffline) {
 		t.Fatalf("lost answer: %v, want ErrOffline", err)
 	}
 	if got := spooled(t, st); strings.Join(got, ",") != S1+","+S2 {
@@ -376,7 +423,7 @@ func TestPushIsIdempotent(t *testing.T) {
 		t.Fatal("told before the answer arrived")
 	}
 	// The flush again: the same ids, the stored first results.
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != 2 || len(spooled(t, st)) != 0 {
 		t.Fatalf("flush: %d, spool %v", n, spooled(t, st))
@@ -390,7 +437,7 @@ func TestPushIsIdempotent(t *testing.T) {
 	if got := spooled(t, st); len(got) != 1 {
 		t.Fatalf("spool %v", got)
 	}
-	n, err = Push(context.Background(), st, client(srv))
+	n, err = Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != 1 || len(f.results) != 2 {
 		t.Fatalf("retry: %d pushed, %d results on the server", n, len(f.results))
@@ -414,7 +461,7 @@ func TestOfflinePushKeepsSpool(t *testing.T) {
 	}
 	spool(t, st, "sg_verdict", protocol.SignalKindApprove, "ok") // a verdict waits too
 	for range 2 {
-		n, err := Push(context.Background(), st, api.New(down, key, time.Second))
+		n, err := Push(context.Background(), st, api.New(down, key, time.Second), ob)
 		if !errors.Is(err, api.ErrOffline) || n != 0 {
 			t.Fatalf("offline push: %d, %v", n, err)
 		}
@@ -427,7 +474,7 @@ func TestOfflinePushKeepsSpool(t *testing.T) {
 	}
 	// Back online: everything goes out once.
 	f, srv := newFake(t)
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != 4 || len(spooled(t, st)) != 0 || len(f.results) != 4 {
 		t.Fatalf("flush: %d, spool %v, results %d", n, spooled(t, st), len(f.results))
@@ -446,7 +493,7 @@ func TestPushOfflineMidwayKeepsTheRest(t *testing.T) {
 	for i := range 120 {
 		spool(t, st, fmt.Sprintf("sg_%03d", i), protocol.SignalKindNote, "n")
 	}
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	if !errors.Is(err, api.ErrOffline) || n != protocol.MaxBatch {
 		t.Fatalf("push: %d, %v", n, err)
 	}
@@ -455,7 +502,7 @@ func TestPushOfflineMidwayKeepsTheRest(t *testing.T) {
 		t.Fatalf("left %d, first %v", len(left), left[:1])
 	}
 	f.fail = nil
-	n, err = Push(context.Background(), st, client(srv))
+	n, err = Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != 70 || len(spooled(t, st)) != 0 || len(f.results) != 120 {
 		t.Fatalf("flush: %d, results %d", n, len(f.results))
@@ -469,7 +516,7 @@ func TestPushLongSpoolGoesInBatches(t *testing.T) {
 	for i := range total {
 		spool(t, st, fmt.Sprintf("sg_%03d", i), protocol.SignalKindNote, "n")
 	}
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != total {
 		t.Fatalf("pushed %d", n)
@@ -492,7 +539,7 @@ func TestPushSendsVerdictsAlone(t *testing.T) {
 		order = append(order, e.Signal.ID)
 		return protocol.SignalResult{Signal: e.Signal.ID, Accepted: true}
 	}
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != 5 {
 		t.Fatalf("pushed %d", n)
@@ -514,13 +561,13 @@ func TestPushOnlyThisKeysSpool(t *testing.T) {
 	st := openStore(t)
 	f, srv := newFake(t)
 	spool(t, st, S1, protocol.SignalKindNote, "mine")
-	spoolWith(t, st, S2, protocol.SignalKindNote, "another key's", api.KeyRef("tfp_another"))
-	n, err := Push(context.Background(), st, client(srv))
+	spoolWith(t, st, S2, protocol.SignalKindNote, "another project's", store.OutboxOf(store.Binding("https://tf.example", "lan@acme.test"), P2))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != 1 || len(f.results) != 1 {
 		t.Fatalf("pushed %d", n)
 	}
-	other, err := st.Spooled(api.KeyRef("tfp_another"))
+	other, err := st.Spooled(store.OutboxOf(store.Binding("https://tf.example", "lan@acme.test"), P2))
 	must(t, err)
 	if len(other) != 1 || other[0].Signal != S2 {
 		t.Fatalf("another key's spool %+v", other)
@@ -530,7 +577,7 @@ func TestPushOnlyThisKeysSpool(t *testing.T) {
 func TestPushEmptySpoolSendsNothing(t *testing.T) {
 	st := openStore(t)
 	f, srv := newFake(t)
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	if err != nil || n != 0 || f.requests != 0 {
 		t.Fatalf("%d, %v, %d requests", n, err, f.requests)
 	}
@@ -545,7 +592,7 @@ func TestPushUpgradeRequiredKeepsTheSpool(t *testing.T) {
 	}
 	spool(t, st, S1, protocol.SignalKindNote, "n")
 	spool(t, st, S2, protocol.SignalKindApprove, "ok")
-	_, err := Push(context.Background(), st, client(srv))
+	_, err := Push(context.Background(), st, client(srv), ob)
 	if !errors.Is(err, api.ErrUpgradeRequired) {
 		t.Fatalf("err %v, want ErrUpgradeRequired", err)
 	}
@@ -572,7 +619,7 @@ func TestPushPerCallRefusalDropsOnlyThatSignal(t *testing.T) {
 	spool(t, st, S1, protocol.SignalKindNote, "bad")
 	spool(t, st, S2, protocol.SignalKindNote, "keyless")
 	spool(t, st, S3, protocol.SignalKindNote, "fine")
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	var ae *api.APIError
 	if !errors.As(err, &ae) || ae.Reason != "NOT_A_MEMBER" {
 		t.Fatalf("err %v, want the NOT_A_MEMBER refusal", err)
@@ -596,9 +643,9 @@ func TestPushPerCallRefusalDropsOnlyThatSignal(t *testing.T) {
 func TestPushUnreadableSpoolItemIsDropped(t *testing.T) {
 	st := openStore(t)
 	f, srv := newFake(t)
-	must(t, st.SpoolAdd(S1, "s1", api.KeyRef(key), "{not json", t0))
+	must(t, st.SpoolAdd(S1, "s1", ob, "{not json", t0))
 	spool(t, st, S2, protocol.SignalKindNote, "fine")
-	n, err := Push(context.Background(), st, client(srv))
+	n, err := Push(context.Background(), st, client(srv), ob)
 	must(t, err)
 	if n != 2 || len(spooled(t, st)) != 0 || len(f.results) != 1 {
 		t.Fatalf("%d pushed, spool %v, %d sent", n, spooled(t, st), len(f.results))
@@ -614,7 +661,7 @@ func TestPushOnAClosedStoreFails(t *testing.T) {
 	must(t, err)
 	f, srv := newFake(t)
 	st.Close()
-	if _, err := Push(context.Background(), st, client(srv)); err == nil {
+	if _, err := Push(context.Background(), st, client(srv), ob); err == nil {
 		t.Fatal("no error from a closed store")
 	}
 	if f.requests != 0 {

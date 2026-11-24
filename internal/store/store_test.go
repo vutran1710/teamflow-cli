@@ -597,11 +597,11 @@ func TestResetProjectDropsOnlyThatProject(t *testing.T) {
 
 func TestSpool(t *testing.T) {
 	st := open(t, t.TempDir())
-	must(t, st.SpoolAdd("sg_1", "ss_1", "ref_a", `{"a":1}`, t0))
-	must(t, st.SpoolAdd("sg_2", "ss_1", "ref_b", `{"a":2}`, t0))
-	must(t, st.SpoolAdd("sg_3", "ss_2", "ref_a", `{"a":3}`, t0))
-	must(t, st.SpoolAdd("sg_1", "ss_9", "ref_a", `{"changed":1}`, t0)) // the same signal again: kept once, as first
-	items, err := st.Spooled("ref_a")
+	must(t, st.SpoolAdd("sg_1", "ss_1", obA, `{"a":1}`, t0))
+	must(t, st.SpoolAdd("sg_2", "ss_1", obB, `{"a":2}`, t0))
+	must(t, st.SpoolAdd("sg_3", "ss_2", obA, `{"a":3}`, t0))
+	must(t, st.SpoolAdd("sg_1", "ss_9", obA, `{"changed":1}`, t0)) // the same signal again: kept once, as first
+	items, err := st.Spooled(obA)
 	must(t, err)
 	if len(items) != 2 || items[0].Signal != "sg_1" || items[1].Signal != "sg_3" || items[0].Params != `{"a":1}` ||
 		items[0].Session != "ss_1" {
@@ -615,7 +615,7 @@ func TestSpool(t *testing.T) {
 	if n, _ := st.SpoolSize(); n != 2 {
 		t.Fatalf("SpoolSize after done %d", n)
 	}
-	if items, _ := st.Spooled("ref_none"); len(items) != 0 {
+	if items, _ := st.Spooled(OutboxOf(bnd, "pj_none")); len(items) != 0 {
 		t.Fatalf("another key's spool %+v", items)
 	}
 }
@@ -1142,17 +1142,24 @@ func TestTxStoreView(t *testing.T) {
 	}
 }
 
-// The outbox (the spool, made explicit): every item keeps its method and its place; a human act's place says how
-// many wait ahead of it. Sad paths: the same item twice (kept once, in its first place), another key's items (never
-// counted), an item not queued (not found), a closed store.
+var (
+	obA     = OutboxOf(bnd, "pj_a")
+	obB     = OutboxOf(bnd, "pj_b")
+	obOther = OutboxOf(Binding("https://tf.example", "huy@acme.test"), "pj_a")
+)
+
+// The outbox is one per (server, account, project): every item keeps its method and its place, and a human act's
+// place says how many wait ahead of it. Sad paths: the same item twice (kept once, in its first place), another
+// project's and another account's items (never listed nor counted), an item not queued, a closed store.
 func TestOutboxKeepsMethodAndPlace(t *testing.T) {
 	st := open(t, t.TempDir())
-	must(t, st.SpoolAdd("sg_1", "ss_1", "ref_a", `{"a":1}`, t0))
-	must(t, st.OutboxAdd("dra_1", "drift.resolve", "ss_1", "ref_a", `{"drift":"dr_1"}`, t0))
-	must(t, st.SpoolAdd("sg_x", "ss_1", "ref_b", `{"a":9}`, t0))
-	must(t, st.OutboxAdd("sg_2", "signal.emit", "", "ref_a", `{"a":2}`, t0))
-	must(t, st.OutboxAdd("dra_1", "drift.dismiss", "ss_9", "ref_a", `{}`, t0)) // again: kept once, as first
-	items, err := st.Spooled("ref_a")
+	must(t, st.SpoolAdd("sg_1", "ss_1", obA, `{"a":1}`, t0))
+	must(t, st.OutboxAdd("dra_1", "drift.resolve", "ss_1", obA, `{"drift":"dr_1"}`, t0))
+	must(t, st.SpoolAdd("sg_x", "ss_1", obB, `{"a":9}`, t0))
+	must(t, st.SpoolAdd("sg_y", "ss_1", obOther, `{"a":8}`, t0))
+	must(t, st.OutboxAdd("sg_2", "signal.emit", "", obA, `{"a":2}`, t0))
+	must(t, st.OutboxAdd("dra_1", "drift.dismiss", "ss_9", obA, `{}`, t0)) // again: kept once, as first
+	items, err := st.Spooled(obA)
 	must(t, err)
 	var got []string
 	for _, it := range items {
@@ -1162,54 +1169,108 @@ func TestOutboxKeepsMethodAndPlace(t *testing.T) {
 		t.Fatalf("outbox %v", got)
 	}
 	for id, want := range map[string]int{"sg_1": 0, "dra_1": 1, "sg_2": 2} {
-		if n, ok, err := st.Ahead("ref_a", id); err != nil || !ok || n != want {
+		if n, ok, err := st.Ahead(obA, id); err != nil || !ok || n != want {
 			t.Fatalf("Ahead(%s) = %d %v %v, want %d", id, n, ok, err, want)
 		}
 	}
-	if _, ok, err := st.Ahead("ref_a", "sg_missing"); ok || err != nil {
+	if _, ok, err := st.Ahead(obA, "sg_missing"); ok || err != nil {
 		t.Fatalf("an item not queued: %v %v", ok, err)
 	}
-	if n, _ := st.Waiting("ref_a"); n != 3 {
+	if _, ok, _ := st.Ahead(obA, "sg_y"); ok {
+		t.Fatal("another account's item counted as this outbox's")
+	}
+	if n, _ := st.Waiting(obA); n != 3 {
 		t.Fatalf("Waiting %d", n)
 	}
-	if n, _ := st.Waiting("ref_none"); n != 0 {
-		t.Fatalf("Waiting for another key %d", n)
+	if ps, _ := st.OutboxProjects(bnd); strings.Join(ps, ",") != "pj_a,pj_b" {
+		t.Fatalf("OutboxProjects %v", ps)
+	}
+	all, err := st.OutboxAll()
+	must(t, err)
+	if len(all) != 5 || all[3].Outbox != obOther || all[3].Signal != "sg_y" {
+		t.Fatalf("OutboxAll %+v", all)
+	}
+	if obA.Ref() == obB.Ref() || obA.Ref() == obOther.Ref() || len(obA.Ref()) != 16 {
+		t.Fatalf("refs %s %s %s", obA.Ref(), obB.Ref(), obOther.Ref())
 	}
 	st.Close()
-	if _, _, err := st.Ahead("ref_a", "sg_1"); err == nil {
+	if _, _, err := st.Ahead(obA, "sg_1"); err == nil {
 		t.Fatal("a closed store answered Ahead")
 	}
-	if _, err := st.Waiting("ref_a"); err == nil {
+	if _, err := st.Waiting(obA); err == nil {
 		t.Fatal("a closed store answered Waiting")
 	}
 }
 
-// A spool written before the outbox knew methods (0001 and 0002 only) migrates: its rows are signal.emit, in their
-// order, and a restart sends them as before.
-func TestSpoolFromBeforeMethodsMigrates(t *testing.T) {
+// Each send and each counted failure is recorded on the item: tries, fails, the first failure's time, the last
+// error. Sad paths: an unknown id (nothing happens), a second failure keeps the first time.
+func TestOutboxCountsTriesAndFailures(t *testing.T) {
+	st := open(t, t.TempDir())
+	must(t, st.SpoolAdd("sg_1", "ss_1", obA, `{}`, t0))
+	must(t, st.SpoolAdd("sg_2", "ss_1", obA, `{}`, t0))
+	must(t, st.Tried([]string{"sg_1", "sg_2", "sg_missing"}))
+	must(t, st.Tried([]string{"sg_1"}))
+	it, err := st.Failed("sg_1", "no answer", t0.Add(time.Hour))
+	must(t, err)
+	it, err = st.Failed("sg_1", "server error 500", t0.Add(2*time.Hour))
+	must(t, err)
+	if it.Tries != 2 || it.Fails != 2 || !it.FirstFail.Equal(t0.Add(time.Hour)) || it.LastError != "server error 500" {
+		t.Fatalf("item %+v", it)
+	}
+	if _, err := st.Failed("sg_missing", "x", t0); err == nil {
+		t.Fatal("a failure of an item not queued")
+	}
+	items, _ := st.Spooled(obA)
+	if items[1].Tries != 1 || items[1].Fails != 0 || !items[1].FirstFail.IsZero() || !items[1].CreatedAt.Equal(t0) {
+		t.Fatalf("untouched item %+v", items[1])
+	}
+}
+
+// A spool written before the outbox knew methods and sign-ins (0001..0003) migrates: its rows are bound to the
+// sign-in and project of the key they were queued with (the key still on this machine), in their order. A row
+// whose key is gone keeps its project (from the signal) and no sign-in: it is never sent by anyone, but listed.
+func TestSpoolFromBeforeMigrates(t *testing.T) {
 	dir := t.TempDir()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, FileName))
 	must(t, err)
 	stmts := []string{"CREATE TABLE " + migrationsTable + " (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"}
-	for _, n := range []string{"0001_init.sql", "0002_project_key_binding.sql"} {
+	for _, n := range []string{"0001_init.sql", "0002_project_key_binding.sql", "0003_outbox_method.sql"} {
 		body, err := os.ReadFile(filepath.Join("migrations", n))
 		must(t, err)
 		stmts = append(stmts, string(body), "INSERT INTO "+migrationsTable+" VALUES ('"+n+"', '2026-11-01T00:00:00Z')")
 	}
+	known := "0b1d94f300d754c6" // the key ref of tfp_example_key (as Python's key_ref)
 	stmts = append(stmts,
-		"INSERT INTO spool (signal, session, key_ref, params, created_at) VALUES ('sg_old1', 'ss_1', 'ref_a', '{}', '2026-11-01T00:00:00Z')",
-		"INSERT INTO spool (signal, session, key_ref, params, created_at) VALUES ('sg_old2', 'ss_1', 'ref_a', '{}', '2026-11-01T00:00:00Z')")
+		"INSERT INTO project_keys VALUES ('"+bnd.Server+"', '"+bnd.Account+"', 'pj_a', 'tfp_example_key', 'mb_1', 'og_1', 'A', '2026-11-01T00:00:00Z')",
+		"INSERT INTO spool (signal, session, key_ref, params, created_at) VALUES ('sg_old1', 'ss_1', '"+known+"', '{\"signal\":{\"project\":\"pj_a\"}}', '2026-11-01T00:00:00Z')",
+		"INSERT INTO spool (signal, session, key_ref, params, created_at) VALUES ('sg_gone', 'ss_1', 'ffffffffffffffff', '{\"signal\":{\"project\":\"pj_z\"}}', '2026-11-01T00:00:00Z')",
+		"INSERT INTO spool (signal, session, key_ref, params, created_at) VALUES ('sg_old2', 'ss_1', '"+known+"', '{not json', '2026-11-01T00:00:00Z')")
 	for _, q := range stmts {
 		_, err = db.Exec(q)
 		must(t, err)
 	}
 	must(t, db.Close())
 	st := open(t, dir)
-	must(t, st.OutboxAdd("dra_new", "drift.dismiss", "ss_1", "ref_a", "{}", t0))
-	items, err := st.Spooled("ref_a")
+	must(t, st.OutboxAdd("dra_new", "drift.dismiss", "ss_1", obA, "{}", t0))
+	items, err := st.Spooled(obA)
 	must(t, err)
-	if len(items) != 3 || items[0].Method != "signal.emit" || items[1].Signal != "sg_old2" || items[1].Method != "signal.emit" ||
+	if len(items) != 3 || items[0].Signal != "sg_old1" || items[0].Method != "signal.emit" || items[1].Signal != "sg_old2" ||
 		items[2].Method != "drift.dismiss" {
 		t.Fatalf("migrated outbox %+v", items)
+	}
+	all, _ := st.OutboxAll()
+	var gone *OutboxRow
+	for i := range all {
+		if all[i].Signal == "sg_gone" {
+			gone = &all[i]
+		}
+	}
+	if gone == nil || gone.Project != "pj_z" || gone.Server != "" || gone.Account != "" {
+		t.Fatalf("an orphan from before: %+v", gone)
+	}
+	st.Close()
+	st = open(t, dir) // opening again changes nothing
+	if items, _ := st.Spooled(obA); len(items) != 3 {
+		t.Fatalf("after reopening %+v", items)
 	}
 }

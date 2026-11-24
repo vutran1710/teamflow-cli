@@ -45,15 +45,17 @@ type spooledEmit struct {
 
 // spooledDrift is what a flush reads of a queued drift act.
 type spooledDrift struct {
-	Drift string `json:"drift"`
+	Drift      string   `json:"drift"`
+	Note       string   `json:"note"`
+	ResolvedBy []string `json:"resolved_by"`
 }
 
 type pending struct {
 	item  store.SpoolItem
 	emit  spooledEmit
-	drift string // a drift act's drift
-	human bool   // a human act: sent alone
-	valid bool   // sendable at all
+	drift spooledDrift // a drift act's
+	human bool         // a human act: sent alone
+	valid bool         // sendable at all
 }
 
 func readItem(it store.SpoolItem) pending {
@@ -63,9 +65,8 @@ func readItem(it store.SpoolItem) pending {
 		p.valid = json.Unmarshal([]byte(it.Params), &p.emit) == nil
 		p.human = isVerdict(p.emit.Signal.Kind)
 	case slices.Contains(protocol.HumanActsMethods, it.Method):
-		var d spooledDrift
-		p.valid = json.Unmarshal([]byte(it.Params), &d) == nil && d.Drift != ""
-		p.drift, p.human = d.Drift, true
+		p.valid = json.Unmarshal([]byte(it.Params), &p.drift) == nil && p.drift.Drift != ""
+		p.human = true
 	}
 	return p
 }
@@ -86,25 +87,38 @@ type Flushed struct {
 // maxRounds bounds how often one flush reads the outbox again for items queued while it ran.
 const maxRounds = 20
 
-// Push sends the outbox of c's key (Flush with no items of the caller's own) and returns how many items left it.
-func Push(ctx context.Context, st *store.Store, c *api.Client) (int, error) {
-	f, err := Flush(ctx, st, c, nil)
+// An item the server keeps failing on (no answer for it, an answer this client can't read, an internal error, an
+// HTTP 500) would hold every later item back forever. After GiveUpFails such failures spanning at least
+// GiveUpAfter it is dropped, and its session is told. An unreachable server (no connection, a timeout, 502, 503,
+// 504, 429), UPGRADE_REQUIRED and a key no longer a member's never count: waiting for those loses nothing.
+const (
+	GiveUpFails = 10
+	GiveUpAfter = 24 * time.Hour
+)
+
+// ErrGaveUp is an item dropped after GiveUpFails failures over GiveUpAfter.
+var ErrGaveUp = errors.New("gave up")
+
+// Push sends the outbox ob with c (Flush with no items of the caller's own) and returns how many items left it.
+func Push(ctx context.Context, st *store.Store, c *api.Client, ob store.Outbox) (int, error) {
+	f, err := Flush(ctx, st, c, ob, nil)
 	return f.Sent, err
 }
 
-// Flush sends the outbox of c's key in order: routine signals in batches (MaxBatch and MaxBodyBytes, packed by the
-// client, one JSON-RPC array per request), each human act (a verdict, drift.resolve, drift.dismiss) alone after
-// everything before it. Each request's answers are recorded before the next goes out. An item leaves the outbox
-// only with its answer: accepted, or refused for good (INVALID_PARAMS, a reasoned refusal, too large, never
-// sendable): its session is told, unless it is one of the caller's own (mine), whose answers come back in
-// Flushed.Answers instead. A transient failure (offline, 5xx, 429, a lost or unreadable answer, UPGRADE_REQUIRED,
-// a key no longer a member's) stops the flush there: the item and everything after it wait, and the error is
-// returned. Retries send the same ids, which the server answers once. Items queued while it runs are sent too.
-// The caller holds the sender lock (see core).
-func Flush(ctx context.Context, st *store.Store, c *api.Client, mine map[string]bool) (Flushed, error) {
+// Flush sends the outbox ob (a sign-in's outbox of one project) with c, the sign-in's current key for the project,
+// in order: routine signals in batches (MaxBatch and MaxBodyBytes, packed by the client, one JSON-RPC array per
+// request), each human act (a verdict, drift.resolve, drift.dismiss) alone after everything before it. Each
+// request's answers are recorded before the next goes out. An item leaves the outbox only with its answer:
+// accepted, or refused for good (INVALID_PARAMS, a reasoned refusal, too large, never sendable, given up on): its
+// session is told, unless it is one of the caller's own (mine), whose answers come back in Flushed.Answers
+// instead. A transient failure (offline, 5xx, 429, a lost or unreadable answer, UPGRADE_REQUIRED, a key no
+// longer a member's) stops the flush there: the item and everything after it wait, and the error is returned.
+// Retries send the same ids, which the server answers once. Items queued while it runs are sent too. The caller
+// holds the outbox's sender lock (see core).
+func Flush(ctx context.Context, st *store.Store, c *api.Client, ob store.Outbox, mine map[string]bool) (Flushed, error) {
 	f := Flushed{Answers: map[string]Answer{}}
 	for range maxRounds {
-		items, err := st.Spooled(c.KeyRef())
+		items, err := st.Spooled(ob)
 		if err != nil {
 			return f, fmt.Errorf("read the spool: %w", err)
 		}
@@ -112,7 +126,7 @@ func Flush(ctx context.Context, st *store.Store, c *api.Client, mine map[string]
 			return f, nil
 		}
 		before := f.Sent
-		if err := flushOnce(ctx, st, c, items, mine, &f); err != nil {
+		if err := flushOnce(ctx, st, c, ob, items, mine, &f); err != nil {
 			return f, err
 		}
 		if f.Sent == before {
@@ -122,18 +136,30 @@ func Flush(ctx context.Context, st *store.Store, c *api.Client, mine map[string]
 	return f, nil
 }
 
-func flushOnce(ctx context.Context, st *store.Store, c *api.Client, items []store.SpoolItem, mine map[string]bool, f *Flushed) error {
+func flushOnce(ctx context.Context, st *store.Store, c *api.Client, ob store.Outbox, items []store.SpoolItem,
+	mine map[string]bool, f *Flushed) error {
 	var run []pending // routine signals waiting for their batch
 	sendRun := func() error {
 		if len(run) == 0 {
 			return nil
 		}
 		calls := make([]api.Call, len(run))
+		ids := make([]string, len(run))
 		for i, p := range run {
 			calls[i] = api.Call{Method: p.item.Method, Params: json.RawMessage(p.item.Params)}
+			ids[i] = p.item.Signal
+		}
+		if err := st.Tried(ids); err != nil {
+			return fmt.Errorf("record the sends: %w", err)
 		}
 		var stop error
-		berr := c.BatchEach(ctx, calls, func(start, end int, res []api.Result) bool {
+		berr := c.BatchEach(ctx, calls, func(start, end int, res []api.Result, rerr error) bool {
+			if rerr != nil { // the whole request failed: each of its calls failed with it
+				res = make([]api.Result, end-start)
+				for i := range res {
+					res[i].Err = rerr
+				}
+			}
 			stop = settle(st, run[start:end], res, mine, f)
 			return stop != nil
 		})
@@ -158,8 +184,14 @@ func flushOnce(ctx context.Context, st *store.Store, c *api.Client, items []stor
 		if err := sendRun(); err != nil {
 			return err
 		}
+		if err := st.Tried([]string{p.item.Signal}); err != nil {
+			return fmt.Errorf("record the send: %w", err)
+		}
 		var raw json.RawMessage
 		cerr := c.Call(ctx, p.item.Method, json.RawMessage(p.item.Params), &raw)
+		if cerr != nil && p.drift.Drift != "" && p.item.Tries > 0 && reason(cerr) == protocol.RejectReasonDriftClosed {
+			raw, cerr = confirmDrift(ctx, st, c, ob, p, cerr)
+		}
 		if err := settle(st, []pending{p}, []api.Result{{Result: raw, Err: cerr}}, mine, f); err != nil {
 			return err
 		}
@@ -167,11 +199,62 @@ func flushOnce(ctx context.Context, st *store.Store, c *api.Client, items []stor
 	return sendRun()
 }
 
-var errUnreadable = errors.New("the queued item could not be read")
+func reason(err error) protocol.RejectReason {
+	var ae *api.APIError
+	if errors.As(err, &ae) {
+		return protocol.RejectReason(ae.Reason)
+	}
+	return ""
+}
+
+// confirmDrift settles a drift act sent before (its answer lost) that is now refused as DRIFT_CLOSED: the drift
+// may be closed by that earlier send. The replica is brought up to date: when the drift is closed with this act's
+// status and note (and the people it named), the act reached the team and its answer is the drift as it stands;
+// otherwise the refusal stands.
+func confirmDrift(ctx context.Context, st *store.Store, c *api.Client, ob store.Outbox, p pending, refusal error) (json.RawMessage, error) {
+	if _, err := Pull(ctx, st, c, 0); err != nil {
+		return nil, refusal
+	}
+	ds, err := st.Drifts(ob.Project, "")
+	if err != nil {
+		return nil, refusal
+	}
+	want := protocol.DriftStatusResolved
+	if p.item.Method == "drift.dismiss" {
+		want = protocol.DriftStatusDismissed
+	}
+	for _, d := range ds {
+		if d.ID != p.drift.Drift || d.Status != want || d.Resolution != p.drift.Note {
+			continue
+		}
+		if p.item.Method == "drift.resolve" && !sameSet(d.ResolvedBy, p.drift.ResolvedBy) {
+			continue
+		}
+		raw, err := json.Marshal(protocol.Drifts{Drifts: []protocol.Drift{d}})
+		if err != nil {
+			return nil, refusal
+		}
+		return raw, nil
+	}
+	return nil, refusal
+}
+
+func sameSet(a, b []string) bool {
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
+}
+
+var (
+	errUnreadable       = errors.New("the queued item could not be read")
+	errUnreadableAnswer = errors.New("the server's answer could not be read")
+)
 
 // settle records the answers to ps in one transaction: each answered item leaves the outbox, and its session gets
-// a notice (the caller's own get an Answer instead). It returns the first error that kept an item (a transient
-// one: the flush stops), or the store's error.
+// a notice (the caller's own get an Answer instead). A transient failure keeps the item, counted against it when
+// it is the server failing on it; past GiveUpFails over GiveUpAfter the item is dropped instead. It returns the
+// first error that kept an item (the flush stops), or the store's error.
 func settle(st *store.Store, ps []pending, results []api.Result, mine map[string]bool, f *Flushed) error {
 	var keep error
 	done := 0
@@ -183,26 +266,37 @@ func settle(st *store.Store, ps []pending, results []api.Result, mine map[string
 		for i, p := range ps {
 			r := results[i]
 			var res protocol.SignalResult
-			if r.Err == nil {
-				if p.item.Method == "signal.emit" {
-					if err := json.Unmarshal(r.Result, &res); err != nil {
-						keep = cmpErr(keep, fmt.Errorf("signal.emit answer: %w", err))
-						continue
-					}
+			callErr := r.Err
+			if callErr == nil && p.item.Method == "signal.emit" {
+				if err := json.Unmarshal(r.Result, &res); err != nil {
+					callErr = fmt.Errorf("%w: %v", errUnreadableAnswer, err)
 				}
-			} else if !refused(r.Err) {
-				keep = cmpErr(keep, r.Err)
-				continue
+			}
+			if callErr != nil && !refused(callErr) {
+				if !counts(callErr) {
+					keep = cmpErr(keep, callErr)
+					continue
+				}
+				it, err := tx.Failed(p.item.Signal, callErr.Error(), t)
+				if err != nil {
+					return err
+				}
+				if it.Fails < GiveUpFails || t.Sub(it.FirstFail) < GiveUpAfter {
+					keep = cmpErr(keep, callErr)
+					continue
+				}
+				p.item = it
+				callErr = fmt.Errorf("%w after %d tries over %s: %v", ErrGaveUp, it.Fails, t.Sub(it.FirstFail).Round(time.Hour), callErr)
 			}
 			if err := tx.SpoolDone(p.item.Signal); err != nil {
 				return err
 			}
 			done++
 			if mine[p.item.Signal] {
-				answers[p.item.Signal] = Answer{Result: r.Result, Err: r.Err}
+				answers[p.item.Signal] = Answer{Result: r.Result, Err: callErr}
 				continue
 			}
-			typ, about, text := noticeOf(p, res, r.Err)
+			typ, about, text := noticeOf(p, res, callErr)
 			if err := tx.Notice(p.item.Session, typ, about, text, t); err != nil {
 				return err
 			}
@@ -227,7 +321,8 @@ func cmpErr(first, next error) error {
 }
 
 // refused says whether a call's error is the server's final word on this one item (it leaves the outbox), rather
-// than a reason to send it again later.
+// than a reason to send it again later. NOT_A_MEMBER and UPGRADE_REQUIRED are about the key or the client, never
+// the item: they keep it.
 func refused(err error) bool {
 	if errors.Is(err, api.ErrTooLarge) || errors.Is(err, errUnreadable) {
 		return true
@@ -243,21 +338,45 @@ func refused(err error) bool {
 	return ae.Code == protocol.CodeInvalidParams || (ae.Code == protocol.CodeRuleFailed && ae.Reason != "")
 }
 
-// Refused says whether err is a permanent refusal of one item (see Flush), not a reason to try again.
-func Refused(err error) bool { return refused(err) }
+// counts says whether a transient failure is the server failing on this item (it counts towards giving up on it),
+// not an outage, a busy server, an old client or a key no longer good (those never count).
+func counts(err error) bool {
+	if errors.Is(err, api.ErrServerFault) || errors.Is(err, errUnreadableAnswer) {
+		return true
+	}
+	if errors.Is(err, api.ErrOffline) || errors.Is(err, api.ErrUpgradeRequired) {
+		return false
+	}
+	var ae *api.APIError
+	if !errors.As(err, &ae) || ae.Reason == string(protocol.RejectReasonNotAMember) {
+		return false
+	}
+	return ae.Code < 0 // a JSON-RPC answer: the server spoke about this call (an HTTP status is a proxy's)
+}
 
 // noticeOf is the notice for an answered item: its type, what it is about, and its text.
 func noticeOf(p pending, res protocol.SignalResult, callErr error) (protocol.NoticeType, string, string) {
 	id := p.item.Signal
-	if p.drift != "" || (p.item.Method != "signal.emit" && p.valid) {
-		act := strings.ReplaceAll(strings.TrimPrefix(p.item.Method, "drift."), "_", " ")
-		if callErr == nil {
-			return protocol.NoticeTypeSignalSent, p.drift, fmt.Sprintf("Your queued drift %s of %s reached the team "+
-				"once the server was back.", act, p.drift)
+	if p.drift.Drift != "" {
+		d := p.drift.Drift
+		act := strings.TrimPrefix(p.item.Method, "drift.")
+		switch {
+		case callErr == nil:
+			return protocol.NoticeTypeSignalSent, d, fmt.Sprintf("Your queued drift %s of %s reached the team "+
+				"once the server was back.", act, d)
+		case errors.Is(callErr, ErrGaveUp):
+			return protocol.NoticeTypeSignalRejected, d, fmt.Sprintf("Your drift %s of %s could not be sent: the "+
+				"server kept failing on it (%v). It was dropped so what came after it can go; do it again if it still "+
+				"matters.", act, d, callErr)
 		}
 		reason, message := refusalOf(callErr)
-		text := strings.TrimSpace(fmt.Sprintf("Your drift %s of %s was rejected after it was queued: %s. %s", act, p.drift, reason, message))
-		return protocol.NoticeTypeSignalRejected, p.drift, text
+		text := strings.TrimSpace(fmt.Sprintf("Your drift %s of %s was rejected after it was queued: %s. %s", act, d, reason, message))
+		return protocol.NoticeTypeSignalRejected, d, text
+	}
+	if errors.Is(callErr, ErrGaveUp) {
+		return protocol.NoticeTypeSignalRejected, id, fmt.Sprintf("Your signal %s \"%s\" could not be sent: the server "+
+			"kept failing on it (%v). It was dropped so the signals after it can go; record it again if it still matters.",
+			id, p.emit.Signal.Title, callErr)
 	}
 	if callErr == nil && res.Accepted {
 		state := ""

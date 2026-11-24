@@ -207,21 +207,24 @@ func (c *Core) Emit(ctx context.Context, sid string, drafts []map[string]any) ([
 	if err != nil {
 		return nil, err
 	}
-	ref := api.KeyRef(key)
+	ob, err := c.outbox(pid)
+	if err != nil {
+		return nil, err
+	}
 	now := c.Now()
 	mine := map[string]bool{}
 	for _, e := range ready {
 		mine[e.Signal.ID] = true
 	}
 	// Queued at the end of the outbox and flushed under the sender lock: earlier items first, then these.
-	f, ferr, err := c.sendMine(ctx, key, HookTimeout, mine, func() error {
+	f, ferr, err := c.sendMine(ctx, ob, key, HookTimeout, mine, func() error {
 		return c.St.Tx(func(tx *store.Tx) error {
 			for _, e := range ready {
 				raw, err := json.Marshal(e)
 				if err != nil {
 					return err
 				}
-				if err := tx.SpoolAdd(e.Signal.ID, sid, ref, string(raw), now); err != nil {
+				if err := tx.SpoolAdd(e.Signal.ID, sid, ob, string(raw), now); err != nil {
 					return err
 				}
 			}
@@ -239,7 +242,7 @@ func (c *Core) Emit(ctx context.Context, sid string, drafts []map[string]any) ([
 		id := e.Signal.ID
 		a, ok := f.Answers[id]
 		if !ok {
-			ahead, _, _ := c.St.Ahead(ref, id)
+			ahead, _, _ := c.St.Ahead(ob, id)
 			msg := queuedText
 			if ahead > 0 || !errors.Is(ferr, api.ErrOffline) {
 				msg = queuedMessage(ahead, ferr)

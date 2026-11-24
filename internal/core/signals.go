@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -553,8 +554,7 @@ func (c *Core) Status(ctx context.Context, sid string, display func(string) stri
 	if ok, msg := c.St.ProtocolOK(); !ok {
 		lines = append(lines, msg)
 	}
-	n, _ := c.St.SpoolSize()
-	lines = append(lines, fmt.Sprintf("spool: %d signal(s) waiting", n))
+	lines = append(lines, c.outboxLines()...)
 	lines = append(lines, fmt.Sprintf("synced projects: %d", len(c.St.Cursors())))
 	if sid != "" {
 		if sess, ok, _ := c.St.Session(sid); ok {
@@ -571,6 +571,36 @@ func (c *Core) Status(ctx context.Context, sid string, display func(string) stri
 	}
 	if store.LegacyPresent(c.Dir) {
 		lines = append(lines, fmt.Sprintf(LegacyNote, display(filepath.Join(c.Dir, store.LegacyFileName))))
+	}
+	return lines
+}
+
+// outboxLines say what waits to be sent: this sign-in's, and any other sign-in's (never sent by this one).
+func (c *Core) outboxLines() []string {
+	items, err := c.Outbox()
+	if err != nil {
+		return []string{"outbox: unreadable (" + err.Error() + ")"}
+	}
+	mine, others := 0, map[string]int{}
+	for _, it := range items {
+		if it.Mine {
+			mine++
+			continue
+		}
+		who := it.Account + " on " + it.Server
+		if it.Account == "" {
+			who = "a sign-in whose key is gone"
+		}
+		others[who]++
+	}
+	lines := []string{fmt.Sprintf("outbox: %d waiting to be sent", mine)}
+	whos := make([]string, 0, len(others))
+	for w := range others {
+		whos = append(whos, w)
+	}
+	slices.Sort(whos)
+	for _, w := range whos {
+		lines = append(lines, fmt.Sprintf("outbox: %d waiting from %s: never sent by this sign-in (`teamflow outbox` lists them)", others[w], w))
 	}
 	return lines
 }

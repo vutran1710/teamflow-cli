@@ -196,8 +196,8 @@ func (r *inv) news() ops.News {
 		return ops.News{}
 	}
 	sess, ok := findSession(c.St)
-	if !ok {
-		return ops.News{}
+	if !ok { // the person's own command: what became of acts they queued outside any session
+		return ops.News{Notices: c.NewNotices("")}
 	}
 	return ops.NewsFor(r.ctx, c, &sess)
 }

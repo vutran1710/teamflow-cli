@@ -10,8 +10,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -128,6 +130,7 @@ func Open(dir string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	_ = st.adoptLegacy() // best effort: a busy store tries again at the next open; a hook never fails on it
 	return st, nil
 }
 
@@ -140,9 +143,6 @@ func ownerOnly(path string) error {
 	}
 	return nil
 }
-
-// Dir is the folder the store lives in.
-func (s *Store) Dir() string { return filepath.Dir(s.path) }
 
 // Close closes the store. Reads after it answer empty; writes fail.
 func (s *Store) Close() error {
@@ -1070,63 +1070,199 @@ func (o ops) ProtocolOK() (bool, string) {
 
 // ------------------------------------------------------------------ spool
 
-// The spool is each project key's ordered outbox: what this machine records on the project's shared record leaves
-// in the order it was made. Most items are signal.emit; the human acts drift.resolve and drift.dismiss wait in it
-// too (a verdict is a signal.emit).
+// The spool is the ordered outbox of each project under each sign-in (server, account, project): what this
+// machine records on the project's shared record leaves in the order it was made, under whatever key that sign-in
+// holds for the project when it is sent. Most items are signal.emit; the human acts drift.resolve and
+// drift.dismiss wait in it too (a verdict is a signal.emit).
+
+// Outbox names one outbox: a sign-in and a project. The zero sign-in names rows queued before outboxes were
+// bound whose key is gone: never sent, only listed.
+type Outbox struct{ Server, Account, Project string }
+
+// OutboxOf is the outbox of project under the sign-in b.
+func OutboxOf(b KeyBinding, project string) Outbox {
+	return Outbox{Server: b.Server, Account: b.Account, Project: project}
+}
+
+// Ref names the outbox without revealing whose it is: 16 hex digits of a SHA-256 (the sender lock's name).
+func (o Outbox) Ref() string {
+	sum := sha256.Sum256([]byte(o.Server + "\x00" + o.Account + "\x00" + o.Project))
+	return hex.EncodeToString(sum[:])[:16]
+}
 
 // SpoolItem is an item waiting to be sent: Signal is its id (the signal's id; for a drift act, its own).
 type SpoolItem struct {
-	N       int64
-	Signal  string
-	Method  string // signal.emit, drift.resolve or drift.dismiss
-	Session string
-	Params  string // the call's params as JSON (SignalEmit for signal.emit)
+	N         int64
+	Signal    string
+	Method    string // signal.emit, drift.resolve or drift.dismiss
+	Session   string
+	Params    string // the call's params as JSON (SignalEmit for signal.emit)
+	CreatedAt time.Time
+	Tries     int       // times it was sent
+	Fails     int       // failures counting towards giving up on it
+	FirstFail time.Time // the first of them (zero: none)
+	LastError string
 }
 
-// SpoolAdd queues an emitted signal to go out with the key named keyRef. The same signal twice is queued once.
-func (o ops) SpoolAdd(signal, session, keyRef, params string, now time.Time) error {
-	return o.OutboxAdd(signal, "signal.emit", session, keyRef, params, now)
+// OutboxRow is an item with the outbox it waits in.
+type OutboxRow struct {
+	Outbox
+	SpoolItem
 }
 
-// OutboxAdd queues one call (its id, method and params) at the end of the outbox of the key named keyRef. The
-// same id twice is queued once, in its first place.
-func (o ops) OutboxAdd(id, method, session, keyRef, params string, now time.Time) error {
-	_, err := o.exec("INSERT OR IGNORE INTO spool (signal, method, session, key_ref, params, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		id, method, session, keyRef, params, ts(now))
+const itemCols = "n, signal, method, session, params, created_at, tries, fails, COALESCE(first_fail_at, ''), last_error"
+
+func scanItem(r interface{ Scan(...any) error }, extra ...any) (SpoolItem, error) {
+	var it SpoolItem
+	var created, first string
+	err := r.Scan(append([]any{&it.N, &it.Signal, &it.Method, &it.Session, &it.Params, &created, &it.Tries, &it.Fails,
+		&first, &it.LastError}, extra...)...)
+	it.CreatedAt = parseTS(created)
+	if first != "" {
+		it.FirstFail = parseTS(first)
+	}
+	return it, err
+}
+
+// SpoolAdd queues an emitted signal at the end of the outbox ob. The same signal twice is queued once.
+func (o ops) SpoolAdd(signal, session string, ob Outbox, params string, now time.Time) error {
+	return o.OutboxAdd(signal, "signal.emit", session, ob, params, now)
+}
+
+// OutboxAdd queues one call (its id, method and params) at the end of the outbox ob. The same id twice is queued
+// once, in its first place.
+func (o ops) OutboxAdd(id, method, session string, ob Outbox, params string, now time.Time) error {
+	_, err := o.exec("INSERT OR IGNORE INTO spool (signal, method, session, key_ref, server, account, project, params, "+
+		"created_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?)", id, method, session, ob.Server, ob.Account, ob.Project, params, ts(now))
 	return err
 }
 
-// Spooled are the items waiting for the key named keyRef, in order.
-func (o ops) Spooled(keyRef string) ([]SpoolItem, error) {
+// Spooled are the items waiting in the outbox ob, in order.
+func (o ops) Spooled(ob Outbox) ([]SpoolItem, error) {
 	var out []SpoolItem
-	err := o.each("SELECT n, signal, method, session, params FROM spool WHERE key_ref = ? ORDER BY n", []any{keyRef}, func(r *sql.Rows) error {
-		var it SpoolItem
-		if err := r.Scan(&it.N, &it.Signal, &it.Method, &it.Session, &it.Params); err != nil {
+	err := o.each("SELECT "+itemCols+" FROM spool WHERE server = ? AND account = ? AND project = ? ORDER BY n",
+		[]any{ob.Server, ob.Account, ob.Project}, func(r *sql.Rows) error {
+			it, err := scanItem(r)
+			out = append(out, it)
 			return err
-		}
-		out = append(out, it)
-		return nil
+		})
+	return out, err
+}
+
+// OutboxAll is every waiting item of every outbox (every sign-in), in order.
+func (o ops) OutboxAll() ([]OutboxRow, error) {
+	var out []OutboxRow
+	err := o.each("SELECT "+itemCols+", server, account, project FROM spool ORDER BY n", nil, func(r *sql.Rows) error {
+		var row OutboxRow
+		var err error
+		row.SpoolItem, err = scanItem(r, &row.Server, &row.Account, &row.Project)
+		out = append(out, row)
+		return err
 	})
 	return out, err
 }
 
-// Ahead is how many items of the same key wait ahead of the item id; false when id is not queued.
-func (o ops) Ahead(keyRef, id string) (int, bool, error) {
+// OutboxProjects are the projects with items waiting under the sign-in b.
+func (o ops) OutboxProjects(b KeyBinding) ([]string, error) {
+	var out []string
+	err := o.each("SELECT DISTINCT project FROM spool WHERE server = ? AND account = ? AND project != '' ORDER BY project",
+		[]any{b.Server, b.Account}, func(r *sql.Rows) error {
+			var p string
+			out = append(out, p)
+			return r.Scan(&out[len(out)-1])
+		})
+	return out, err
+}
+
+// Ahead is how many items wait ahead of the item id in the outbox ob; false when id is not queued there.
+func (o ops) Ahead(ob Outbox, id string) (int, bool, error) {
 	var n int64
-	found, err := o.one("SELECT n FROM spool WHERE signal = ? AND key_ref = ?", []any{id, keyRef}, &n)
+	found, err := o.one("SELECT n FROM spool WHERE signal = ? AND server = ? AND account = ? AND project = ?",
+		[]any{id, ob.Server, ob.Account, ob.Project}, &n)
 	if err != nil || !found {
 		return 0, false, err
 	}
 	var ahead int
-	_, err = o.one("SELECT COUNT(*) FROM spool WHERE key_ref = ? AND n < ?", []any{keyRef, n}, &ahead)
+	_, err = o.one("SELECT COUNT(*) FROM spool WHERE server = ? AND account = ? AND project = ? AND n < ?",
+		[]any{ob.Server, ob.Account, ob.Project, n}, &ahead)
 	return ahead, err == nil, err
 }
 
-// Waiting is how many items wait for the key named keyRef.
-func (o ops) Waiting(keyRef string) (int, error) {
+// Waiting is how many items wait in the outbox ob.
+func (o ops) Waiting(ob Outbox) (int, error) {
 	var n int
-	_, err := o.one("SELECT COUNT(*) FROM spool WHERE key_ref = ?", []any{keyRef}, &n)
+	_, err := o.one("SELECT COUNT(*) FROM spool WHERE server = ? AND account = ? AND project = ?",
+		[]any{ob.Server, ob.Account, ob.Project}, &n)
 	return n, err
+}
+
+// Tried records that these items are being sent (once more).
+func (o ops) Tried(ids []string) error {
+	for _, id := range ids {
+		if _, err := o.exec("UPDATE spool SET tries = tries + 1 WHERE signal = ?", id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Failed records a failure of the item id that counts towards giving up on it, and returns the item as it is now.
+func (o ops) Failed(id, why string, now time.Time) (SpoolItem, error) {
+	if _, err := o.exec("UPDATE spool SET fails = fails + 1, first_fail_at = COALESCE(first_fail_at, ?), last_error = ? "+
+		"WHERE signal = ?", ts(now), why, id); err != nil {
+		return SpoolItem{}, err
+	}
+	it, err := scanItem(o.row("SELECT "+itemCols+" FROM spool WHERE signal = ?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return it, fmt.Errorf("no queued item %s", id)
+	}
+	return it, err
+}
+
+// adoptLegacy binds rows queued before outboxes were bound (no sign-in) to the sign-in and project of the key
+// they were queued with, when that key is still on this machine. Run on open; cheap when there are none.
+func (o ops) adoptLegacy() error {
+	var refs []string
+	err := o.each("SELECT DISTINCT key_ref FROM spool WHERE server = '' AND key_ref != ''", nil, func(r *sql.Rows) error {
+		var ref string
+		out := r.Scan(&ref)
+		refs = append(refs, ref)
+		return out
+	})
+	if err != nil || len(refs) == 0 {
+		return err
+	}
+	type bound struct{ server, account, project string }
+	byRef := map[string]bound{}
+	err = o.each("SELECT server, account, project, key FROM project_keys", nil, func(r *sql.Rows) error {
+		var b bound
+		var key string
+		if err := r.Scan(&b.server, &b.account, &b.project, &key); err != nil {
+			return err
+		}
+		byRef[keyRef(key)] = b
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		b, ok := byRef[ref]
+		if !ok {
+			continue
+		}
+		if _, err := o.exec("UPDATE spool SET server = ?, account = ?, project = ? WHERE key_ref = ? AND server = ''",
+			b.server, b.account, b.project, ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// keyRef is api.KeyRef (the first 16 hex digits of the key's SHA-256), which the store cannot import.
+func keyRef(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // SpoolSize is how many signals wait.

@@ -665,8 +665,11 @@ func TestBatchEachHandsOverEachChunkAndStops(t *testing.T) {
 		calls[i] = Call{Method: "signal.emit", Params: map[string]int{"n": i}}
 	}
 	var spans [][2]int
-	err := c.BatchEach(context.Background(), calls, func(start, end int, res []Result) bool {
+	err := c.BatchEach(context.Background(), calls, func(start, end int, res []Result, rerr error) bool {
 		spans = append(spans, [2]int{start, end})
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
 		if len(res) != end-start {
 			t.Fatalf("chunk %d..%d: %d results", start, end, len(res))
 		}
@@ -683,7 +686,7 @@ func TestBatchEachHandsOverEachChunkAndStops(t *testing.T) {
 	}
 	// Not stopped: every chunk, in order.
 	spans = nil
-	if err := c.BatchEach(context.Background(), calls, func(start, end int, _ []Result) bool {
+	if err := c.BatchEach(context.Background(), calls, func(start, end int, _ []Result, _ error) bool {
 		spans = append(spans, [2]int{start, end})
 		return false
 	}); err != nil {
@@ -709,12 +712,21 @@ func TestBatchEachHandsOverEachChunkAndStops(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(outs)
 	}))
 	defer half.Close()
+	// The failed request is handed over too, with its error and no results, so the caller knows which calls it held.
 	spans = nil
-	err = New(half.URL, testKey, time.Second).BatchEach(context.Background(), calls, func(start, end int, _ []Result) bool {
+	var failed error
+	err = New(half.URL, testKey, time.Second).BatchEach(context.Background(), calls, func(start, end int, res []Result, rerr error) bool {
 		spans = append(spans, [2]int{start, end})
+		if rerr != nil {
+			failed = rerr
+			if res != nil {
+				t.Fatalf("results with a failed request: %v", res)
+			}
+		}
 		return false
 	})
-	if !errors.Is(err, ErrOffline) || len(spans) != 1 || atomic.LoadInt32(&n) != 2 {
+	if !errors.Is(err, ErrOffline) || !errors.Is(failed, ErrOffline) || len(spans) != 2 || spans[1] != [2]int{protocol.MaxBatch, 2 * protocol.MaxBatch} ||
+		atomic.LoadInt32(&n) != 2 {
 		t.Fatalf("err %v, chunks %v, %d requests", err, spans, n)
 	}
 }
@@ -771,5 +783,19 @@ func TestGateSeesEveryCall(t *testing.T) {
 	}
 	if c.KeyRef() != c.Ungated().KeyRef() {
 		t.Fatal("Ungated changed the key")
+	}
+}
+
+// A 500 is the server failing on what it was sent: ErrOffline (try again) and also ErrServerFault, so the outbox
+// can count it against the items it held. 502, 503 and 504 are an outage (a gateway, a deploy): not a fault of
+// the request.
+func TestServerFaultIsMarked(t *testing.T) {
+	for code, fault := range map[int]bool{500: true, 502: false, 503: false, 504: false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }))
+		err := New(srv.URL, testKey, time.Second).Call(context.Background(), "signal.emit", nil, nil)
+		srv.Close()
+		if !errors.Is(err, ErrOffline) || errors.Is(err, ErrServerFault) != fault {
+			t.Fatalf("%d: %v (fault %v)", code, err, errors.Is(err, ErrServerFault))
+		}
 	}
 }

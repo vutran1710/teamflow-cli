@@ -1279,3 +1279,73 @@ func pullAnswer(content []byte) string {
 		hex.EncodeToString(sum[:]) + `", "media_type": "text/markdown", "size": 13}}, "emitted_at": "2026-01-15T09:00:00Z"}, "author": {"member": "` + M1 +
 		`", "client_session": "", "actor": "AGENT"}, "received_at": "2026-01-15T09:00:00Z", "seq": 6, "chain": "` + S1 + `", "chain_version": 2, "state": "IN_FORCE", "content_hash": ""}}}`
 }
+
+// ------------------------------------------------------------------ the outbox, for the person
+
+// `teamflow outbox` lists what waits (every sign-in's); `teamflow outbox drop <id>` takes one out after a
+// confirmation (or --yes). It is a setup command: never auto-allowed for an agent. Sad paths: no terminal and no
+// --yes (refused, nothing dropped), answering no, an id not queued, a missing id, an empty outbox.
+func TestOutboxCommand(t *testing.T) {
+	m := newMachine(t, true)
+	approvalReplica(t, m)
+	r := m.run("", "outbox")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "Nothing waits to be sent.")
+	m.srv.offline(true)
+	m.run("", "approve", S1)
+	r = m.run("", "outbox")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "signal.emit", P, "lan@acme.test", "tries 1")
+	id := queuedID(t, m)
+	r = m.run("", "outbox", "drop", id)
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "pass --yes")
+	terminal(t, true, "")
+	r = m.run("n\n", "outbox", "drop", id)
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "Aborted.")
+	if n, _ := m.store().SpoolSize(); n != 1 {
+		t.Fatal("dropped without a yes")
+	}
+	r = m.run("y\n", "outbox", "drop", id)
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "dropped "+id)
+	r = m.run("", "outbox", "drop", id, "--yes")
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "nothing queued as "+id)
+	r = m.run("", "outbox", "drop")
+	wantCode(t, r, 2)
+	if !slices.Contains(adapters.SetupCommands, "outbox") || slices.Contains(adapters.WorkCommands, "outbox") {
+		t.Fatal("outbox must be a setup command")
+	}
+	if _, auto := adapters.TeamflowCommand("teamflow outbox drop "+id+" --yes", ""); auto {
+		t.Fatal("an agent may drop queued items with no prompt")
+	}
+}
+
+func queuedID(t *testing.T, m *machine) string {
+	t.Helper()
+	items, err := m.store().OutboxAll()
+	if err != nil || len(items) == 0 {
+		t.Fatalf("nothing queued: %v", err)
+	}
+	return items[0].Signal
+}
+
+// A human act the person made outside any agent session, queued, then refused when it is sent: they hear it on
+// their next command (and once only). Sad paths: offline outside a session, the refusal arriving while no
+// session exists, the news not repeated.
+func TestNoticesOutsideASessionReachThePerson(t *testing.T) {
+	m := newMachine(t, true)
+	approvalReplica(t, m)
+	m.srv.offline(true)
+	r := m.run("", "drift", "resolve", "dr_1", "fixed", "--project", P, "--yes")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "resolve dr_1: queued: will be sent when the server is back")
+	m.srv.offline(false)
+	m.srv.on("drift.resolve", refusedAnswer(t, "drift.resolve", "NOT_ALLOWED"))
+	r = m.run("", "approve", S9) // the person's next command: it syncs (the act is refused), then tells them
+	contains(t, "stdout", r.out, "Your drift resolve of dr_1 was rejected after it was queued: NOT_ALLOWED")
+	r = m.run("", "approve", S9)
+	lacks(t, "stdout", r.out, "was rejected after it was queued")
+}

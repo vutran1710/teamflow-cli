@@ -872,7 +872,7 @@ func TestStatus(t *testing.T) {
 		"server: "+m.srv.URL()+"\n",
 		"signed in: lan <lan@acme.test> (Acme)\n",
 		"project keys on this machine: 1\n",
-		"spool: 0 signal(s) waiting\n",
+		"outbox: 0 waiting to be sent\n",
 		"this session: s1 (shared with "+P+")\n",
 		"shared session s1 -> "+P+"\n",
 		"claude-code: not installed\n")

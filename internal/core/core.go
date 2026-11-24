@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -136,7 +137,11 @@ func (c *Core) API(ctx context.Context, project string, timeout time.Duration) (
 	if err != nil {
 		return nil, err
 	}
-	return c.client(key, timeout).WithGate(c.gate(key)), nil
+	b, err := c.binding()
+	if err != nil {
+		return nil, err
+	}
+	return c.client(key, timeout).WithGate(c.gate(store.OutboxOf(b, project), key)), nil
 }
 
 // Sync pushes the spool and pulls the events of each project this machine has a key for (or only `only`), then
@@ -152,14 +157,29 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 		if projects, err = c.St.KeyProjects(b); err != nil {
 			return true
 		}
+		waiting, _ := c.St.OutboxProjects(b) // items queued under a key since dropped: fetch the sign-in's new one
+		for _, p := range waiting {
+			if !slices.Contains(projects, p) {
+				projects = append(projects, p)
+			}
+		}
 	}
 	for _, pid := range projects {
 		key, _, _, _, ok := c.St.ProjectKey(b, pid)
 		if !ok {
-			continue
+			if n, _ := c.St.Waiting(store.OutboxOf(b, pid)); n == 0 {
+				continue
+			}
+			var err error
+			if key, err = c.ProjectKey(ctx, pid); err != nil {
+				if errors.Is(err, api.ErrOffline) {
+					return false
+				}
+				continue
+			}
 		}
 		a := c.client(key, timeout)
-		err := c.syncOne(ctx, a, key, pid, timeout)
+		err := c.syncOne(ctx, a, store.OutboxOf(b, pid), pid, timeout)
 		if errors.Is(err, api.ErrOffline) {
 			return false
 		}
@@ -172,8 +192,8 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 	return true
 }
 
-func (c *Core) syncOne(ctx context.Context, a *api.Client, key, pid string, timeout time.Duration) error {
-	if err := c.pushOutbox(ctx, a, key); err != nil {
+func (c *Core) syncOne(ctx context.Context, a *api.Client, ob store.Outbox, pid string, timeout time.Duration) error {
+	if err := c.pushOutbox(ctx, a, ob, timeout); err != nil {
 		return err
 	}
 	if _, err := syncer.Pull(ctx, c.St, a, timeout); err != nil {

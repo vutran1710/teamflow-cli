@@ -81,7 +81,7 @@ func TestDriftSadPaths(t *testing.T) {
 	m.srv.offline(true)
 	r = m.run("", "drift", "dismiss", "dr_1", "x", "--project", P, "--yes")
 	wantCode(t, r, 0)
-	contains(t, "stdout", r.out, "dismissed dr_1: queued: will be sent when the server is back")
+	contains(t, "stdout", r.out, "dismiss dr_1: queued: will be sent when the server is back")
 	noCall(t, m.srv, "drift.dismiss")
 	m.srv.offline(false)
 	m.srv.on("drift.dismiss", okAnswer(t, "drift.dismiss"))

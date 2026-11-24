@@ -43,7 +43,7 @@ func filled(t *testing.T) string {
 	must(t, err)
 	must(t, st.Share("s1", "pj_1", "mb_1", api.KeyRef(pkey), []string{"tp_1"}))
 	must(t, st.Notice("s1", protocol.NoticeTypeDriftFound, "dr_1", "Drift found", t0))
-	must(t, st.SpoolAdd("sg_2", "s1", api.KeyRef(pkey), `{"signal":{"id":"sg_2","kind":"NOTE"}}`, t0))
+	must(t, st.SpoolAdd("sg_2", "s1", store.OutboxOf(store.Binding("https://tf.example", "lan@acme.test"), "pj_1"), `{"signal":{"id":"sg_2","kind":"NOTE"}}`, t0))
 	must(t, st.Cite("s1", []string{"sg_1"}, t0))
 	s := protocol.NewStoredSignal()
 	s.Signal = protocol.NewSignal()

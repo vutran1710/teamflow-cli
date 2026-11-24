@@ -23,8 +23,10 @@ import (
 	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/api"
+	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/sendlock"
+	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
 // outboxServer is a Teamflow server for the outbox: signal.emit keeps the first result per id (as the real one),
@@ -40,6 +42,7 @@ type outboxServer struct {
 	order    []string        // ids (signal, "drift.x dr_", or a write's method) in arrival order
 	shapes   []string        // per outbox request: the batch length, or "alone"
 	results  map[string]bool // signal ids with a stored result
+	auths    []string        // the Authorization of each outbox request
 	inFlight atomic.Int32
 	maxIn    atomic.Int32
 	outboxN  int
@@ -82,6 +85,7 @@ func (s *outboxServer) serve(w http.ResponseWriter, r *http.Request) {
 			shape = fmt.Sprint(len(reqs))
 		}
 		s.shapes = append(s.shapes, shape)
+		s.auths = append(s.auths, r.Header.Get("Authorization"))
 	}
 	block, delay := s.block, s.delay
 	s.mu.Unlock()
@@ -131,6 +135,8 @@ func (s *outboxServer) serve(w http.ResponseWriter, r *http.Request) {
 			out.Result = json.RawMessage(`{"drifts": []}`)
 		case "sync.poll":
 			out.Result = json.RawMessage(`{"events": [], "cursors": {}, "reset": []}`)
+		case "key.fetch":
+			out.Result = json.RawMessage(`{"project": "` + P + `", "key": "tfk_minted", "member": "` + tM1 + `", "org": "og_x", "name": "Pricing"}`)
 		case "member.list":
 			out.Result = json.RawMessage(`{"members": []}`)
 		case "topic.create":
@@ -191,7 +197,7 @@ func queueNotes(t *testing.T, c *Core, from, n int) []string {
 		e.Signal.ID, e.Signal.Project, e.Signal.Topic, e.Signal.Kind, e.Signal.Title = fmt.Sprintf("sg_q%03d", i), P, tT1, protocol.SignalKindNote, "n"
 		e.Signal.Body = protocol.CommentBody{Type: "comment.v1", Text: "why"}
 		b, _ := json.Marshal(e)
-		if err := c.St.SpoolAdd(e.Signal.ID, "s1", api.KeyRef("tfk_example"), string(b), time.Now()); err != nil {
+		if err := c.St.SpoolAdd(e.Signal.ID, "s1", testOutbox(c), string(b), time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, e.Signal.ID)
@@ -199,9 +205,14 @@ func queueNotes(t *testing.T, c *Core, from, n int) []string {
 	return ids
 }
 
+// testOutbox is lan's outbox of P on c's server.
+func testOutbox(c *Core) store.Outbox {
+	return store.OutboxOf(store.Binding(c.Cfg.Server, "lan@acme.test"), P)
+}
+
 func outbox(t *testing.T, c *Core) []string {
 	t.Helper()
-	items, err := c.St.Spooled(api.KeyRef("tfk_example"))
+	items, err := c.St.Spooled(testOutbox(c))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +225,7 @@ func outbox(t *testing.T, c *Core) []string {
 
 func verdictID(t *testing.T, c *Core) string {
 	t.Helper()
-	items, err := c.St.Spooled(api.KeyRef("tfk_example"))
+	items, err := c.St.Spooled(testOutbox(c))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +523,12 @@ func TestMain(m *testing.M) {
 		c.Sync(context.Background(), DefaultTimeout, "")
 		os.Exit(0)
 	case "hold":
-		release, err := sendlock.Acquire(context.Background(), os.Getenv("TEAMFLOW_HOME"), api.KeyRef("tfk_example"), 0)
+		c, err := Open()
+		if err != nil {
+			fmt.Println("error", err)
+			os.Exit(1)
+		}
+		release, err := sendlock.Acquire(context.Background(), os.Getenv("TEAMFLOW_HOME"), testOutbox(c).Ref(), 0)
 		if err != nil {
 			fmt.Println("error", err)
 			os.Exit(1)
@@ -650,5 +666,199 @@ func TestLockHeldByADeadProcess(t *testing.T) {
 	c.Sync(ctx, DefaultTimeout, "")
 	if order, _ := s.got(); strings.Join(order, ",") != "drift.resolve dr_1" {
 		t.Fatalf("after the holder died: %v", order)
+	}
+}
+
+// ------------------------------------------------------------------ the outbox belongs to a sign-in and a project
+
+func signInAs(t *testing.T, c *Core, server, email, auth string) {
+	t.Helper()
+	cfg := config.Config{Server: server, AuthKey: auth, Email: email}
+	if err := config.Save(c.Dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	c.Cfg = &cfg
+}
+
+// Offline, two signals and a verdict queue. The person logs out (keys dropped) and logs in again as the same
+// account: the next sync fetches a new key for the project and sends the queue under it, the verdict last and
+// alone. Sad paths: logout with a queue, the server down at logout, a key minted anew.
+func TestQueuedVerdictSurvivesLogoutAndLogin(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	s.set(func() { s.down = true })
+	if _, err := c.Emit(ctx, "s1", []map[string]any{note(0), note(1)}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.Verdict(ctx, "s1", tS1, protocol.SignalKindApprove, "")
+	var q *Queued
+	if !errors.As(err, &q) || q.Ahead != 2 {
+		t.Fatalf("offline verdict: %v", err)
+	}
+	if err := c.Logout(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ps, _ := c.KeyProjects(); len(ps) != 0 {
+		t.Fatalf("keys kept after logout: %v", ps)
+	}
+	if len(outbox(t, c)) != 3 {
+		t.Fatal("the outbox was lost at logout")
+	}
+	signInAs(t, c, srv.URL, "lan@acme.test", "tfa_again")
+	s.set(func() { s.down = false })
+	if !c.Sync(ctx, DefaultTimeout, "") {
+		t.Fatal("offline")
+	}
+	order, shapes := s.got()
+	if len(order) != 3 || order[2] != q.Item || strings.Join(shapes, ",") != "2,alone" {
+		t.Fatalf("order %v shapes %v", order, shapes)
+	}
+	s.mu.Lock()
+	auths := append([]string(nil), s.auths...)
+	s.mu.Unlock()
+	for _, a := range auths {
+		if a != "Bearer tfk_minted" {
+			t.Fatalf("sent with %q, not the new key", a)
+		}
+	}
+	if len(outbox(t, c)) != 0 {
+		t.Fatal("left queued")
+	}
+}
+
+// The project key is refused and dropped (NOT_A_MEMBER after a re-add, say) while items wait: the next sync
+// fetches the key the server mints now and sends them, in order, the verdict alone and last.
+func TestQueueGoesUnderAReMintedKey(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	ids := queueNotes(t, c, 0, 2)
+	s.set(func() { s.down = true })
+	_, err := c.DriftAct(ctx, P, "s1", "drift.dismiss", "dr_1", "not a drift", nil)
+	var q *Queued
+	if !errors.As(err, &q) || q.Ahead != 2 {
+		t.Fatalf("offline: %v", err)
+	}
+	if err := c.St.DropProjectKey(mustBinding(t, c), P); err != nil {
+		t.Fatal(err)
+	}
+	s.set(func() { s.down = false })
+	c.Sync(ctx, DefaultTimeout, "")
+	order, shapes := s.got()
+	if strings.Join(order, ",") != strings.Join(append(ids, "drift.dismiss dr_1"), ",") || strings.Join(shapes, ",") != "2,alone" {
+		t.Fatalf("order %v shapes %v", order, shapes)
+	}
+}
+
+// Another account signs in on this machine: the first account's queued items are kept, never sent under the new
+// account's key, and shown (status, the outbox list); the new account's own verdict is not held behind them.
+// Logging back in as the first account sends them.
+func TestAnotherAccountNeverSendsTheQueue(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	ids := queueNotes(t, c, 0, 2)
+	if err := c.Logout(ctx); err != nil {
+		t.Fatal(err)
+	}
+	signInAs(t, c, srv.URL, "huy@acme.test", "tfa_huy")
+	if err := c.St.PutProjectKey(store.Binding(srv.URL, "huy@acme.test"), P, "tfk_huy", tM2, "og_x", "Pricing", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.Sync(ctx, DefaultTimeout, "")
+	if order, _ := s.got(); len(order) != 0 {
+		t.Fatalf("another account's queue was sent: %v", order)
+	}
+	items, err := c.Outbox()
+	if err != nil || len(items) != 2 || items[0].Mine || items[0].Account != "lan@acme.test" {
+		t.Fatalf("outbox %+v %v", items, err)
+	}
+	status := strings.Join(c.Status(ctx, "", func(p string) string { return p }), "\n")
+	if !strings.Contains(status, "outbox: 0 waiting to be sent") ||
+		!strings.Contains(status, "outbox: 2 waiting from lan@acme.test on "+srv.URL+": never sent by this sign-in") {
+		t.Fatalf("status:\n%s", status)
+	}
+	if _, err := c.DriftAct(ctx, P, "", "drift.resolve", "dr_1", "done", nil); err != nil {
+		t.Fatalf("huy's own act: %v", err)
+	}
+	if order, _ := s.got(); strings.Join(order, ",") != "drift.resolve dr_1" {
+		t.Fatalf("order %v", order)
+	}
+	// lan again: the queue goes.
+	signInAs(t, c, srv.URL, "lan@acme.test", "tfa_example")
+	c.Sync(ctx, DefaultTimeout, "")
+	if order, _ := s.got(); strings.Join(order[1:], ",") != strings.Join(ids, ",") {
+		t.Fatalf("order %v", order)
+	}
+}
+
+// A hook's sync flushes within its budget: a long queue on a slow server is cut off at the deadline (the rest
+// waits for the next sync), never holding the hook.
+func TestHookSyncFlushIsBounded(t *testing.T) {
+	s, srv := newOutboxServer(t)
+	s.delay = 300 * time.Millisecond
+	_ = s
+	c := outboxCore(t, srv.URL)
+	queueNotes(t, c, 0, 5*protocol.MaxBatch)
+	start := time.Now()
+	c.Sync(context.Background(), 500*time.Millisecond, P)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the sync took %v", d)
+	}
+	if n := len(outbox(t, c)); n == 0 {
+		t.Fatalf("outbox %d after the bounded sync", n)
+	}
+}
+
+// Another sender holds the lock past the wait: a write that is not queued still goes when nothing is queued
+// (nothing to overtake), and is not sent while something is.
+func TestGateWithABusyLock(t *testing.T) {
+	old := SendLockWait
+	SendLockWait = 100 * time.Millisecond
+	t.Cleanup(func() { SendLockWait = old })
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	release, err := sendlock.Acquire(ctx, c.Dir, testOutbox(c).Ref(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	a, err := c.API(ctx, P, DefaultTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Call(ctx, "topic.create", map[string]any{}, nil); err != nil {
+		t.Fatalf("busy lock, empty outbox: %v", err)
+	}
+	queueNotes(t, c, 0, 1)
+	var ns *NotSent
+	if err := a.Call(ctx, "topic.create", map[string]any{}, nil); !errors.As(err, &ns) || !errors.Is(err, sendlock.ErrBusy) {
+		t.Fatalf("busy lock, one queued: %v", err)
+	}
+	if order, _ := s.got(); strings.Join(order, ",") != "topic.create" {
+		t.Fatalf("order %v", order)
+	}
+}
+
+// The person drops a stuck item: it is never sent, the rest goes. Sad paths: an id not queued, dropped twice.
+func TestOutboxDrop(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	ids := queueNotes(t, c, 0, 3)
+	if ok, err := c.OutboxDrop(ctx, ids[1]); !ok || err != nil {
+		t.Fatalf("drop: %v %v", ok, err)
+	}
+	if ok, err := c.OutboxDrop(ctx, ids[1]); ok || err != nil {
+		t.Fatalf("drop again: %v %v", ok, err)
+	}
+	if ok, _ := c.OutboxDrop(ctx, "sg_nothing"); ok {
+		t.Fatal("dropped what was not queued")
+	}
+	c.Sync(ctx, DefaultTimeout, "")
+	if order, _ := s.got(); strings.Join(order, ",") != ids[0]+","+ids[2] {
+		t.Fatalf("order %v", order)
 	}
 }

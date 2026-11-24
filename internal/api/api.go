@@ -37,6 +37,9 @@ var (
 	ErrUpgradeRequired = errors.New("UPGRADE_REQUIRED")
 	// ErrInsecure means the server URL is not https (plain http is allowed on loopback only).
 	ErrInsecure = errors.New("teamflow server must be https (plain http only on localhost)")
+	// ErrServerFault marks an HTTP 500: the server failed on what it was sent (it is also ErrOffline: try again).
+	// 502, 503 and 504 are an outage, not a fault of the request.
+	ErrServerFault = errors.New("server fault")
 	// ErrTooLarge means a request is over the server's body limit (MAX_BODY_BYTES).
 	ErrTooLarge = errors.New("request too large")
 )
@@ -262,7 +265,7 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 // a refused answer) it returns the results of the calls before the failed request, and the error.
 func (c *Client) Batch(ctx context.Context, calls []Call) ([]Result, error) {
 	out := make([]Result, 0, len(calls))
-	err := c.BatchEach(ctx, calls, func(_, _ int, res []Result) bool {
+	err := c.BatchEach(ctx, calls, func(_, _ int, res []Result, _ error) bool {
 		out = append(out, res...)
 		return false
 	})
@@ -275,8 +278,8 @@ func (c *Client) Batch(ctx context.Context, calls []Call) ([]Result, error) {
 // BatchEach sends calls as Batch does, one request at a time, and hands each request's answers to fn before the
 // next request goes out: calls[start:end] and their results (a call too large on its own is among them, with
 // ErrTooLarge, unsent). fn returning true stops it there; nothing after end is sent. A failure that ends a request
-// (offline, a refused answer) is returned, and that request's calls are not handed over.
-func (c *Client) BatchEach(ctx context.Context, calls []Call, fn func(start, end int, res []Result) (stop bool)) error {
+// (offline, a refused answer) is handed to fn with the request's span and no results, and returned.
+func (c *Client) BatchEach(ctx context.Context, calls []Call, fn func(start, end int, res []Result, err error) (stop bool)) error {
 	if c.err != nil {
 		return c.err
 	}
@@ -313,10 +316,11 @@ func (c *Client) BatchEach(ctx context.Context, calls []Call, fn func(start, end
 		}
 		if len(chunk) > 0 {
 			if err := c.batchChunk(ctx, calls, chunk, out); err != nil {
+				fn(start, end, nil, err)
 				return err
 			}
 		}
-		if fn(start, end, out[start:end]) {
+		if fn(start, end, out[start:end], nil) {
 			return nil
 		}
 		start = end
@@ -404,6 +408,10 @@ func (c *Client) post(ctx context.Context, body []byte) ([]byte, int, error) {
 	if resp.StatusCode == http.StatusTooManyRequests { // busy: transient, like a 5xx, whatever the body says
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 		return nil, 0, fmt.Errorf("%w: server busy (429), try again later", ErrOffline)
+	}
+	if resp.StatusCode == http.StatusInternalServerError {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return nil, 0, fmt.Errorf("%w: %w: server error 500", ErrOffline, ErrServerFault)
 	}
 	if resp.StatusCode >= 500 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))

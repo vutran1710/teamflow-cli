@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/artifacts"
@@ -61,7 +62,7 @@ func (r *inv) driftAct(method string, a *parsed) int {
 	_, err = c.DriftAct(r.ctx, pid, sid, method, drift, note, a.lists["resolved-by"])
 	var q *core.Queued
 	if errors.As(err, &q) && !q.Hard() { // recorded: it waits behind earlier signals, never sent ahead of them
-		r.printf("%s %s: %s\n", done, drift, q.Error())
+		r.printf("%s %s: %s\n", strings.TrimPrefix(method, "drift."), drift, q.Error())
 		return 0
 	}
 	if err != nil {
@@ -478,5 +479,68 @@ func runTasks(r *inv, a *parsed) int {
 		t := tv.Task
 		r.printf("%s\t%s\t%s\tattempts %d\t%s\n", t.ID, t.Kind, t.State, t.Attempts, t.RequestedAt)
 	}
+	return 0
+}
+
+// ------------------------------------------------------------------ outbox (the person's: a setup command)
+
+var outboxCmd = &command{
+	name: "outbox", help: "What waits to be sent, in order (every sign-in's); drop one with `outbox drop <id>`.",
+	nargs: exactly(0), run: runOutbox,
+	sub: []*command{{name: "drop", args: "<id>", help: "Take one item out of the outbox: it is never sent.",
+		flags: []flagSpec{yesFlag}, nargs: exactly(1), run: runOutboxDrop}},
+}
+
+func runOutbox(r *inv, _ *parsed) int {
+	c, err := r.core()
+	if err != nil {
+		return r.failErr(err)
+	}
+	items, err := c.Outbox()
+	if err != nil {
+		return r.failErr(err)
+	}
+	if len(items) == 0 {
+		r.println("Nothing waits to be sent.")
+		return 0
+	}
+	now := time.Now()
+	for _, it := range items {
+		who := it.Account + " on " + it.Server
+		switch {
+		case it.Account == "":
+			who = "a sign-in whose key is gone: never sent"
+		case !it.Mine:
+			who += ": another sign-in, never sent by this one"
+		}
+		line := fmt.Sprintf("%s\t%s\t%s\t%s\tqueued %s ago, tries %d", it.Signal, it.Method, it.Project, who,
+			now.Sub(it.CreatedAt).Round(time.Minute), it.Tries)
+		if it.Fails > 0 {
+			line += fmt.Sprintf(", failed %d since %s: %s", it.Fails, it.FirstFail.Local().Format(time.RFC3339), it.LastError)
+		}
+		r.println(line)
+	}
+	return 0
+}
+
+func runOutboxDrop(r *inv, a *parsed) int {
+	id := a.pos[0]
+	c, err := r.core()
+	if err != nil {
+		return r.failErr(err)
+	}
+	if !a.has("yes") {
+		if ok, why := r.confirm(fmt.Sprintf("Drop %s from the outbox? It will never be sent.", id)); !ok {
+			return r.fail(why)
+		}
+	}
+	ok, err := c.OutboxDrop(r.ctx, id)
+	if err != nil {
+		return r.failErr(err)
+	}
+	if !ok {
+		return r.fail("nothing queued as " + id)
+	}
+	r.printf("dropped %s\n", id)
 	return 0
 }
