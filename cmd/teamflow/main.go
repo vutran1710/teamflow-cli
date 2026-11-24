@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/vutran1710/teamflow-cli/internal/api"
+	"github.com/vutran1710/teamflow-cli/internal/cli"
 )
 
 // version is set at build time: go build -ldflags "-X main.version=1.2.3".
@@ -26,6 +27,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "teamflow %s\n", version)
 			return 0
 		}
+	}
+	if len(args) > 0 && args[0] == "debug" { // hidden: not in the usage text
+		return cli.Debug(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 {
 		fmt.Fprintf(stderr, "teamflow: unknown command %q\n", args[0])

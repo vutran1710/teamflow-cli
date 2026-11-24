@@ -40,3 +40,20 @@ func TestAnUnknownCommandIsRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestDebugStateIsRoutedAndHidden(t *testing.T) {
+	t.Setenv("TEAMFLOW_HOME", t.TempDir()+"/home")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"debug", "state", "--json"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"sessions"`) {
+		t.Fatalf("printed %q", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	run([]string{"--nope"}, &out, &errOut)
+	if strings.Contains(errOut.String(), "debug") {
+		t.Fatalf("usage shows the hidden command: %q", errOut.String())
+	}
+}

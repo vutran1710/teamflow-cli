@@ -629,3 +629,17 @@ func TestClientErrorWithJSONRPCBodyIsRead(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestKeyRefIsPythonsKeyRef(t *testing.T) {
+	// Python: hashlib.sha256(b"tfp_example_key").hexdigest()[:16]
+	if got := KeyRef("tfp_example_key"); got != "0b1d94f300d754c6" {
+		t.Fatalf("KeyRef %q", got)
+	}
+	c := New("https://example.test", "tfp_example_key", time.Second)
+	if c.KeyRef() != "0b1d94f300d754c6" || New("https://example.test", "", time.Second).KeyRef() != "" {
+		t.Fatal("Client.KeyRef")
+	}
+	if strings.Contains(KeyRef(testKey), testKey[4:12]) {
+		t.Fatal("the ref shows the key")
+	}
+}

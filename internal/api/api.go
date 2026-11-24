@@ -8,6 +8,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -404,3 +406,16 @@ func (c *Client) redactText(s string) string {
 	}
 	return s
 }
+
+// KeyRef names a key without revealing it: the first 16 hex digits of its SHA-256 (as the Python client's key_ref).
+// Spool rows carry it, so each waits for its own key. "" for no key.
+func KeyRef(key string) string {
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// KeyRef is the client's key's ref (see KeyRef).
+func (c *Client) KeyRef() string { return KeyRef(c.key) }
