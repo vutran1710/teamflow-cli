@@ -15,7 +15,6 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/artifacts"
 	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/deliverables"
-	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
 
@@ -250,6 +249,9 @@ func runArtifactLink(r *inv, a *parsed) int {
 }
 
 func runArtifactPull(r *inv, a *parsed) int {
+	if out := a.get("output"); out != "" && artifacts.InHome(out, "") {
+		return r.failErr(artifacts.HomeRefusal(out))
+	}
 	c, err := r.core()
 	if err != nil {
 		return r.failErr(err)
@@ -399,18 +401,9 @@ func runDeliverables(r *inv, a *parsed) int {
 
 func runDeliverablesValidate(r *inv, a *parsed) int {
 	file := a.pos[0]
-	f, err := os.Open(file)
-	var text []byte
-	if err == nil {
-		text, err = io.ReadAll(f)
-		f.Close()
-	}
+	text, err := artifacts.ReadText(file) // never a file in the Teamflow home
 	if err != nil {
-		var pe *os.PathError
-		if errors.As(err, &pe) {
-			err = pe.Err
-		}
-		return r.fail(fmt.Sprintf("cannot read %s: %v", home.Display(file), err))
+		return r.failErr(err)
 	}
 	var data any
 	if err := json.Unmarshal(text, &data); err != nil {

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 
@@ -17,7 +16,6 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/artifacts"
 	"github.com/vutran1710/teamflow-cli/internal/core"
-	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/mcpserver"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
@@ -249,13 +247,11 @@ func (r *inv) textOf(a *parsed, flag string) (string, bool, error) {
 	case a.has(flag) && a.has(file):
 		return "", false, usageError{"give --" + flag + " or --" + file + ", not both"}
 	case a.has(file):
-		b, err := os.ReadFile(a.get(file))
+		// Never a file in the Teamflow home, however the path names it (the shell expanded it already: the check is
+		// on the resolved file, by identity).
+		b, err := artifacts.ReadText(a.get(file))
 		if err != nil {
-			var pe *os.PathError
-			if errors.As(err, &pe) {
-				err = pe.Err
-			}
-			return "", false, fmt.Errorf("cannot read %s: %v", home.Display(a.get(file)), err)
+			return "", false, err
 		}
 		return string(b), true, nil
 	case a.has(flag):

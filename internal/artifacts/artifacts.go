@@ -321,6 +321,61 @@ func expand(p string) string {
 	return p
 }
 
+// InHome says whether path (as given, ~ expanded) is the Teamflow home (tfHome; "": home.Dir()) or inside it,
+// by identity, with links followed: directly, through .., through a link to a file in it or to the home, or as a
+// case variant on a disk that ignores case. A path that does not exist yet is judged by its nearest existing
+// folder (so a file about to be written into the home counts).
+func InHome(p, tfHome string) bool {
+	if tfHome == "" {
+		tfHome = home.Dir()
+	}
+	h := statDir(tfHome)
+	if h == nil {
+		return false
+	}
+	abs, err := filepath.Abs(expand(p))
+	if err != nil {
+		return false
+	}
+	if under(abs, h) {
+		return true
+	}
+	for d := abs; ; d = filepath.Dir(d) {
+		if real, err := filepath.EvalSymlinks(d); err == nil {
+			return under(real, h)
+		}
+		if d == filepath.Dir(d) {
+			return false
+		}
+	}
+}
+
+// HomeRefusal is the refusal for a path in the Teamflow home.
+func HomeRefusal(p string) error {
+	return fmt.Errorf("%s is in Teamflow's home, among Teamflow's own files (your sign-in and keys): no command reads or writes a file there", home.Display(p))
+}
+
+// MaxTextFile is the most ReadText reads (a plan, an instruction, a Deliverables file).
+const MaxTextFile = 8 << 20
+
+// ReadText reads a text file a command was given (--plan-file and the like): never one in the Teamflow home
+// (InHome), only a regular file, and the file read is the file checked.
+func ReadText(p string) ([]byte, error) {
+	f, _, shown, err := open(p, "", "")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, MaxTextFile+1))
+	if err != nil {
+		return nil, fmt.Errorf("cannot read %s: %w", shown, err)
+	}
+	if len(b) > MaxTextFile {
+		return nil, fmt.Errorf("%s is over %d MB", shown, MaxTextFile>>20)
+	}
+	return b, nil
+}
+
 // open opens a file to read for publishing or measuring, after every check: never a file in the Teamflow home,
 // never a link from inside the project to outside it (when project is set), only a regular file (checked before
 // opening: a FIFO would block), and the file opened must be the file checked.
@@ -341,8 +396,7 @@ func open(p, project, tfHome string) (*os.File, string, string, error) {
 		tfHome = home.Dir()
 	}
 	if h := statDir(tfHome); under(real, h) || under(abs, h) {
-		return nil, "", "", fmt.Errorf("%s is one of Teamflow's own files (keys and this machine's copy of your "+
-			"projects): it is never published", shown)
+		return nil, "", "", HomeRefusal(abs)
 	}
 	if pr := statDir(project); under(abs, pr) && !under(real, pr) {
 		return nil, "", "", fmt.Errorf("%s is a link to a file outside the project: publish the file itself, "+
@@ -538,6 +592,9 @@ func Pull(c protocol.ArtifactContent, output string) (Pulled, error) {
 		return Pulled{}, fmt.Errorf("the content of %s does not match its SHA-256: not saved", out.Version)
 	}
 	target := expand(output)
+	if target != "" && InHome(target, "") {
+		return Pulled{}, HomeRefusal(target)
+	}
 	// Without -o the name is a teammate's: a new file only, never an existing one or a link (it could pick
 	// .envrc or a Makefile). With -o the person chose the file: it may be replaced, but not written through a link.
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC | syscall.O_NOFOLLOW

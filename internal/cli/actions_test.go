@@ -179,7 +179,7 @@ func TestProjectCommands(t *testing.T) {
 	contains(t, "stderr", r.err, "STALE_STATE_VERSION")
 	r = m.run("", "project", "plan", "--project", P, "--plan-file", "/nonexistent/plan.md", "--yes")
 	wantCode(t, r, 1)
-	contains(t, "stderr", r.err, "cannot read")
+	contains(t, "stderr", r.err, "no file")
 	r = m.run("", "project", "plan", "--project", P, "--plan", "x", "--plan-file", plan, "--yes")
 	wantCode(t, r, 2)
 }
