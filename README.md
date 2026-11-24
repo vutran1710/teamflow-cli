@@ -5,7 +5,7 @@ to, and the agents' hooks. It records what your agents decide and do into a Team
 agent session what changed since its last step.
 
 **Status: early.** This repo holds the wire protocol (Go types generated from the schema the Teamflow server
-exports, checked against golden messages), the local store and sync, and the command line. The MCP server, the
+exports, checked against golden messages), the local store and sync, the command line and the MCP server. The
 agent adapters (Claude Code, Cursor CLI, Antigravity CLI, Copilot CLI), the background sync and self-update land
 here as they are built. The first release is tagged once the client passes the server's
 end-to-end suite.
@@ -35,13 +35,29 @@ teamflow team …                                          behind the agent's /t
 teamflow topic delete PROJECT TOPIC [--yes]
 teamflow artifact write|link|pull|archive|list …
 teamflow deliverables [--project P] | deliverables validate FILE [--json]
-teamflow org members|add-member|remove-member …
+teamflow deliverables archive [--restore] | delete | history [--project P] [--yes]
+teamflow drift resolve|dismiss DR_ID NOTE [--project P] [--yes]
+teamflow project title MEMBER TITLE | remove-member MEMBER | plan [--plan|--plan-file …] [--project P]
+teamflow org members|add-member|remove-member|title …
+teamflow profile [--name NAME] [--alias ALIAS] | profile avatar FILE | profile avatar --remove
+teamflow tasks [--project P] [--kind K] [--state S]
 teamflow log [--all] [--project P]
+teamflow mcp                                             the MCP server (started by your agent, over stdio)
 ```
 
-`SERVER` defaults to `https://teamflow.vutr.io`. A password is never a command-line argument. A verdict run through
-your agent (inside an agent session) is recorded as given through the agent; run it in your own terminal and it is
-recorded as yours directly.
+Every action the Teamflow web app has is a command here and an MCP tool (pictures are command-line only: they
+need a file). The server decides who may do what. Consequential commands (delete, archive, remove a member,
+rewrite the plan, settle a drift) ask on the terminal, or take `--yes`.
+
+`SERVER` defaults to `https://teamflow.vutr.io`. A password is never a command-line argument. A verdict is always
+recorded as yours, whether you run it, the web app records it, or your agent records it on your explicit words.
+
+## The MCP server
+
+`teamflow mcp` serves 44 tools (`protocol/agent/tools.json`) to any MCP agent, with one agent-neutral instruction
+text (`protocol/agent/instructions.md`) as its instructions. The tools the Python client had keep its input
+schemas exactly. Each call reads the sign-in and keys from disk and finds the agent session it runs under. Every
+result carries what is new for the session: approval requests waiting for you, and the session's other notices, once.
 
 **Release notes (vs. the Python client):** the placeholder `teamflow tui` is dropped. The local store is new
 (`~/.teamflow/store.db`); a Python-era `client.sqlite` is left alone and can be deleted, so sign in once more with
@@ -74,7 +90,9 @@ What stays on your machine:
 - `internal/cli`: the commands. `internal/core`: the agent-independent client they call (the store, the config
   and the server kept in step). `internal/config`: `config.json`. `internal/adapters`: the agent adapter registry.
   `internal/procs`: process ancestry, to find the agent session a command runs under.
-- `internal/protocol`: the wire types. `*_gen.go` are generated; never edit them.
+- `internal/protocol`: the wire types and the agent texts. `*_gen.go` are generated; never edit them.
+- `internal/mcpserver`: the MCP server and its tools. `internal/core`: what the commands and tools do with the
+  store and the server. `internal/ojson`: ordered JSON objects (tool answers keep Python's field order).
 - `internal/protocolgen`, `tools/gen`: the generator (`go run ./tools/gen`).
 - `internal/deliverables`: the Deliverables check (a port of the server's, run before anything is sent), tested
   against the shared vectors in `protocol/deliverables/vectors.json`.

@@ -453,14 +453,15 @@ func (m *machine) offline() {
 
 func TestUnknownCommand(t *testing.T) {
 	m := newMachine(t, true)
-	for _, args := range [][]string{{"drift", "dismiss", "dr_1", "x"}, {"tui"}, {"org", "stores", "Acme"},
+	for _, args := range [][]string{{"tui"}, {"org", "stores", "Acme"},
 		{"org", "add-store", "Acme", "s", "ssh://x"}, {"artifact", "delete", "x"}} {
 		r := m.run("", args...)
 		wantCode(t, r, 2)
 		contains(t, "stderr", r.err, "No such command")
 	}
-	r := m.run("", "drift", "dismiss")
-	contains(t, "stderr", r.err, "No such command 'drift'")
+	r := m.run("", "drift", "purge") // drift is a command now (resolve, dismiss): no web-only actions
+	wantCode(t, r, 2)
+	contains(t, "stderr", r.err, "No such command 'purge'")
 }
 
 func TestUsageHidesInternalCommands(t *testing.T) {
@@ -818,7 +819,7 @@ func TestHiddenAndLaterCommands(t *testing.T) {
 	if r.out != "" || r.err != "" {
 		t.Fatalf("hook said something: %s", r)
 	}
-	for _, args := range [][]string{{"mcp"}, {"sync"}, {"self-update"}} {
+	for _, args := range [][]string{{"sync"}, {"self-update"}} {
 		r := m.run("", args...)
 		wantCode(t, r, 1)
 		contains(t, "stderr", r.err, "not available in this build yet")

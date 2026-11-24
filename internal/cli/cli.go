@@ -247,9 +247,9 @@ var commands []*command
 func init() {
 	commands = []*command{
 		loginCmd, logoutCmd, projectsCmd, installCmd, uninstallCmd, statusCmd, stopCmd, approveCmd, rejectCmd,
-		teamCmd, topicCmd, artifactCmd, deliverablesCmd, orgCmd, logCmd,
+		teamCmd, topicCmd, artifactCmd, deliverablesCmd, driftCmd, projectCmd, orgCmd, profileCmd, tasksCmd, logCmd,
 		{name: "hook", hidden: true, raw: true, run: runHook},
-		{name: "mcp", hidden: true, raw: true, run: later("the MCP server")},
+		{name: "mcp", hidden: true, raw: true, run: runMCP},
 		{name: "sync", help: "The background sync (one per machine).", raw: true, run: later("the background sync")},
 		{name: "self-update", help: "Update teamflow to the newest release.", raw: true, run: later("self-update")},
 		{name: "debug", hidden: true, raw: true},
