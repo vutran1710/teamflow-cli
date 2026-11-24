@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -80,7 +81,7 @@ func TestOverLimitRefusedWithLinkHint(t *testing.T) {
 		t.Fatalf("answer %s", b)
 	}
 	next, _ := got["next"].(string)
-	if !strings.Contains(next, "artifact_publish") || !strings.Contains(next, "5 MB") || strings.Contains(next, "upload_to") {
+	if !strings.Contains(next, "teamflow artifact link") || !strings.Contains(next, "5 MB") || strings.Contains(next, "upload_to") {
 		t.Fatalf("next %q", next)
 	}
 	hint := LinkHint(p.Size, "talk.mp4", "Pricing talk", "/work/it's here/talk.mp4")
@@ -587,5 +588,45 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A FIFO swapped in at -o after the checks never hangs the command (an agent waits on it): the open does not wait
+// for a reader, and anything but a plain file is refused. (The MCP server's save_to had this test; pull -o is its
+// successor.)
+// Sad paths: an existing target swapped for a FIFO; a new target name made a FIFO before the open.
+func TestPullNeverHangsOnAFIFO(t *testing.T) {
+	root := real(t)
+	tf := filepath.Join(root, "tf")
+	must(t, os.Mkdir(tf, 0o700))
+	t.Setenv("TEAMFLOW_HOME", tf)
+	data := []byte("# Spec\n")
+	ref := &protocol.StoredRef{Key: "k", Sha256: sum(data), MediaType: "text/markdown", Size: int64(len(data))}
+	t.Cleanup(func() { pullRace = func(string) {} })
+	for name, existing := range map[string]bool{"over an existing file": true, "a new file": false} {
+		t.Run(name, func(t *testing.T) {
+			target := filepath.Join(root, strings.ReplaceAll(name, " ", "-")+".md")
+			if existing {
+				must(t, os.WriteFile(target, []byte("old"), 0o644))
+			}
+			pullRace = func(stage string) {
+				if stage == "open" {
+					_ = os.Remove(target)
+					if err := syscall.Mkfifo(target, 0o644); err != nil {
+						t.Error(err)
+					}
+				}
+			}
+			done := make(chan error, 1)
+			go func() { _, err := Pull(content("spec.md", data, ref, nil), target); done <- err }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("written into a FIFO")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("pull hung on a FIFO swapped in at -o")
+			}
+		})
 	}
 }

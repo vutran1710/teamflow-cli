@@ -263,7 +263,7 @@ func TestArtifactTools(t *testing.T) {
 	// over 5 MB: nothing is sent; the answer says how to publish it as a link
 	big := m.call("artifact_write", map[string]any{"topic": "Rounding", "summary": "s", "name": "big.txt",
 		"content": strings.Repeat("x", protocol.MaxArtifactBytes+1)}).obj(t)
-	if big["reason"] != "ARTIFACT_TOO_LARGE" || !strings.Contains(big["next"].(string), "artifact_publish") || big["size"] == nil {
+	if big["reason"] != "ARTIFACT_TOO_LARGE" || !strings.Contains(big["next"].(string), "teamflow artifact link") || big["size"] == nil {
 		t.Fatalf("too large %v", big)
 	}
 	if got := len(m.srv.sent("artifact.write")); got != n {

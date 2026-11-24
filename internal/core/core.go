@@ -460,7 +460,7 @@ func (c *Core) ProjectMenu(ctx context.Context, sid string) (string, error) {
 		lines = append(lines, fmt.Sprintf("- %s/%s: topics %s", org[v.Project.ID], v.Project.Name, strings.Join(names, ", ")))
 	}
 	lines = append(lines, "Ask the person, in your own words, which project this session works on, then which of its "+
-		"topics (several allowed; all by default). Then call the session_join tool with their choice (names as shown).")
+		"topics (several allowed; all by default). Then run `teamflow team project <project> [<topic> …]` with their choice (names as shown).")
 	return strings.Join(lines, "\n"), nil
 }
 

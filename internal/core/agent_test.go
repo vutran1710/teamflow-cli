@@ -1,6 +1,6 @@
 package core
 
-// Sad paths of the agent's side at the core layer (the MCP tools test the happy paths through it).
+// Sad paths of the agent's side at the core layer (internal/ops and the commands test the happy paths through it).
 
 import (
 	"context"

@@ -52,7 +52,7 @@ func TestFileFlagsRefuseTheHome(t *testing.T) {
 				t.Fatalf("%s %s: the key was printed", name, flag)
 			}
 		}
-		r := m.run("", "deliverables", "validate", p)
+		r := m.run("", "deliverables", "validate", "--file", p)
 		wantCode(t, r, 1)
 		contains(t, "stderr", r.err, "Teamflow's home")
 		if strings.Contains(r.out+r.err, secret) {

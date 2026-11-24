@@ -2,7 +2,11 @@ package cli
 
 import (
 	"errors"
+	"slices"
 	"strings"
+
+	"github.com/vutran1710/teamflow-cli/internal/ojson"
+	"github.com/vutran1710/teamflow-cli/internal/ops"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
@@ -108,17 +112,28 @@ func runTeam(r *inv, a *parsed) int {
 	if len(args) > 0 {
 		sub, rest = args[0], args[1:]
 	}
+	if slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
+		if spec := teamSpec(sub); spec != nil {
+			specUsage(r.out, spec, nil)
+			return 0
+		}
+	}
+	if i := slices.Index(rest, "--json"); i >= 0 && !r.relay {
+		rest = slices.Delete(slices.Clone(rest), i, i+1)
+		return r.teamJSON(sub, rest)
+	}
+	code := r.team(sub, rest)
+	r.trailer(r.news())
+	return code
+}
+
+// team runs a /teamf command with plain output.
+func (r *inv) team(sub string, rest []string) int {
 	switch {
 	case sub == "project" && len(rest) == 0:
 		return r.projectMenu()
 	case sub == "project":
-		var topics []string
-		for _, t := range rest[1:] {
-			if t != "--all" {
-				topics = append(topics, t)
-			}
-		}
-		return r.join(rest[0], topics)
+		return r.join(rest[0], topicsOf(rest[1:]))
 	case sub == "stop" && len(rest) == 0:
 		return runStop(r, nil)
 	case sub == "status" && len(rest) == 0:
@@ -131,6 +146,65 @@ func runTeam(r *inv, a *parsed) int {
 		return r.verdict(protocol.SignalKindReject, rest[0], strings.Join(rest[1:], " "))
 	}
 	return r.fail(teamUsage)
+}
+
+// teamJSON runs a team command with --json: one JSON object with the news (an agent ran it, not the relay).
+func (r *inv) teamJSON(sub string, rest []string) int {
+	r.json = true
+	text := func(s string, err error) (any, error) {
+		if err != nil {
+			return nil, err
+		}
+		return ojson.Obj{{Key: "result", Value: s}}, nil
+	}
+	var out any
+	var err error
+	c, cerr := r.core()
+	sess, inSession := r.session()
+	switch {
+	case cerr != nil:
+		err = cerr
+	case (sub == "project" || sub == "approvals") && !inSession:
+		err = errors.New(noSession)
+	case sub == "project" && len(rest) == 0:
+		out, err = text(c.ProjectMenu(r.ctx, sess.ID))
+	case sub == "project":
+		out, err = text(c.Join(r.ctx, sess.ID, rest[0], topicsOf(rest[1:])))
+	case sub == "approvals" && onlyAll(rest):
+		out, err = text(c.ApprovalsQueue(r.ctx, sess.ID, len(rest) > 0))
+	case sub == "stop" && len(rest) == 0:
+		out, err = jsonStop(r, nil)
+	case sub == "status" && len(rest) == 0:
+		out, err = jsonStatus(r, nil)
+	case sub == "approve" && len(rest) >= 1:
+		out, err = jsonVerdict(protocol.SignalKindApprove)(r, &parsed{pos: rest})
+	case sub == "reject" && len(rest) >= 2:
+		out, err = jsonVerdict(protocol.SignalKindReject)(r, &parsed{pos: rest})
+	default:
+		err = errors.New(teamUsage)
+	}
+	news := r.news()
+	if err != nil {
+		r.printJSON(ops.With(ojson.Obj{{Key: "error", Value: ops.ErrText(err)}}, news))
+		return 1
+	}
+	code := 0
+	if ans, ok := out.(answer); ok {
+		out, code = ans.out, ans.code
+	}
+	r.printJSON(envelope(out, news))
+	return code
+}
+
+// topicsOf are the topics named after the project (--all, or none: every topic).
+func topicsOf(words []string) []string {
+	var topics []string
+	for _, t := range words {
+		if t != "--all" {
+			topics = append(topics, t)
+		}
+	}
+	return topics
 }
 
 func onlyAll(xs []string) bool {

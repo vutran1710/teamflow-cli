@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -14,7 +12,7 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/artifacts"
 	"github.com/vutran1710/teamflow-cli/internal/core"
-	"github.com/vutran1710/teamflow-cli/internal/deliverables"
+	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
 
@@ -45,47 +43,19 @@ const whichProject = "which project? pass --project, or run this from a shared s
 
 // ------------------------------------------------------------------ topic delete
 
-var topicCmd = &command{name: "topic", help: "Topics (initiator only).", sub: []*command{{
-	name: "delete", args: "<project> <topic>", help: "Delete a topic and every signal in it, for everyone. Cannot be undone.",
-	flags: []flagSpec{yesFlag}, nargs: exactly(2), run: runTopicDelete,
+var topicCmd = &command{name: "topic", help: "Topics (the project's initiator).", sub: []*command{{
+	name: "delete", args: "<topic>", help: "Delete a topic and every signal in it, for everyone. Cannot be undone.",
+	flags: []flagSpec{yesFlag, projectFlag}, nargs: exactly(1), run: runTopicDelete,
 }}}
 
 func runTopicDelete(r *inv, a *parsed) int {
-	project, topic := a.pos[0], a.pos[1]
-	c, err := r.core()
+	out, err := jsonTopicDelete(r, a)
 	if err != nil {
-		return r.failErr(err)
+		return r.fail(r.errorText(findCommand("topic delete"), err))
 	}
-	cl, err := c.API(r.ctx, project, core.DefaultTimeout)
-	if err != nil {
-		return r.failErr(err)
-	}
-	var view protocol.ProjectView
-	if err := cl.Call(r.ctx, "project.get", protocol.ProjectGet{Project: project}, &view); err != nil {
-		return r.failErr(err)
-	}
-	var match *protocol.Topic
-	for i, t := range view.Topics {
-		if topic == t.ID || topic == t.Name {
-			match = &view.Topics[i]
-			break
-		}
-	}
-	if match == nil {
-		return r.fail(fmt.Sprintf("no topic %s in %s", quote(topic), view.Project.Name))
-	}
-	if !a.has("yes") {
-		if ok, why := r.confirm(fmt.Sprintf("Delete topic %s and all its signals for everyone?", quote(match.Name))); !ok {
-			return r.fail(why)
-		}
-	}
-	var out protocol.TopicDeleted
-	err = cl.Call(r.ctx, "topic.delete", protocol.TopicDelete{Project: project, ExpectedVersion: view.Project.Version,
-		Topic: match.ID}, &out)
-	if err != nil {
-		return r.failErr(err)
-	}
-	r.printf("deleted %s: %d signal(s), %d drift(s)\n", quote(match.Name), out.SignalsDeleted, out.DriftsDeleted)
+	o, _ := out.(ojson.Obj)
+	get := func(k string) any { v, _ := o.Get(k); return v }
+	r.printf("deleted %s: %v signal(s), %v drift(s)\n", quote(fmt.Sprint(get("deleted"))), get("signals_deleted"), get("drifts_deleted"))
 	return 0
 }
 
@@ -105,16 +75,21 @@ var (
 	pointFlag  = flagSpec{name: "point", kind: list, help: "A key point (up to 7; repeatable)"}
 	kindFlag   = flagSpec{name: "kind", help: "TEXT, DATA, CODE, DOCUMENT, PRESENTATION, IMAGE, AUDIO, VIDEO or LINK (default: from the name)"}
 	supersedes = flagSpec{name: "supersedes", help: "The newest version's sg_ id"}
+	titleFlag  = flagSpec{name: "title", help: "The signal's title (default: the name)"}
+	approverF  = flagSpec{name: "approver", kind: list, help: "A member who must approve it, by name (repeatable)"}
+	requiredF  = flagSpec{name: "required", help: "How many approvers must approve (default: all)"}
 )
 
 var artifactCmd = &command{name: "artifact", help: "Project artifacts: files teammates rely on.", sub: []*command{
 	{name: "write", args: "<file>", help: "Store a file (any type, up to 5 MB) in Teamflow's file store. Larger: keep it " +
 		"where your team can reach it and publish it with `teamflow artifact link`.",
 		flags: []flagSpec{topicReq, summaryReq, pointFlag, {name: "name", help: "Default: the file's name"}, kindFlag,
-			supersedes, projectFlag}, nargs: exactly(1), run: runArtifactWrite},
+			titleFlag, supersedes, approverF, requiredF, projectFlag}, nargs: exactly(1), run: runArtifactWrite},
 	{name: "link", args: "<url>", help: "Publish an artifact that lives elsewhere (an http or https link). Teamflow stores nothing.",
 		flags: []flagSpec{{name: "name", help: "The artifact's name, e.g. demo.mp4 (required)"}, topicReq, summaryReq, pointFlag,
-			{name: "file", help: "A local copy, to record its size and SHA-256"}, kindFlag, supersedes, projectFlag},
+			{name: "file", help: "A local copy, to record its size and SHA-256"}, kindFlag,
+			{name: "media-type", help: "Its media type (default: from the name)"}, titleFlag, supersedes, approverF,
+			requiredF, projectFlag},
 		nargs: exactly(1), run: runArtifactLink},
 	{name: "pull", args: "<artifact>", help: "Save an artifact's content (the version in force, or --exact for one version).",
 		flags: []flagSpec{{name: "output", short: "o", help: "Where to save it (default: its name, here)"},
@@ -169,82 +144,45 @@ func refusal(reason *protocol.RejectReason, message string) string {
 }
 
 func runArtifactWrite(r *inv, a *parsed) int {
-	kind, ok := artifactKind(r, "artifact write", a)
-	if !ok {
-		return 2
-	}
-	c, err := r.core()
-	if err != nil {
-		return r.failErr(err)
-	}
-	if c.SignedIn() {
-		c.Sync(r.ctx, core.DefaultTimeout, "")
-	}
-	pid, sid, ok := r.where(a.get("project"))
-	if !ok {
-		return r.fail(whichProject)
-	}
-	cwd, _ := os.Getwd()
-	file := a.pos[0]
-	p, err := artifacts.Prepare(file, artifacts.Options{Name: a.get("name"), Kind: kind, Project: cwd, Home: c.Dir})
-	var tooLarge *artifacts.TooLargeError
-	if errors.As(err, &tooLarge) {
-		return r.fail(artifacts.LinkHint(tooLarge.Size, tooLarge.Name, a.get("topic"), file))
-	}
-	if err != nil {
-		return r.failErr(err)
-	}
-	d := artifacts.Signal(p.Name, a.get("topic"), p.Kind, a.get("summary"), a.lists["point"], "", optional(a.get("supersedes")), nil, artifacts.Content{})
-	res, err := c.ArtifactWrite(r.ctx, pid, sid, d, p, protocol.ActorMember)
-	if err != nil {
-		return r.failErr(err)
-	}
-	if res.Reason != nil && *res.Reason == protocol.RejectReasonArtifactTooLarge {
-		return r.fail(artifacts.LinkHint(p.Size, p.Name, a.get("topic"), file))
-	}
-	if !res.Accepted {
-		return r.fail(refusal(res.Reason, res.Message))
-	}
-	r.println(signalLine(res.Signal, p.Name, p.Kind, res.State))
-	return 0
+	out, err := jsonArtifactWrite(r, a)
+	return r.artifactLine(findCommand("artifact write"), out, err, a)
 }
 
 func runArtifactLink(r *inv, a *parsed) int {
-	if a.get("name") == "" {
-		return usageFail(r, "artifact link", "Missing option '--name'")
+	out, err := jsonArtifactLink(r, a)
+	return r.artifactLine(findCommand("artifact link"), out, err, a)
+}
+
+// artifactLine is what artifact write and link print: the new version's line, or why not (for a file over the
+// limit, the link command to publish it with).
+func (r *inv) artifactLine(c *command, out any, err error, a *parsed) int {
+	var ue usageError
+	if errors.As(err, &ue) {
+		return usageFail(r, r.path, ue.msg)
 	}
-	kind, ok := artifactKind(r, "artifact link", a)
-	if !ok {
-		return 2
-	}
-	link := a.pos[0]
-	if u, err := url.Parse(link); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return r.fail("the link must be an http or https URL: " + link)
-	}
-	c, err := r.core()
 	if err != nil {
-		return r.failErr(err)
+		return r.fail(r.errorText(c, err))
 	}
-	if c.SignedIn() {
-		c.Sync(r.ctx, core.DefaultTimeout, "")
+	if ans, ok := out.(answer); ok {
+		out = ans.out
 	}
-	pid, sid, ok := r.where(a.get("project"))
-	if !ok {
-		return r.fail(whichProject)
+	o, _ := out.(ojson.Obj)
+	get := func(k string) string {
+		v, _ := o.Get(k)
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprint(v)
 	}
-	content, k, err := artifacts.Link(link, a.get("name"), a.get("file"), kind)
-	if err != nil {
-		return r.failErr(err)
+	if get("reason") == string(protocol.RejectReasonArtifactTooLarge) {
+		size, _ := o.Get("size")
+		n, _ := size.(int64)
+		return r.fail(artifacts.LinkHint(n, get("name"), a.get("topic"), a.pos[0]))
 	}
-	d := artifacts.Signal(a.get("name"), a.get("topic"), k, a.get("summary"), a.lists["point"], "", optional(a.get("supersedes")), nil, content)
-	res, err := c.ArtifactPublish(r.ctx, pid, sid, d, protocol.ActorMember)
-	if err != nil {
-		return r.failErr(err)
+	if get("accepted") != "true" {
+		return r.fail("refused: " + get("reason") + " " + get("message"))
 	}
-	if !res.Accepted {
-		return r.fail(refusal(res.Reason, res.Message))
-	}
-	r.println(signalLine(res.Signal, a.get("name"), k, res.State))
+	r.println(strings.Join([]string{get("signal"), get("name"), get("kind"), get("state")}, "\t"))
 	return 0
 }
 
@@ -313,23 +251,16 @@ func runArtifactList(r *inv, a *parsed) int {
 
 // ------------------------------------------------------------------ deliverables
 
-var deliverablesValidate = &command{name: "validate", args: "<file>",
+var deliverablesValidate = &command{name: "validate",
 	help: "Check a Deliverables structure (JSON: the list of milestones, as agents publish it) against the project: " +
 		"every problem (exit 1), or valid. Nothing is published.",
-	flags: []flagSpec{projectFlag, jsonFlag}, nargs: exactly(1), run: runDeliverablesValidate}
+	flags: []flagSpec{fileFlag, projectFlag}, nargs: exactly(0), run: runDeliverablesValidate}
 
 var deliverablesCmd = &command{name: "deliverables",
 	help:  "Show the project's Deliverables: each milestone and its actions, with status, owner and due.",
-	flags: []flagSpec{projectFlag, jsonFlag}, sub: []*command{deliverablesValidate}, run: runDeliverables}
+	flags: []flagSpec{projectFlag}, sub: []*command{deliverablesValidate}, run: runDeliverables}
 
 func runDeliverables(r *inv, a *parsed) int {
-	if len(a.pos) > 0 && a.pos[0] == "validate" { // `deliverables --project X validate f`
-		if len(a.pos) != 2 {
-			return usageFail(r, "deliverables validate", "wrong number of arguments")
-		}
-		a.pos = a.pos[1:]
-		return runDeliverablesValidate(r, a)
-	}
 	if len(a.pos) > 0 {
 		return usageFail(r, "deliverables", "No such command '"+a.pos[0]+"'.")
 	}
@@ -400,60 +331,20 @@ func runDeliverables(r *inv, a *parsed) int {
 }
 
 func runDeliverablesValidate(r *inv, a *parsed) int {
-	file := a.pos[0]
-	text, err := artifacts.ReadText(file) // never a file in the Teamflow home
-	if err != nil {
-		return r.failErr(err)
+	out, err := jsonDeliverablesValidate(r, a)
+	var ue usageError
+	switch {
+	case errors.As(err, &ue):
+		return usageFail(r, "deliverables validate", ue.msg)
+	case err != nil:
+		return r.fail(r.errorText(findCommand("deliverables validate"), err))
 	}
-	var data any
-	if err := json.Unmarshal(text, &data); err != nil {
-		return r.fail(fmt.Sprintf("%s is not JSON (%v): it must hold the list of milestones", file, err))
+	if ans, ok := out.(answer); ok {
+		out = ans.out
 	}
-	milestones := data
-	if obj, ok := data.(map[string]any); ok {
-		milestones = obj["milestones"]
-	}
-	list, ok := milestones.([]any)
-	for _, m := range list {
-		if _, isObj := m.(map[string]any); !isObj {
-			ok = false
-		}
-	}
-	if !ok {
-		return r.fail(fmt.Sprintf(`%s must hold a list of milestones (or an object with "milestones")`, file))
-	}
-	raw, _ := json.Marshal(list)
-	if obj, isObj := data.(map[string]any); isObj { // keep the order as written
-		var w struct {
-			Milestones json.RawMessage `json:"milestones"`
-		}
-		if json.Unmarshal(text, &w) == nil {
-			raw = w.Milestones
-		}
-		_ = obj
-	} else {
-		raw = text
-	}
-	c, err := r.core()
-	if err != nil {
-		return r.failErr(err)
-	}
-	pid, _, ok := r.where(a.get("project"))
-	if !ok {
-		return r.fail(whichProject)
-	}
-	problems, err := c.DeliverablesValidate(r.ctx, pid, raw)
-	if err != nil {
-		return r.fail("cannot check it against the project: " + errText(err))
-	}
-	if a.has("json") {
-		b, _ := json.Marshal(deliverables.Result{Valid: len(problems) == 0, Problems: append([]string{}, problems...)})
-		r.println(string(b))
-		if len(problems) > 0 {
-			return 1
-		}
-		return 0
-	}
+	o, _ := out.(ojson.Obj)
+	v, _ := o.Get("problems")
+	problems, _ := v.([]string)
 	if len(problems) > 0 {
 		s := ""
 		if len(problems) > 1 {

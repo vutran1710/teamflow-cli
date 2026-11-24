@@ -187,7 +187,7 @@ func (c *Core) Emit(ctx context.Context, sid string, drafts []map[string]any) ([
 	var at []int
 	for i, d := range drafts {
 		if k, _ := d["kind"].(string); slices.Contains(protocol.HumanActsVerdictSignalKinds, k) {
-			answers[i] = invalid("a verdict is recorded on its own, with the verdict tool, only on the person's explicit words")
+			answers[i] = invalid("a verdict is recorded on its own (`teamflow approve` or `teamflow reject`), only on the person's explicit words")
 			continue
 		}
 		e, err := c.DraftFor(ctx, pid, sid, d, protocol.ActorAgent)
@@ -501,18 +501,18 @@ func (c *Core) currentDeliverables(ctx context.Context, sess store.Session, base
 		return nil, bad("the Deliverables are archived: nothing changes until the initiator restores them")
 	}
 	if !ok && need {
-		return nil, bad("this project has no Deliverables yet: publish them first with deliverables_publish")
+		return nil, bad("this project has no Deliverables yet: publish them first with `teamflow deliverables publish`")
 	}
 	switch {
 	case base == nil && ok:
 		return nil, bad("the Deliverables are at version %d: your change must say which version it is based on: "+
-			"pass the version you read (deliverables_get), then resubmit", d.Version)
+			"pass the version you read (`teamflow deliverables`), then resubmit", d.Version)
 	case base != nil && (!ok || *base != d.Version):
 		now := "not published yet"
 		if ok {
 			now = fmt.Sprintf("at version %d", d.Version)
 		}
-		return nil, bad("the Deliverables are %s, not version %d: get them again (deliverables_get) and resubmit", now, *base)
+		return nil, bad("the Deliverables are %s, not version %d: get them again (`teamflow deliverables`) and resubmit", now, *base)
 	}
 	if !ok {
 		return nil, nil
@@ -547,7 +547,7 @@ func (c *Core) deliverablesInScope(sess store.Session, milestones []protocol.Mil
 	followed := c.followed(sess)
 	if whole {
 		return bad("this session follows only %s: publishing the whole Deliverables needs a session on every topic "+
-			"(the person widens it); to change one milestone, use deliverables_update_milestone", followed)
+			"(the person widens it); to change one milestone, use `teamflow deliverables update-milestone`", followed)
 	}
 	was := map[string]protocol.Action{}
 	if old != nil {

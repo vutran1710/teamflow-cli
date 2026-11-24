@@ -67,7 +67,15 @@ type fakeServer struct {
 	mu      sync.Mutex
 	calls   []rec
 	answers map[string][]string // method -> answers in turn (the last one repeats)
+	down    bool                // unreachable: every request answers 502
 	srv     *httptest.Server
+}
+
+// offline makes the server unreachable (a gateway's 502), or reachable again.
+func (f *fakeServer) offline(down bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = down
 }
 
 func newServer(t *testing.T) *fakeServer {
@@ -148,6 +156,13 @@ func (f *fakeServer) answer(method string) json.RawMessage {
 }
 
 func (f *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	down := f.down
+	f.mu.Unlock()
+	if down {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	body, _ := io.ReadAll(r.Body)
 	type call struct {
 		ID     json.RawMessage `json:"id"`
@@ -764,9 +779,11 @@ func TestProjects(t *testing.T) {
 	}
 	r = m.run("", "projects", "--json")
 	wantCode(t, r, 0)
-	var got []map[string]string
-	if err := json.Unmarshal([]byte(r.out), &got); err != nil || len(got) == 0 ||
-		got[0]["org"] != "Acme" || got[0]["name"] != "Pricing" || got[0]["id"] != P {
+	var got struct {
+		Result []map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(r.out), &got); err != nil || len(got.Result) == 0 ||
+		got.Result[0]["org"] != "Acme" || got.Result[0]["name"] != "Pricing" || got.Result[0]["id"] != P {
 		t.Fatalf("--json: %v %s", err, r.out)
 	}
 }
@@ -782,7 +799,7 @@ func TestSadPathsEverywhere(t *testing.T) {
 		{[]string{"org", "members", "Acme"}, "org.members"},
 		{[]string{"org", "add-member", "Acme", "new@acme.test"}, "org.add_member"},
 		{[]string{"org", "remove-member", "Acme", "huy@acme.test", "--yes"}, "org.members"},
-		{[]string{"topic", "delete", P, "Rounding", "--yes"}, "key.fetch"},
+		{[]string{"topic", "delete", "Rounding", "--project", P, "--yes"}, "key.fetch"},
 		{[]string{"artifact", "list", "--project", P}, "key.fetch"},
 		{[]string{"deliverables", "--project", P}, "key.fetch"},
 		{[]string{"log", "--project", P}, "key.fetch"},
@@ -822,7 +839,7 @@ func TestSadPathsEverywhere(t *testing.T) {
 func TestNonMemberAndUnknownProject(t *testing.T) {
 	for _, tc := range []struct{ answer, reason string }{{"key.fetch!NOT_A_MEMBER", "NOT_A_MEMBER"}, {"key.fetch!UNKNOWN_PROJECT", "UNKNOWN_PROJECT"}} {
 		for _, args := range [][]string{
-			{"topic", "delete", P, "Rounding", "--yes"},
+			{"topic", "delete", "Rounding", "--project", P, "--yes"},
 			{"artifact", "list", "--project", P},
 			{"deliverables", "--project", P},
 			{"artifact", "write", "f.md", "--topic", "Rounding", "--summary", "x", "--project", P},

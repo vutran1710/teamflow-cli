@@ -20,6 +20,9 @@ import (
 	_ "github.com/vutran1710/teamflow-cli/internal/adapters/cursor"      // the Cursor CLI adapter
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/core"
+	"github.com/vutran1710/teamflow-cli/internal/ojson"
+	"github.com/vutran1710/teamflow-cli/internal/ops"
+	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
@@ -73,8 +76,11 @@ type command struct {
 	flags            []flagSpec
 	sub              []*command                   // a group's commands
 	raw              bool                         // takes its arguments as they are (team)
-	run              func(r *inv, a *parsed) int  // nil for a group
+	run              func(r *inv, a *parsed) int  // its plain output (nil: drawn from jsonRun; both nil: a group)
 	nargs            func(pos []string) (ok bool) // nil: any
+	// An agent command (in protocol/agent/commands.json): its line there, and its answer as JSON (--json).
+	spec    *protocol.AgentCommand
+	jsonRun jsonFn
 }
 
 func (c *command) flagNames() []string {
@@ -114,6 +120,9 @@ func (e usageError) Error() string { return e.msg }
 func parse(c *command, args []string) (*parsed, error) {
 	p := &parsed{str: map[string]string{}, set: map[string]bool{}, lists: map[string][]string{}}
 	byName := map[string]flagSpec{}
+	if c.jsonRun != nil { // every agent command takes --json
+		byName["--json"] = jsonFlag
+	}
 	for _, f := range c.flags {
 		byName["--"+f.name] = f
 		if f.short != "" {
@@ -169,13 +178,19 @@ type inv struct {
 	in     *bufio.Reader
 	out    io.Writer
 	errw   io.Writer
-	relay  bool // behind the /teamf slash command: a refusal is printed on stdout and exits 0
+	relay  bool   // behind the /teamf slash command: a refusal is printed on stdout and exits 0
+	json   bool   // --json: the answer (or the failure) is one JSON object on stdout
+	path   string // the command's words, as run
 	client *core.Core
 }
 
 // fail refuses with msg: on stderr with exit 1, or, behind the relay, on stdout with exit 0 (there a failing
 // command shows the person only "Shell command failed", and the agent gets nothing to tell them).
 func (r *inv) fail(msg string) int {
+	if r.json {
+		r.printJSON(ops.With(ojson.Obj{{Key: "error", Value: msg}}, r.news()))
+		return 1
+	}
 	if r.relay {
 		fmt.Fprintf(r.out, "Teamflow refused: %s\n", strings.TrimPrefix(msg, "refused: "))
 		return 0
@@ -249,6 +264,9 @@ func init() {
 		{name: "self-update", help: "Update teamflow to the newest release.", raw: true, run: later("self-update")},
 		{name: "debug", hidden: true, raw: true},
 	}
+	commands = append(commands, agentOnly...)
+	bindJSON()
+	bindAgentCommands()
 }
 
 // later is a command that arrives in a later build.
@@ -280,6 +298,10 @@ func usage(w io.Writer) {
 }
 
 func commandUsage(w io.Writer, path string, c *command) {
+	if c.spec != nil {
+		specUsage(w, c.spec, c)
+		return
+	}
 	line := "usage: teamflow " + path
 	if len(c.sub) > 0 {
 		line += " <command>"
@@ -351,7 +373,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if len(rest) > 0 {
 			sub = find(c.sub, rest[0])
 		}
-		if sub == nil && c.run == nil {
+		if sub == nil && c.run == nil && c.jsonRun == nil {
 			if len(rest) == 0 {
 				commandUsage(stderr, path, c)
 				return 2
@@ -389,7 +411,17 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil {
 		commandUsage(stderr, path, c)
 		fmt.Fprintf(stderr, "\nError: %s\n", err)
+		if p != nil && p.has("json") { // the agent reads stdout: the failure is there too, with the news
+			r.json = true
+			r.printJSON(ops.With(ojson.Obj{{Key: "error", Value: err.Error()}}, r.news()))
+		} else if c.jsonRun != nil {
+			r.trailer(r.news())
+		}
 		return 2
+	}
+	r.path = path
+	if c.jsonRun != nil {
+		return runAgent(r, c, p)
 	}
 	return c.run(r, p)
 }

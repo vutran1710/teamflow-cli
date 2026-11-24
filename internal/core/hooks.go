@@ -388,7 +388,7 @@ func (c *Core) fullContext(sess store.Session, budget int) (string, int64, int64
 			lines[i] = signalLine(s, byID, names)
 		}
 		text = join(fmt.Sprintf("Signals since that state (%d), one line each to fit; get any in full with "+
-			"signal_get <id>:\n", len(signals)) + strings.Join(lines, "\n"))
+			"`teamflow signal get <id>`:\n", len(signals)) + strings.Join(lines, "\n"))
 	}
 	return text, c.St.Cursors()[sess.Project], state.Version, nil
 }
@@ -463,7 +463,7 @@ func (c *Core) delta(sid string) (string, error) {
 				by = " by " + nameOf(names, *live.PublishedBy)
 			}
 			news = append(news, fmt.Sprintf("Deliverables v%d published%s: %d of %d milestones complete. Get them "+
-				"again (deliverables_get) before changing them.", live.Version, by, live.MilestonesDone, live.MilestonesTotal))
+				"again (`teamflow deliverables`) before changing them.", live.Version, by, live.MilestonesDone, live.MilestonesTotal))
 		}
 		actions, err := c.actionNews(sess, *live, system, names)
 		if err != nil {

@@ -108,7 +108,7 @@ func TestRefreshingCarriesNotices(t *testing.T) {
 	o := r.obj(t)
 	news, _ := o["approval_requests"].(string)
 	if !strings.Contains(news, "a new approval request arrived") || !strings.Contains(news, S1) ||
-		!strings.Contains(news, "«Needs Huy»") || !strings.Contains(news, "verdict tool") {
+		!strings.Contains(news, "«Needs Huy»") || !strings.Contains(news, "`teamflow approve <id> [note]`") {
 		t.Fatalf("approval_requests %q", news)
 	}
 	if n, _ := o["notices"].([]any); len(n) != 1 || !strings.Contains(n[0].(string), "Drift found") {

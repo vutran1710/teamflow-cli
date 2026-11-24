@@ -523,8 +523,8 @@ func UpdateJSONWith(path string, perm os.FileMode, change func(ojson.Obj) (ojson
 
 // WorkCommands are the teamflow commands an agent may run with no prompt. Every other one (SetupCommands) runs
 // only with the agent's own permission prompt. A CLI test keeps the two lists complete.
-var WorkCommands = []string{"projects", "status", "stop", "approve", "reject", "team", "topic", "artifact",
-	"deliverables", "drift", "project", "org", "profile", "tasks", "log"}
+var WorkCommands = []string{"projects", "status", "whoami", "inbox", "stop", "approve", "reject", "team", "topic",
+	"signal", "artifact", "deliverables", "action", "drift", "project", "org", "profile", "tasks", "log"}
 
 // SetupCommands change where Teamflow is set up, who is signed in, or the binary itself: never auto-allowed. sync
 // is here until the background sync is built (Task 10), so no spelling of `sync --stop` can slip through.

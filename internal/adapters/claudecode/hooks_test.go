@@ -4,9 +4,9 @@ package claudecode
 //
 // Replayed with two documented differences (both by design, see the design's "Revision: agent-agnostic"):
 //   - the full context no longer starts with the Python client's protocol text: the one instruction text is in
-//     CLAUDE.md (placed by install) and in the MCP server's instructions, so the expected context is the fixture's
+//     CLAUDE.md (placed by install), so the expected context is the fixture's
 //     from "## Teamflow: shared project" on;
-//   - the approval request's closing line is the agent-neutral one (verdicts through the verdict tool or `teamflow
+//   - the approval request's closing line is the agent-neutral one (verdicts through `teamflow
 //     approve`, on the person's explicit words), replacing the Python line ("/teamf approve … Never run those
 //     yourself").
 //

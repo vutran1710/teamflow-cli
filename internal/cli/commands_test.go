@@ -346,7 +346,7 @@ func TestTeamProjectMenu(t *testing.T) {
 	r := m.run("", "team", "--relay", "project")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "Teamflow projects you are in:", "- Acme/Pricing: topics Rounding, Currency",
-		"session_join")
+		"teamflow team project <project>")
 	lacks(t, "stdout", r.out, "/teamf", "Claude", "Plan")
 
 	m.srv.on("account.projects", `{"result": {"projects": [], "orgs": {}, "summaries": {}}}`)
@@ -461,7 +461,7 @@ func TestTopicDelete(t *testing.T) {
 	m.key()
 	m.srv.on("project.get", pricingGet)
 	m.srv.on("topic.delete", "topic.delete")
-	r := m.run("", "topic", "delete", P, "Rounding", "--yes")
+	r := m.run("", "topic", "delete", "Rounding", "--project", P, "--yes")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "deleted 'Rounding': 2 signal(s), 0 drift(s)")
 	p := params(t, onlyCall(t, m.srv, "topic.delete"))
@@ -475,18 +475,18 @@ func TestTopicDeleteConfirms(t *testing.T) {
 	m.key()
 	m.srv.on("project.get", pricingGet)
 	m.srv.on("topic.delete", "topic.delete")
-	r := m.run("", "topic", "delete", P, T1) // not a terminal, no --yes
+	r := m.run("", "topic", "delete", "Rounding", "--project", P) // not a terminal, no --yes
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "--yes")
 	noCall(t, m.srv, "topic.delete")
 
 	terminal(t, true, "")
-	r = m.run("n\n", "topic", "delete", P, T1)
+	r = m.run("n\n", "topic", "delete", "Rounding", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "Delete topic 'Rounding' and all its signals for everyone? [y/N]", "Aborted")
 	noCall(t, m.srv, "topic.delete")
 
-	r = m.run("y\n", "topic", "delete", P, T1)
+	r = m.run("y\n", "topic", "delete", T1, "--project", P)
 	wantCode(t, r, 0)
 	onlyCall(t, m.srv, "topic.delete")
 }
@@ -495,13 +495,13 @@ func TestTopicDeleteSadPaths(t *testing.T) {
 	m := newMachine(t, true)
 	m.key()
 	m.srv.on("project.get", pricingGet)
-	r := m.run("", "topic", "delete", P, "Nope", "--yes")
+	r := m.run("", "topic", "delete", "Nope", "--project", P, "--yes")
 	wantCode(t, r, 1)
-	contains(t, "stderr", r.err, "no topic 'Nope' in Pricing")
+	contains(t, "stderr", r.err, "no topic 'Nope'")
 	for _, tc := range []struct{ answer, want string }{{"topic.delete!NOT_ALLOWED", "NOT_ALLOWED: only the project's initiator can do this"},
 		{"topic.delete!TOPIC_HAS_ACTIONS", "TOPIC_HAS_ACTIONS"}} {
 		m.srv.on("topic.delete", tc.answer)
-		r = m.run("", "topic", "delete", P, "Rounding", "--yes")
+		r = m.run("", "topic", "delete", "Rounding", "--project", P, "--yes")
 		wantCode(t, r, 1)
 		contains(t, "stderr", r.err, tc.want)
 	}
@@ -744,19 +744,19 @@ func TestDeliverablesValidate(t *testing.T) {
 	_ = os.WriteFile("notjson.json", []byte(`[{`), 0o644)
 	_ = os.WriteFile("object.json", []byte(`{"name": "x"}`), 0o644)
 
-	r := m.run("", "deliverables", "validate", "good.json", "--project", P)
+	r := m.run("", "deliverables", "validate", "--file", "good.json", "--project", P)
 	wantCode(t, r, 0)
 	if r.out != "valid\n" {
 		t.Fatalf("%s", r)
 	}
-	r = m.run("", "deliverables", "--project", P, "validate", "wrapped.json")
+	r = m.run("", "deliverables", "validate", "--project", P, "--file", "wrapped.json")
 	wantCode(t, r, 0)
 
-	r = m.run("", "deliverables", "validate", "bad.json", "--project", P)
+	r = m.run("", "deliverables", "validate", "--file", "bad.json", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stdout", r.out, "1 problem:\n- milestone 1, action 2, due: Field required\n")
 
-	r = m.run("", "deliverables", "validate", "bad.json", "--project", P, "--json")
+	r = m.run("", "deliverables", "validate", "--file", "bad.json", "--project", P, "--json")
 	wantCode(t, r, 1)
 	var res struct {
 		Valid    bool     `json:"valid"`
@@ -765,18 +765,19 @@ func TestDeliverablesValidate(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.out), &res); err != nil || res.Valid || len(res.Problems) != 1 {
 		t.Fatalf("--json %v: %s", err, r.out)
 	}
-	r = m.run("", "deliverables", "validate", "good.json", "--project", P, "--json")
-	if r.out != "{\"valid\":true,\"problems\":[]}\n" {
+	r = m.run("", "deliverables", "validate", "--file", "good.json", "--project", P, "--json")
+	wantCode(t, r, 0)
+	if err := json.Unmarshal([]byte(r.out), &res); err != nil || !res.Valid || res.Problems == nil || len(res.Problems) != 0 {
 		t.Fatalf("--json valid: %q", r.out)
 	}
 
-	r = m.run("", "deliverables", "validate", "notjson.json", "--project", P)
+	r = m.run("", "deliverables", "validate", "--file", "notjson.json", "--project", P)
 	wantCode(t, r, 1)
-	contains(t, "stderr", r.err, "notjson.json is not JSON", "it must hold the list of milestones")
-	r = m.run("", "deliverables", "validate", "object.json", "--project", P)
+	contains(t, "stderr", r.err, "notjson.json is not JSON", "teamflow <command> --help` shows its shape")
+	r = m.run("", "deliverables", "validate", "--file", "object.json", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, `object.json must hold a list of milestones (or an object with "milestones")`)
-	r = m.run("", "deliverables", "validate", "missing.json", "--project", P)
+	r = m.run("", "deliverables", "validate", "--file", "missing.json", "--project", P)
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "no file")
 	if len(m.srv.sent("deliverables.publish")) != 0 {

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -139,8 +138,8 @@ var logoutCmd = &command{
 }
 
 var projectsCmd = &command{
-	name: "projects", help: "Every project you are in, across your orgs.", flags: []flagSpec{jsonFlag}, nargs: exactly(0),
-	run: func(r *inv, a *parsed) int {
+	name: "projects", help: "Every project you are in, across your orgs.", nargs: exactly(0),
+	run: func(r *inv, _ *parsed) int {
 		c, err := r.core()
 		if err != nil {
 			return r.failErr(err)
@@ -148,20 +147,6 @@ var projectsCmd = &command{
 		out, err := c.Projects(r.ctx)
 		if err != nil {
 			return r.failErr(err)
-		}
-		if a.has("json") {
-			type row struct {
-				Org  string `json:"org"`
-				Name string `json:"name"`
-				ID   string `json:"id"`
-			}
-			rows := []row{}
-			for _, v := range out.Projects {
-				rows = append(rows, row{orgName(out.Orgs, v.Project.Org), v.Project.Name, v.Project.ID})
-			}
-			b, _ := json.Marshal(rows)
-			r.println(string(b))
-			return 0
 		}
 		for _, v := range out.Projects {
 			r.printf("%s\t%s\t%s\n", orgName(out.Orgs, v.Project.Org), v.Project.Name, v.Project.ID)

@@ -806,12 +806,9 @@ func artifactPublish(k *Call, in artifactPublishIn) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	kind := protocol.ArtifactKind(str(in.Kind))
-	if kind == "" {
-		kind, _ = artifacts.Infer(in.Name, str(in.MediaType), "")
-	}
+	kind, media := artifacts.Infer(in.Name, str(in.MediaType), protocol.ArtifactKind(str(in.Kind))) // from the name when not given
 	d := artifacts.Signal(in.Name, in.Topic, kind, in.Summary, in.Points, str(in.Title), in.Supersedes, nil,
-		artifacts.Content{URL: in.URL, MediaType: str(in.MediaType), Size: in.Size, SHA256: str(in.Sha256)})
+		artifacts.Content{URL: in.URL, MediaType: media, Size: in.Size, SHA256: str(in.Sha256)})
 	if err := approval(d, in.Approvers, in.Required); err != nil {
 		return nil, err
 	}
@@ -943,7 +940,7 @@ func deliverablesGet(k *Call, in projectIn) (any, error) {
 				"initiator: nothing changes until they restore them."}}, nil
 		}
 		return ojson.Obj{{"deliverables", nil}, {"message", "This project has no Deliverables yet. Derive them from " +
-			"the plan and publish them with deliverables_publish (ask the person for any due date the plan does not give)."}}, nil
+			"the plan and publish them with `teamflow deliverables publish` (ask the person for any due date the plan does not give)."}}, nil
 	}
 	k.c.Sync(k.ctx, core.HookTimeout, pid) // names and topics for the answer
 	return k.deliverablesObj(pid, view, me), nil

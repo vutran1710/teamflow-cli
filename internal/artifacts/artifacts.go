@@ -28,7 +28,7 @@ import (
 // MaxBytes is the most the server stores for one artifact version (MAX_ARTIFACT_BYTES).
 const MaxBytes = protocol.MaxArtifactBytes
 
-// InlineChars is how many characters artifact_get returns inline; more is saved to a file.
+// InlineChars is how many characters of an artifact count as readable inline text.
 const InlineChars = 100_000
 
 type media struct {
@@ -231,12 +231,12 @@ func (e *TooLargeError) Error() string {
 		float64(e.Size)/1024/1024)
 }
 
-// TooLargeNext is what the artifact_write tool tells the agent to do with a file over the limit.
+// TooLargeNext is what `teamflow artifact write` tells the agent to do with a file over the limit.
 const TooLargeNext = "Teamflow stores files up to 5 MB. Ask the person where this file should live for the team " +
-	"(somewhere teammates already have access to), then call artifact_publish with its url, name, topic, kind, " +
-	"summary, points, size, sha256 and media_type as given here."
+	"(somewhere teammates already have access to), then publish its link: `teamflow artifact link <url> --name <name> " +
+	"--topic <topic> --summary <text> --file <this file>` (with its points and kind; --file records its size and SHA-256)."
 
-// Answer is the artifact_write tool's answer for a file over the limit (the Python tool's, field for field).
+// Answer is `teamflow artifact write`'s answer for a file over the limit (the Python tool's, field for field).
 func (e *TooLargeError) Answer() map[string]any {
 	return map[string]any{"accepted": false, "reason": string(protocol.RejectReasonArtifactTooLarge),
 		"message": e.Error(), "name": e.Name, "kind": string(e.Kind), "size": e.Size, "sha256": e.SHA256,
