@@ -23,8 +23,6 @@ import (
 	"slices"
 	"strings"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
@@ -192,6 +190,9 @@ func (a *Adapter) Install(binary string) ([]string, error) {
 	}
 	done = append(done, fmt.Sprintf("hooks %s and a deny rule for the Teamflow home in %s", strings.Join(Events, ", "),
 		home.Display(settingsPath())))
+	if _, err := os.Lstat(ClaudeJSON()); errors.Is(err, fs.ErrNotExist) {
+		m.Created = append(m.Created, "claude.json")
+	}
 	if err := updateJSON(ClaudeJSON(), func(doc ojson.Obj) (ojson.Obj, error) { return installMCP(doc, binary, &m) }); err != nil {
 		return done, err
 	}
@@ -215,49 +216,11 @@ func (a *Adapter) Install(binary string) ([]string, error) {
 	return done, m.save()
 }
 
-// lock serializes installs and uninstalls on this machine (a file lock in the Teamflow home).
-func lock() (func(), error) {
-	dir, err := home.Ensure()
-	if err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(dir, "install.lock"), os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
-		f.Close()
-		return nil, err
-	}
-	return func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN); f.Close() }, nil
-}
+func lock() (func(), error) { return adapters.InstallLock() }
 
-// updateJSON rewrites a JSON file Claude Code itself may be writing: read, change, and written only if the file is
-// still as it was read (else read again, a few times).
+// updateJSON rewrites a JSON file Claude Code itself may be writing (adapters.UpdateJSON), 0600 when new.
 func updateJSON(path string, change func(ojson.Obj) (ojson.Obj, error)) error {
-	for range 5 {
-		before, err := adapters.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		doc, err := adapters.ParseJSON(before, home.Display(path))
-		if err != nil {
-			return err
-		}
-		doc, err = change(doc)
-		if err != nil {
-			return err
-		}
-		now, err := adapters.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if !bytes.Equal(before, now) {
-			continue
-		}
-		return adapters.SaveJSON(path, doc, 0o600)
-	}
-	return fmt.Errorf("%s keeps changing (Claude Code is writing it): try again", home.Display(path))
+	return adapters.UpdateJSON(path, 0o600, change)
 }
 
 // hookCommand is how Claude Code runs Teamflow's hook for an event.
@@ -475,6 +438,9 @@ func (a *Adapter) Uninstall() ([]string, error) {
 				servers, _ = adapters.Without(servers, mcpName)
 				if len(servers) == 0 && (m.created("mcpServers") || !m.found) {
 					doc, _ = adapters.Without(doc, "mcpServers")
+					if len(doc) == 0 && m.created("claude.json") {
+						return nil, nil // the file install made, left empty, goes
+					}
 					return doc, nil
 				}
 				return doc.Set("mcpServers", servers), nil
@@ -657,11 +623,4 @@ func anyList(xs []string) []any {
 }
 
 // shellQuote quotes s for a POSIX shell when it needs it.
-func shellQuote(s string) string {
-	if s != "" && strings.IndexFunc(s, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("@%+=:,./_-", r))
-	}) < 0 {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
-}
+func shellQuote(s string) string { return adapters.ShellQuote(s) }

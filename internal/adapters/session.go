@@ -35,19 +35,29 @@ func (Ancestry) Current(st *store.Store) (store.Session, bool, error) {
 }
 
 // AgentPID is the agent process a hook runs under: the pid in envPID (an agent marker the agent sets for its
-// children) when it is one of the hook's ancestors, else the nearest ancestor whose command name starts with
-// name, else the hook's parent.
-func AgentPID(envPID, name string) int {
+// children) when it is one of the hook's ancestors, else the nearest ancestor whose command name starts with one
+// of names, else the nearest ancestor that is not a shell (an agent may run hooks through sh -c), else the parent.
+func AgentPID(envPID string, names ...string) int {
 	chain := procs.Ancestors(os.Getpid(), maxAncestors)
-	if p, err := strconv.Atoi(os.Getenv(envPID)); err == nil && p > 1 {
-		for _, a := range chain {
-			if a == p {
-				return p
+	if envPID != "" {
+		if p, err := strconv.Atoi(os.Getenv(envPID)); err == nil && p > 1 {
+			for _, a := range chain {
+				if a == p {
+					return p
+				}
 			}
 		}
 	}
 	for _, a := range chain {
-		if strings.HasPrefix(procs.Name(a), name) {
+		n := procs.Name(a)
+		for _, name := range names {
+			if strings.HasPrefix(n, name) {
+				return a
+			}
+		}
+	}
+	for _, a := range chain {
+		if !shells[strings.TrimPrefix(procs.Name(a), "-")] {
 			return a
 		}
 	}
@@ -56,3 +66,6 @@ func AgentPID(envPID, name string) int {
 	}
 	return os.Getppid()
 }
+
+// shells are the command names of the shells an agent may start a hook through.
+var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true}

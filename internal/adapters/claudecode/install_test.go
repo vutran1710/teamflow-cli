@@ -191,8 +191,8 @@ func TestInstallFresh(t *testing.T) {
 			if _, err := os.Stat(e.claudeMD()); err == nil {
 				t.Fatal("a CLAUDE.md that install made is left")
 			}
-			if j := decode(t, e.claudeJSON()); len(j) != 0 {
-				t.Fatalf("claude json left: %v", j)
+			if _, err := os.Stat(e.claudeJSON()); err == nil {
+				t.Fatal("a claude json that install made is left")
 			}
 		})
 	}
