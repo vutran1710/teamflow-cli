@@ -1220,26 +1220,78 @@ func TestExpiredAuthKeyWhileRunning(t *testing.T) {
 
 // ------------------------------------------------------------------ follow-up
 
-// A pong that arrives while an event is being applied (slowly) is heard: the silence check reads when the reader
-// last heard something, so a pong queued behind a slow apply never loses to the silence timer (no false reconnect).
-func TestPongBehindASlowApplyIsHeard(t *testing.T) {
+// The silence decision: a socket is dead only when nothing was heard since the ping (the reader's last-heard time,
+// not what the select loop got to): a frame heard at or after the ping, still queued behind a slow apply, keeps it.
+func TestSilenceDecision(t *testing.T) {
+	for _, tc := range []struct {
+		heard, pingAt int64
+		dead          bool
+	}{
+		{0, 1000, true},     // nothing heard at all
+		{900, 1000, true},   // heard only before the ping
+		{1000, 1000, false}, // heard at the ping's instant
+		{1500, 1000, false}, // heard after: queued behind an apply
+	} {
+		if got := deadAfterSilence(tc.heard, tc.pingAt); got != tc.dead {
+			t.Fatalf("heard %d, ping at %d: dead %v, want %v", tc.heard, tc.pingAt, got, tc.dead)
+		}
+	}
+}
+
+// The streaks of failed connects and silences: three quick silences in a row escalate to a failed connect; a socket
+// that was live a while (healthy) before it ended resets both, so occasional silences (sleep and wake over days)
+// never escalate; any other ending resets the silences.
+func TestStreak(t *testing.T) {
+	const healthy = time.Second
+	var k streak
+	got := []outcome{k.end(silent, 0, healthy), k.end(silent, 0, healthy), k.end(silent, 0, healthy), k.end(silent, 0, healthy)}
+	if !slices.Equal(got, []outcome{atOnce, atOnce, failed, failed}) || k.fails != 2 {
+		t.Fatalf("quick silences: %v, fails %d", got, k.fails)
+	}
+	if o := k.end(silent, healthy, healthy); o != atOnce || k.silences != 1 || k.fails != 0 {
+		t.Fatalf("a silence after a healthy socket: %v, %+v", o, k)
+	}
+	var days streak
+	for i := range 20 { // a laptop sleeping and waking over days: each socket was live for hours
+		if o := days.end(silent, 3*time.Hour, healthy); o != atOnce {
+			t.Fatalf("wake %d: %v", i, o)
+		}
+	}
+	var f streak
+	f.end(failed, 0, healthy)
+	f.end(failed, 0, healthy)
+	if o := f.end(failed, 2*healthy, healthy); o != failed || f.fails != 1 {
+		t.Fatalf("a refusal after a long live socket: %v, fails %d", o, f.fails)
+	}
+	f.end(silent, 0, healthy)
+	if o := f.end(dropped, 0, healthy); o != dropped || f.fails != 0 || f.silences != 0 {
+		t.Fatalf("a drop: %v %+v", o, f)
+	}
+	if o := f.end(stop, 0, healthy); o != stop {
+		t.Fatalf("stop: %v", o)
+	}
+}
+
+// Sleep and wake, end to end: each socket is healthy for a while, then goes silent once; every time the sync
+// reconnects at once, and never backs off or falls back to polling.
+func TestHealthySocketsResetTheSilences(t *testing.T) {
 	f := newFake(t)
 	f.add(P1, 1)
 	c := machine(t, f, P1)
 	o := fast(nil, nil)
-	o.PingEvery, o.Silence = 30*time.Millisecond, 60*time.Millisecond
-	o.Applied = func(string, int64) { time.Sleep(200 * time.Millisecond) } // slower than the silence limit
-	f.set(func() { f.pongDelay = 15 * time.Millisecond })                  // an event lands between a ping and its pong
+	o.PingEvery, o.Silence = 50*time.Millisecond, 100*time.Millisecond // healthy: live 300 ms or more
+	o.Backoff = []time.Duration{time.Hour}
 	start(t, c, o)
-	eventually(t, "live", func() bool { return f.liveOn(P1) && cursor(c, P1) == 1 })
-	for seq := int64(2); seq <= 12; seq++ {
-		f.push(P1, seq, nil)
-		time.Sleep(40 * time.Millisecond)
+	eventually(t, "live", func() bool { return f.liveOn(P1) })
+	for round := 1; round <= 4; round++ {
+		time.Sleep(400 * time.Millisecond) // healthy: pongs answered
+		f.set(func() { f.silent = true })
+		eventually(t, "a reconnect after the silence", func() bool { return len(f.hellosFor(P1)) == round+1 })
+		f.set(func() { f.silent = false })
 	}
-	eventually(t, "every event", func() bool { return cursor(c, P1) == 12 })
-	time.Sleep(300 * time.Millisecond)
-	if n := len(f.hellosFor(P1)); n != 1 {
-		t.Fatalf("%d hellos: a pong heard behind a slow apply was taken for silence", n)
+	eventually(t, "live", func() bool { return f.liveOn(P1) })
+	if n := f.count("sync.poll"); n != 0 {
+		t.Fatalf("fell back to polling after %d healthy sockets", 4)
 	}
 }
 

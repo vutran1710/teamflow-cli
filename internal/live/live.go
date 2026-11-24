@@ -444,41 +444,64 @@ const (
 // then the sync.poll fallback): a link always slower than the silence limit settles instead of reconnecting forever.
 const silentInARow = 3
 
+// streak counts a project's failed connects and silences in a row.
+type streak struct{ fails, silences int }
+
+// end updates the streaks for how a socket ended (live for liveFor; healthy: long enough to say the link works)
+// and says what to do next. A socket live at least healthy resets both streaks first, so silences spread over
+// days (sleep and wake) never escalate. A silence reconnects at once, unless it is the silentInARow-th in a row:
+// then it is a failed connect. Any other ending resets the silences; a reconnect at once or a drop resets the
+// failed connects.
+func (k *streak) end(o outcome, liveFor, healthy time.Duration) outcome {
+	if liveFor >= healthy {
+		k.fails, k.silences = 0, 0
+	}
+	if o == silent {
+		k.silences++
+		o = atOnce
+		if k.silences >= silentInARow {
+			o = failed
+		}
+	} else {
+		k.silences = 0
+	}
+	switch o {
+	case atOnce, dropped:
+		k.fails = 0
+	case failed:
+		k.fails++
+	}
+	return o
+}
+
 // work keeps the project's socket open until ctx ends or it must stop.
 func (r *runner) work(ctx context.Context, server, pid, key string) {
 	defer r.clearLive(pid) // the fallback's last answer is not trusted past the sync's end
-	fails, silences := 0, 0
+	healthy := 2 * (r.o.PingEvery + r.o.Silence)
+	var k streak
 	for ctx.Err() == nil {
-		if fails >= r.o.FailsBeforePoll {
+		if k.fails >= r.o.FailsBeforePoll {
 			if !r.pollFor(ctx, server, pid, key, r.o.SocketRetry) {
 				return
 			}
 		}
-		o := r.session(ctx, server, pid, key)
-		if o == silent {
-			silences++
-			if silences >= silentInARow {
-				o = failed
-			} else {
-				o = atOnce
-			}
-		} else {
-			silences = 0
+		var since time.Time
+		o := r.session(ctx, server, pid, key, &since)
+		var liveFor time.Duration
+		if !since.IsZero() {
+			liveFor = time.Since(since)
 		}
-		switch o {
+		switch k.end(o, liveFor, healthy) {
 		case stop:
 			return
 		case atOnce:
-			fails = 0
 			continue
 		case dropped:
-			fails = 0
 			if !sleep(ctx, r.o.backoff(0)) {
 				return
 			}
 		case failed:
-			fails++
-			if fails < r.o.FailsBeforePoll && !sleep(ctx, r.o.backoff(fails-1)) {
+			if k.fails < r.o.FailsBeforePoll && !sleep(ctx, r.o.backoff(k.fails-1)) {
 				return
 			}
 		}
@@ -559,8 +582,12 @@ type message struct {
 	err  error
 }
 
-// session is one socket of the project: ticket, connect, hello, then events until it ends.
-func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
+// deadAfterSilence: the silence timer of a ping sent at pingAt fired; the socket is dead only when the reader heard
+// nothing at or after it (unix ns). A frame heard but still queued behind a slow apply keeps it alive.
+func deadAfterSilence(heard, pingAt int64) bool { return heard < pingAt }
+
+// session is one socket of the project; since is set when it goes live.
+func (r *runner) session(ctx context.Context, server, pid, key string, since *time.Time) outcome {
 	say := r.says(pid, key)
 	a := api.New(server, key, core.DefaultTimeout).WithRecorder(r.st)
 	var tk protocol.LiveTicket
@@ -681,7 +708,7 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 				silence = time.NewTimer(r.o.Silence)
 			}
 		case <-silenceC():
-			if heard.Load() >= pingAt { // heard after the ping, still queued behind a slow apply: alive
+			if !deadAfterSilence(heard.Load(), pingAt) {
 				stopSilence()
 				continue
 			}
@@ -727,6 +754,7 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 				}
 				if !live {
 					live = true
+					*since = time.Now()
 					say("live")
 					t := time.NewTicker(r.o.PingEvery)
 					defer t.Stop()
