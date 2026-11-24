@@ -48,6 +48,10 @@ What stays on your machine:
 - `cmd/teamflow`: the binary.
 - `internal/protocol`: the wire types. `*_gen.go` are generated; never edit them.
 - `internal/protocolgen`, `tools/gen`: the generator (`go run ./tools/gen`).
+- `internal/deliverables`: the Deliverables check (a port of the server's, run before anything is sent), tested
+  against the shared vectors in `protocol/deliverables/vectors.json`.
+- `internal/artifacts`: reading a file to publish (at most 5 MB; larger ones are published as links), its kind
+  and media type, and pulling a stored version back.
 - `protocol/`: the protocol exported from the Teamflow server: `schema.json`, `methods.json`, golden messages,
   Deliverables test vectors, MCP tool list, hook fixtures and agent texts. `VERSION` names the server commit and
   protocol version it came from.
