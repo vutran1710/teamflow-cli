@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
@@ -150,11 +151,22 @@ func ApprovalRequestedText(id, title string, required, approvers int) string {
 		"or because a teammate's signal asks.", id, fenced(title), required, approvers)
 }
 
-// fenceSafe makes a teammate's text safe inside «»: one line, and no fence marks of its own.
-var fenceSafe = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ", "\u2028", " ", "\u2029", " ",
-	"«", "‹", "»", "›")
-
-func fenced(s string) string { return fenceSafe.Replace(s) }
+// fenced makes a teammate's text safe inside «»: one line (every C0 and C1 control, including NEL, VT and FF,
+// and the line and paragraph separators become spaces), and no fence marks of its own (« becomes ‹; » and its
+// lookalikes ≫ 》 ⟫ become ›).
+func fenced(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsControl(r) || r == '\u2028' || r == '\u2029':
+			return ' '
+		case r == '«':
+			return '‹'
+		case r == '»' || r == '≫' || r == '》' || r == '⟫':
+			return '›'
+		}
+		return r
+	}, strings.ReplaceAll(s, "\r\n", " "))
+}
 
 func signalAccepted(tx *store.Tx, e protocol.SignalAccepted, now time.Time) error {
 	st := e.Signal

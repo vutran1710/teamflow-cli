@@ -547,3 +547,13 @@ func TestApprovalTitleStaysData(t *testing.T) {
 		}
 	}
 }
+
+// TestApprovalFenceTakesNoControlsOrLookalikes: controls become spaces and close-quote lookalikes become ›.
+func TestApprovalFenceTakesNoControlsOrLookalikes(t *testing.T) {
+	title := "a\u0085b\vc\fd\x00e\x1bf\x7fg\u009bh≫i》j⟫k»l"
+	got := ApprovalRequestedText(S1, title, 1, 1)
+	inner := got[strings.Index(got, "«")+len("«") : strings.Index(got, "»")]
+	if inner != "a b c d e f g h›i›j›k›l" {
+		t.Errorf("fenced %q", inner)
+	}
+}

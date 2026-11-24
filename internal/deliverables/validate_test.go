@@ -2,9 +2,11 @@ package deliverables
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
@@ -167,6 +169,61 @@ func TestNewIDsAreWellFormedAndDistinct(t *testing.T) {
 				t.Fatalf("id %q (seen before: %v)", id, seen[id])
 			}
 			seen[id] = true
+		}
+	}
+}
+
+// TestLowerIsPythons: names compare as Python's str.lower compares them.
+func TestLowerIsPythons(t *testing.T) {
+	for in, want := range map[string]string{
+		"İstanbul": "i̇stanbul", "ΟΔΟΣ": "οδος", "Σ": "σ", "ΑΣ.": "ας.", "ΑΣ'Β": "ασ'β", "ΑΣ́": "ας́",
+		"ΑΣ1": "ας1", "1Σ": "1σ", "ABC": "abc", "": "",
+	} {
+		if got := lower(in); got != want {
+			t.Errorf("lower(%q) = %q, want %q", in, got, want)
+		}
+	}
+	m := func(names ...string) protocol.Milestone {
+		ms := protocol.Milestone{ID: "ms_00000000000000000000000001", Name: "M", Due: "2026-01-10"}
+		for i, n := range names {
+			ms.Actions = append(ms.Actions, protocol.Action{ID: fmt.Sprintf("ai_%026d", i+1), Name: n,
+				Topic: tpRounding, Due: "2026-01-10", After: []string{}})
+		}
+		return ms
+	}
+	day := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	topics := ctx().Topics
+	if p := CheckStructure([]protocol.Milestone{m("İstanbul", "Istanbul")}, nil, topics, nil, day); len(p) != 0 {
+		t.Errorf("İstanbul and Istanbul are two names in Python: %q", p)
+	}
+	if p := CheckStructure([]protocol.Milestone{m("ΟΔΟΣ", "οδος")}, nil, topics, nil, day); len(p) != 1 ||
+		!strings.Contains(p[0], "2 actions are named") {
+		t.Errorf("ΟΔΟΣ and οδος are one name in Python: %q", p)
+	}
+}
+
+func TestDateBounds(t *testing.T) {
+	for in, want := range map[string]string{
+		`1e20`:                        "Input should be a valid date or datetime, dates after 9999 are not supported as unix timestamps",
+		`253402300800000`:             "Input should be a valid date or datetime, dates after 9999 are not supported as unix timestamps",
+		`-1e20`:                       "Input should be a valid date or datetime, dates before 0000 are not supported as unix timestamps",
+		`-62135683200000`:             "Input should be a valid date in the format YYYY-MM-DD, year 0 is out of range",
+		`"2026-01-05T00:00:00+24:00"`: "Input should be a valid date or datetime, timezone offset must be less than 24 hours",
+		`"2026-01-05T00:00:00-24:00"`: "Input should be a valid date or datetime, timezone offset must be less than 24 hours",
+		`"2026-01-05T00:00+2400"`:     "Input should be a valid date or datetime, timezone offset must be less than 24 hours",
+		`"2026-01-05T24:00:00"`:       "Input should be a valid date or datetime, hour value is outside expected range of 0-23",
+		`"2026-01-05T00:60"`:          "Input should be a valid date or datetime, minute value is outside expected range of 0-59",
+	} {
+		_, problems := Specs(json.RawMessage(`[{"name": "M", "due": ` + in + `, "actions": [{"name": "a", "topic": "t", "due": "2026-01-01"}]}]`))
+		if len(problems) != 1 || problems[0] != "milestone 1, due: "+want {
+			t.Errorf("%s: %q", in, problems)
+		}
+	}
+	for in, want := range map[string]string{`253402214400000`: "9999-12-31", `-62135596800000`: "0001-01-01",
+		`"2026-01-05T00:00:00+23:59"`: "2026-01-05"} {
+		specs, problems := Specs(json.RawMessage(`[{"name": "M", "due": ` + in + `, "actions": [{"name": "a", "topic": "t", "due": "2026-01-01"}]}]`))
+		if len(problems) > 0 || specs[0].Due != want {
+			t.Errorf("%s: %v %q", in, specs, problems)
 		}
 	}
 }

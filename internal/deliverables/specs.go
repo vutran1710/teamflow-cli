@@ -225,6 +225,13 @@ var (
 	epoch    = time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
 )
 
+// Unix times pydantic takes for a date: 0000-01-01 to 9999-12-31 23:59:59 (year 0 itself is refused).
+const (
+	maxUnix   = 253402300799
+	minUnix   = -62167219200
+	year1Unix = -62135596800
+)
+
 const (
 	badDate  = "Input should be a valid date"
 	zeroTime = "Datetimes provided to dates should have zero time - e.g. be exact dates"
@@ -271,8 +278,18 @@ func (s *shaper) timestamp(where, n string) string {
 	if math.Abs(f) > 2e10 {
 		f /= 1000
 	}
-	if f != math.Trunc(f) || math.Mod(f, 86400) != 0 {
+	switch {
+	case f > maxUnix:
+		s.add(where, dateOr+"dates after 9999 are not supported as unix timestamps")
+		return ""
+	case f < minUnix:
+		s.add(where, dateOr+"dates before 0000 are not supported as unix timestamps")
+		return ""
+	case f != math.Trunc(f) || math.Mod(f, 86400) != 0:
 		s.add(where, zeroTime)
+		return ""
+	case f < year1Unix:
+		s.add(where, "Input should be a valid date in the format YYYY-MM-DD, year 0 is out of range")
 		return ""
 	}
 	return epoch.AddDate(0, 0, int(f/86400)).Format(time.DateOnly)
@@ -326,6 +343,27 @@ func dateString(x string) (string, string) {
 	m := timePart.FindStringSubmatch(x[11:])
 	if m == nil {
 		return "", dateOr + "input is too short"
+	}
+	hh, _ := strconv.Atoi(m[1])
+	mm, _ := strconv.Atoi(m[2])
+	ss, _ := strconv.Atoi("0" + m[3])
+	switch {
+	case hh > 23:
+		return "", dateOr + "hour value is outside expected range of 0-23"
+	case mm > 59:
+		return "", dateOr + "minute value is outside expected range of 0-59"
+	case ss > 59:
+		return "", dateOr + "second value is outside expected range of 0-59"
+	}
+	if tz := strings.ReplaceAll(m[5], ":", ""); len(tz) >= 3 {
+		oh, _ := strconv.Atoi(tz[1:3])
+		om := 0
+		if len(tz) >= 5 {
+			om, _ = strconv.Atoi(tz[3:5])
+		}
+		if oh*60+om >= 24*60 {
+			return "", dateOr + "timezone offset must be less than 24 hours"
+		}
 	}
 	if strings.Trim(m[1]+m[2]+m[3]+m[4], "0") != "" {
 		return "", zeroTime

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
@@ -391,6 +392,41 @@ func TestPull(t *testing.T) {
 		t.Fatalf("nothing: %q", got.Line())
 	}
 
+	// Without -o an existing file is never replaced (a teammate's name could pick .envrc or a Makefile), nor is
+	// a link followed; with -o a link is not written through.
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.WriteFile(filepath.Join(dir, "Makefile"), []byte("mine"), 0o644))
+	if _, err := Pull(content("Makefile", data, ref, nil), ""); err == nil || !strings.Contains(err.Error(), "-o") {
+		t.Fatalf("existing: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "Makefile")); string(b) != "mine" {
+		t.Fatal("an existing file was replaced")
+	}
+	victim := filepath.Join(dir, "victim")
+	must(os.WriteFile(victim, []byte("mine"), 0o644))
+	must(os.Symlink(victim, filepath.Join(dir, "link.md")))
+	for _, out := range []string{"", filepath.Join(dir, "link.md")} {
+		if _, err := Pull(content("link.md", data, ref, nil), out); err == nil {
+			t.Fatalf("written through a link (-o %q)", out)
+		}
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "mine" {
+		t.Fatal("written through a link")
+	}
+	// -o replaces a plain file the person named
+	if _, err := Pull(content("x.md", data, ref, nil), filepath.Join(dir, "Makefile")); err != nil {
+		t.Fatalf("-o over a file: %v", err)
+	}
+	// Content with no stored SHA-256 to check it against is refused.
+	if _, err := Pull(content("nosum.md", data, nil, nil), ""); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("no digest: %v", err)
+	}
+
 	// Content that is not what the server stored is refused, and nothing is written.
 	bad := sum([]byte("other"))
 	_, err = Pull(content("tampered.md", data, &protocol.StoredRef{Sha256: bad}, nil), "")
@@ -410,5 +446,75 @@ func TestPull(t *testing.T) {
 	c.Signal.Signal.Body = protocol.CommentBody{Type: "comment.v1", Text: "x"}
 	if _, err := Pull(c, ""); err == nil || !strings.Contains(err.Error(), "not an artifact") {
 		t.Fatalf("not an artifact: %v", err)
+	}
+}
+
+// TestHomeRefusedByIdentity: on a case-insensitive file system (macOS) a case variant of the Teamflow home is
+// the same folder, and is refused like it.
+func TestHomeRefusedByIdentity(t *testing.T) {
+	root := real(t)
+	tfHome := filepath.Join(root, ".teamflow")
+	write(t, filepath.Join(tfHome, "store.db"), []byte("KEYS"))
+	variant := filepath.Join(root, ".TEAMFLOW", "store.db")
+	if _, err := os.Stat(variant); err != nil {
+		t.Skip("the temp file system is case-sensitive")
+	}
+	for _, o := range []Options{{Home: tfHome}, {Home: filepath.Join(root, ".TeamFlow")}, {Home: tfHome, Project: root}} {
+		if p, err := Prepare(variant, o); err == nil || !strings.Contains(err.Error(), "Teamflow's own") || p.Data != nil {
+			t.Errorf("%+v: %v", o, err)
+		}
+	}
+	// a case variant of the project is still the project: a link out of it is refused
+	project := filepath.Join(root, "proj")
+	write(t, filepath.Join(root, "secret"), []byte("S"))
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "secret"), filepath.Join(project, "n.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(filepath.Join(root, "PROJ", "n.md"), Options{Project: project, Home: tfHome}); err == nil {
+		t.Error("a case variant of the project let a link out")
+	}
+}
+
+func fifo(t *testing.T, path string) string {
+	t.Helper()
+	if err := mkfifo(path); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	return path
+}
+
+// TestSpecialFilesRefusedWithoutOpening: a FIFO is refused at once (opening it would block the tool forever).
+func TestSpecialFilesRefusedWithoutOpening(t *testing.T) {
+	dir := real(t)
+	f := fifo(t, filepath.Join(dir, "pipe.md"))
+	done := make(chan error, 2)
+	go func() { _, err := Prepare(f, Options{}); done <- err }()
+	go func() { _, _, err := Link("https://x.test/a", "a.md", f, ""); done <- err }()
+	for range 2 {
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+				t.Errorf("fifo: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("a FIFO blocked")
+		}
+	}
+}
+
+// TestLinkCopyIsChecked: Link's local copy gets Prepare's checks.
+func TestLinkCopyIsChecked(t *testing.T) {
+	root := real(t)
+	tfHome := filepath.Join(root, "tfhome")
+	t.Setenv("TEAMFLOW_HOME", tfHome)
+	keys := write(t, filepath.Join(tfHome, "store.db"), []byte("KEYS"))
+	if _, _, err := Link("https://x.test/a", "a.db", keys, ""); err == nil || !strings.Contains(err.Error(), "Teamflow's own") {
+		t.Errorf("home: %v", err)
+	}
+	if _, _, err := Link("https://x.test/a", "a", root, ""); err == nil || !strings.Contains(err.Error(), "a folder") {
+		t.Errorf("folder: %v", err)
 	}
 }

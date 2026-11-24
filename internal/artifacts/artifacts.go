@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"github.com/vutran1710/teamflow-cli/internal/home"
@@ -283,21 +284,32 @@ type Options struct {
 	Home string
 }
 
-func within(p, dir string) bool {
-	if dir == "" {
+// under says whether p is the folder dir or inside it, by identity: each of p and its parents is compared with
+// dir as a file (os.SameFile), so a case variant on a case-insensitive file system, or a path through a link to
+// dir, is still dir.
+func under(p string, dir os.FileInfo) bool {
+	if dir == nil {
 		return false
 	}
-	rel, err := filepath.Rel(dir, p)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
+	for d := filepath.Clean(p); ; d = filepath.Dir(d) {
+		if fi, err := os.Stat(d); err == nil && os.SameFile(fi, dir) {
+			return true
+		}
+		if d == filepath.Dir(d) {
+			return false
+		}
+	}
 }
 
-// resolved is a path with every link followed; for a missing path, its cleaned absolute form.
-func resolved(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
+func statDir(p string) os.FileInfo {
+	if p == "" {
+		return nil
 	}
-	a, _ := filepath.Abs(p)
-	return filepath.Clean(a)
+	fi, err := os.Stat(expand(p))
+	if err != nil || !fi.IsDir() {
+		return nil
+	}
+	return fi
 }
 
 func expand(p string) string {
@@ -309,55 +321,63 @@ func expand(p string) string {
 	return p
 }
 
-// Prepare reads a file to publish. Over MaxBytes, it returns the file's size, digest, kind and media type with
-// a *TooLargeError and no bytes. A path inside the project that leads out of it, any path into the Teamflow
-// home, a folder or a missing file is refused.
-func Prepare(p string, o Options) (Prepared, error) {
+// open opens a file to read for publishing or measuring, after every check: never a file in the Teamflow home,
+// never a link from inside the project to outside it (when project is set), only a regular file (checked before
+// opening: a FIFO would block), and the file opened must be the file checked.
+func open(p, project, tfHome string) (*os.File, string, string, error) {
 	if p == "" {
-		return Prepared{}, errors.New("no file given")
+		return nil, "", "", errors.New("no file given")
 	}
 	abs, err := filepath.Abs(expand(p))
 	if err != nil {
-		return Prepared{}, fmt.Errorf("no file %s: %w", home.Display(p), err)
+		return nil, "", "", fmt.Errorf("no file %s: %w", home.Display(p), err)
 	}
 	shown := home.Display(abs)
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return Prepared{}, fmt.Errorf("no file %s", shown)
+		return nil, "", "", fmt.Errorf("no file %s", shown)
 	}
-	tfHome := o.Home
 	if tfHome == "" {
 		tfHome = home.Dir()
 	}
-	if h, err := filepath.Abs(tfHome); err == nil && (within(real, resolved(h)) || within(abs, filepath.Clean(h))) {
-		return Prepared{}, fmt.Errorf("%s is one of Teamflow's own files (keys and this machine's copy of your "+
+	if h := statDir(tfHome); under(real, h) || under(abs, h) {
+		return nil, "", "", fmt.Errorf("%s is one of Teamflow's own files (keys and this machine's copy of your "+
 			"projects): it is never published", shown)
 	}
-	if o.Project != "" {
-		project, err := filepath.Abs(o.Project)
-		if err == nil {
-			realProject := resolved(project)
-			if (within(abs, filepath.Clean(project)) || within(abs, realProject)) && !within(real, realProject) {
-				return Prepared{}, fmt.Errorf("%s is a link to a file outside the project: publish the file itself, "+
-					"from where it is", shown)
-			}
-		}
+	if pr := statDir(project); under(abs, pr) && !under(real, pr) {
+		return nil, "", "", fmt.Errorf("%s is a link to a file outside the project: publish the file itself, "+
+			"from where it is", shown)
+	}
+	checked, err := os.Stat(real)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("no file %s", shown)
+	}
+	if checked.IsDir() {
+		return nil, "", "", fmt.Errorf("%s is a folder: publish a file", shown)
+	}
+	if !checked.Mode().IsRegular() {
+		return nil, "", "", fmt.Errorf("%s is not a regular file", shown)
 	}
 	f, err := os.Open(real)
 	if err != nil {
-		return Prepared{}, fmt.Errorf("cannot read %s: %w", shown, errors.Unwrap(err))
+		return nil, "", "", fmt.Errorf("cannot read %s: %w", shown, errors.Unwrap(err))
+	}
+	if fi, err := f.Stat(); err != nil || !os.SameFile(fi, checked) {
+		f.Close()
+		return nil, "", "", fmt.Errorf("%s changed while it was being read: try again", shown)
+	}
+	return f, abs, shown, nil
+}
+
+// Prepare reads a file to publish. Over MaxBytes, it returns the file's size, digest, kind and media type with
+// a *TooLargeError and no bytes. A path inside the project that leads out of it, any path into the Teamflow
+// home, a folder, anything but a regular file, or a missing file is refused.
+func Prepare(p string, o Options) (Prepared, error) {
+	f, abs, shown, err := open(p, o.Project, o.Home)
+	if err != nil {
+		return Prepared{}, err
 	}
 	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return Prepared{}, fmt.Errorf("cannot read %s: %w", shown, errors.Unwrap(err))
-	}
-	if fi.IsDir() {
-		return Prepared{}, fmt.Errorf("%s is a folder: publish a file", shown)
-	}
-	if !fi.Mode().IsRegular() {
-		return Prepared{}, fmt.Errorf("%s is not a regular file", shown)
-	}
 	name := o.Name
 	if name == "" {
 		name = filepath.Base(abs)
@@ -460,15 +480,15 @@ func Link(url, name, file string, kind protocol.ArtifactKind) (Content, protocol
 	if file == "" {
 		return c, k, nil
 	}
-	f, err := os.Open(expand(file))
+	f, _, shown, err := open(file, "", "")
 	if err != nil {
-		return Content{}, "", fmt.Errorf("no file %s", home.Display(file))
+		return Content{}, "", err
 	}
 	defer f.Close()
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
-		return Content{}, "", fmt.Errorf("cannot read %s: %w", home.Display(file), err)
+		return Content{}, "", fmt.Errorf("cannot read %s: %w", shown, err)
 	}
 	c.Size, c.SHA256 = &n, hex.EncodeToString(h.Sum(nil))
 	return c, k, nil
@@ -493,7 +513,8 @@ func (p Pulled) Line() string {
 
 // Pull saves an artifact version's stored content to output, or to its name in the current folder; a link is
 // given back as its url. The name is a teammate's: only its last part is used, so it never picks a folder.
-// Content that does not match its stored SHA-256 is refused, and nothing is written.
+// Content that does not match its stored SHA-256, or has none, is refused, and nothing is written. Without
+// output an existing file is never replaced; a link is never written through.
 func Pull(c protocol.ArtifactContent, output string) (Pulled, error) {
 	body, ok := c.Signal.Signal.Body.(protocol.ArtifactBody)
 	if !ok {
@@ -510,19 +531,40 @@ func Pull(c protocol.ArtifactContent, output string) (Pulled, error) {
 	if err != nil {
 		return Pulled{}, fmt.Errorf("the server's content for %s is not base64", out.Version)
 	}
-	if body.Stored != nil && body.Stored.Sha256 != "" && !strings.EqualFold(body.Stored.Sha256, Digest(data)) {
+	if body.Stored == nil || body.Stored.Sha256 == "" {
+		return Pulled{}, fmt.Errorf("%s has no SHA-256 to check its content against: not saved", out.Version)
+	}
+	if !strings.EqualFold(body.Stored.Sha256, Digest(data)) {
 		return Pulled{}, fmt.Errorf("the content of %s does not match its SHA-256: not saved", out.Version)
 	}
 	target := expand(output)
+	// Without -o the name is a teammate's: a new file only, never an existing one or a link (it could pick
+	// .envrc or a Makefile). With -o the person chose the file: it may be replaced, but not written through a link.
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC | syscall.O_NOFOLLOW
 	if target == "" {
 		target = filepath.Base(body.Name)
 		if target == "." || target == ".." || target == "/" || body.Name == "" {
 			return Pulled{}, fmt.Errorf("the artifact's name %q is not a file name: pass -o <file>", body.Name)
 		}
+		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL | syscall.O_NOFOLLOW
 	} else if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return Pulled{}, err
 	}
-	if err := os.WriteFile(target, data, 0o644); err != nil {
+	if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return Pulled{}, fmt.Errorf("%s is a link: not written through; pass -o <file>", target)
+	}
+	f, err := os.OpenFile(target, flags, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return Pulled{}, fmt.Errorf("%s already exists: not replaced; pass -o <file>", target)
+	}
+	if err != nil {
+		return Pulled{}, fmt.Errorf("cannot write %s: %w", target, errors.Unwrap(err))
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return Pulled{}, err
+	}
+	if err := f.Close(); err != nil {
 		return Pulled{}, err
 	}
 	out.Path = target

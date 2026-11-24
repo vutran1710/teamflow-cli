@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
@@ -655,8 +656,54 @@ func unique(xs []string) []string {
 	return out
 }
 
-// lower is Python's str.lower for the names compared here.
-func lower(s string) string { return strings.ToLower(s) }
+// lower is Python's str.lower: Unicode's full lower-case mapping, which differs from strings.ToLower in two
+// places: İ (U+0130) becomes "i̇" (i and a combining dot), and Σ ending a word (a cased letter before it, none
+// after, case-ignorable characters skipped) becomes ς.
+func lower(s string) string {
+	rs := []rune(s)
+	var b strings.Builder
+	for i, r := range rs {
+		switch {
+		case r == 'İ':
+			b.WriteString("i\u0307")
+		case r == 'Σ' && finalSigma(rs, i):
+			b.WriteRune('ς')
+		default:
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
+}
+
+// finalSigma is Unicode's Final_Sigma condition at rs[i], as Python applies it.
+func finalSigma(rs []rune, i int) bool {
+	j := i - 1
+	for j >= 0 && caseIgnorable(rs[j]) {
+		j--
+	}
+	if j < 0 || !cased(rs[j]) {
+		return false
+	}
+	j = i + 1
+	for j < len(rs) && caseIgnorable(rs[j]) {
+		j++
+	}
+	return j == len(rs) || !cased(rs[j])
+}
+
+func cased(r rune) bool {
+	return unicode.In(r, unicode.Lu, unicode.Ll, unicode.Lt, unicode.Other_Lowercase, unicode.Other_Uppercase)
+}
+
+// caseIgnorable: Mn, Me, Cf, Lm, Sk, and the word-break MidLetter, MidNumLet and Single_Quote characters.
+func caseIgnorable(r rune) bool {
+	switch r {
+	case '\'', '.', ':', '·', '\u0387', '\u05f4', '\u2018', '\u2019', '\u2024', '\u2027', '\ufe13', '\ufe52',
+		'\ufe55', '\uff07', '\uff0e', '\uff1a', '\u055f', '\u00ad':
+		return true
+	}
+	return unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk)
+}
 
 // ------------------------------------------------------------------ validate
 
