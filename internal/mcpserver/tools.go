@@ -853,10 +853,11 @@ func (k *call) saveTo(path string, data []byte, overwrite bool) (string, error) 
 	}
 	saveRace("open")
 	// O_NONBLOCK: a FIFO swapped in after the checks never makes the open wait for a reader (it would hang the
-	// stdio server). O_EXCL whenever there was no file, so a file this call makes is known to be its own.
-	flags := os.O_WRONLY | os.O_CREATE | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	// stdio server). With no file there, O_CREATE|O_EXCL, so a file this call makes is known to be its own; over an
+	// existing file, no O_CREATE at all, so a target removed after the checks is refused, never made anew.
+	flags := os.O_WRONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 	if !existed {
-		flags |= os.O_EXCL
+		flags |= os.O_CREATE | os.O_EXCL
 	}
 	f, err := os.OpenFile(abs, flags, 0o644)
 	if err != nil {

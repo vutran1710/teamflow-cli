@@ -780,4 +780,27 @@ func TestSaveToLeavesNothingInTheHomeOnAParentSwap(t *testing.T) {
 	if after, err := os.ReadFile(mine); err != nil || string(after) != string(before) {
 		t.Fatalf("the home's config.json was changed or removed: %v", err)
 	}
+
+	// overwrite of an existing file: the target removed and its parent swapped for a link to the home after the
+	// checks; the open must not make a new (empty) file there.
+	saveRace = func(string) {}
+	_ = os.Remove(dir)
+	_ = os.Rename(dir+".moved2", dir)
+	existing := filepath.Join(dir, "spec.md")
+	if err := os.WriteFile(existing, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	saveRace = func(stage string) {
+		if stage == "open" {
+			_ = os.Rename(dir, dir+".moved3")
+			_ = os.Symlink(m.dir, dir)
+		}
+	}
+	r = m.call("artifact_get", map[string]any{"id": S1, "save_to": existing, "overwrite": true})
+	if !r.err {
+		t.Fatalf("overwrite through a swapped parent: %s", r)
+	}
+	if _, err := os.Lstat(filepath.Join(m.dir, "spec.md")); err == nil {
+		t.Fatal("overwrite left a file in the home")
+	}
 }
