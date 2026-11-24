@@ -383,10 +383,9 @@ func ofTypeAbout(ns []store.Notice, typ protocol.NoticeType) []string {
 	return out
 }
 
-// Only the server failing on the item counts: an unreachable server, 502/503/504, 429, UPGRADE_REQUIRED, a key no
-// longer a member's, and a 500 for everything never do, however long they last (nothing is lost offline). An
-// internal error and an answer this client can't read for the head alone, while the server answers other calls,
-// do.
+// Only the server failing on the item counts: an unreachable server, 502/503/504, 429, UPGRADE_REQUIRED and a key
+// no longer a member's never do, however long they last (nothing is lost offline), nor an unreadable answer
+// inside a batch. A 500, an internal error and an unreadable answer for the head alone do.
 func TestFlushCountsOnlyTheServerFailingOnTheItem(t *testing.T) {
 	st := openStore(t)
 	f, srv := newFake(t)
@@ -423,13 +422,13 @@ func TestFlushCountsOnlyTheServerFailingOnTheItem(t *testing.T) {
 	if it := item(t, st, S1); it.Fails != 0 || len(spooled(t, st)) != 2 {
 		t.Fatalf("an outage counted: %+v", it)
 	}
-	// 500 for every request, member.me too: an outage, never counted.
+	if a := item(t, st, S1); !a.Alone {
+		t.Fatalf("the head after requests that failed whole: %+v", a)
+	}
+	// The head alone failing (a 500, an internal error): its own failure, counted (dropped only if an item behind
+	// it is then answered: see TestStoreOnlyOutageDropsNothing).
 	f.set(func() { f.fail = func(int) int { return 500 } })
 	_, _ = Push(context.Background(), st, client(srv), ob)
-	if a := item(t, st, S1); a.Fails != 0 || !a.Alone {
-		t.Fatalf("a 500 outage: %+v", a)
-	}
-	// The head alone fails while the server answers member.me: its own failure.
 	f.set(func() {
 		f.fail = nil
 		f.callErr = func(id string) *protocol.RpcError {
@@ -440,8 +439,8 @@ func TestFlushCountsOnlyTheServerFailingOnTheItem(t *testing.T) {
 		}
 	})
 	_, _ = Push(context.Background(), st, client(srv), ob)
-	if a, b := item(t, st, S1), item(t, st, S2); a.Fails != 1 || b.Fails != 0 {
-		t.Fatalf("its own failure: %+v %+v", a, b)
+	if a, b := item(t, st, S1), item(t, st, S2); a.Fails != 2 || b.Fails != 0 {
+		t.Fatalf("its own failures: %+v %+v", a, b)
 	}
 	f.set(func() { f.callErr = nil })
 	f.set(func() {
@@ -460,8 +459,14 @@ func TestFlushCountsOnlyTheServerFailingOnTheItem(t *testing.T) {
 		}
 	})
 	_, _ = Push(context.Background(), st, client(srv), ob)
-	if a := item(t, st, S1); a.Fails != 2 {
-		t.Fatalf("an unreadable answer: %+v", a)
+	if a := item(t, st, S1); a.Fails != 3 {
+		t.Fatalf("an unreadable answer alone: %+v", a)
+	}
+	// Inside a batch, an unreadable answer never counts.
+	must(t, st.SetAlone(S1, false))
+	_, _ = Push(context.Background(), st, client(srv), ob)
+	if a := item(t, st, S1); a.Fails != 3 {
+		t.Fatalf("an unreadable answer in a batch counted: %+v", a)
 	}
 }
 
@@ -696,5 +701,47 @@ func TestHumanActIsNeverGivenUp(t *testing.T) {
 	}
 	if len(notices(t, st, "s1")) != 0 {
 		t.Fatal("told of a drop")
+	}
+}
+
+// Only the store is down (writes fail; everything else answers): every signal.emit fails, alone too, for 80 hours,
+// first as an internal error per call, then as an HTTP 500. The head is counted past the limit, but the item
+// behind it fails the same way, so nothing is dropped; a lone queued signal (nothing behind it) is never dropped.
+// Sad paths: a lone item, six items, per-call errors, whole-request 500s on signal.emit only.
+func TestStoreOnlyOutageDropsNothing(t *testing.T) {
+	for _, n := range []int{1, 6} {
+		t.Run(fmt.Sprint(n, " queued"), func(t *testing.T) {
+			st := openStore(t)
+			f, srv := newFake(t)
+			ids := notes(t, st, 0, n)
+			f.set(func() {
+				f.callErr = func(string) *protocol.RpcError {
+					return &protocol.RpcError{Code: protocol.CodeInternalError, Message: "D1 down"}
+				}
+			})
+			for i := range 80 {
+				at(t, t0.Add(time.Duration(i)*time.Hour))
+				if i == 40 {
+					f.set(func() { f.callErr = nil; f.failEmit = 500 })
+				}
+				_, _ = Push(context.Background(), st, client(srv), ob)
+			}
+			if got := spooled(t, st); len(got) != n {
+				t.Fatalf("a store outage dropped items: left %v", got)
+			}
+			if len(notices(t, st, "s1")) != 0 {
+				t.Fatal("told of a drop")
+			}
+			if it := item(t, st, ids[0]); it.Fails < GiveUpFails {
+				t.Fatalf("the head was not counted: %+v", it)
+			}
+			f.set(func() { f.failEmit = 0 })
+			at(t, t0.Add(81*time.Hour))
+			sent, err := Push(context.Background(), st, client(srv), ob)
+			must(t, err)
+			if sent != n {
+				t.Fatalf("back: sent %d", sent)
+			}
+		})
 	}
 }

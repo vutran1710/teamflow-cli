@@ -132,6 +132,7 @@ type fake struct {
 	rawAnswer func(id string) json.RawMessage                                // a raw result for a signal (nil: as usual)
 	driftAct  func(method string, params json.RawMessage) *protocol.RpcError // a drift act's answer (nil: done)
 	broken    *protocol.RpcError                                             // every call fails so (an outage)
+	failEmit  int                                                            // HTTP status for any request carrying signal.emit
 	order     []string                                                       // every call's signal or drift id, in the order the server read them (retries too)
 	requests  int
 }
@@ -156,6 +157,10 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bodies = append(f.bodies, json.RawMessage(body))
+	if f.failEmit != 0 && strings.Contains(string(body), `"signal.emit"`) {
+		w.WriteHeader(f.failEmit)
+		return
+	}
 	if f.fail != nil {
 		if code := f.fail(n); code != 0 {
 			w.WriteHeader(code)
