@@ -1089,8 +1089,8 @@ func TestLiveSyncOffFallsBackToPollAndKeepsKeys(t *testing.T) {
 	if len(f.helloList()) != 0 {
 		t.Fatal("a socket opened without a ticket")
 	}
-	if !strings.Contains(l.String(), "use sync.poll") {
-		t.Fatalf("not logged: %s", l)
+	if n := strings.Count(l.String(), "use sync.poll"); n != 2 { // once per project, however many retries
+		t.Fatalf("the refusal logged %d times: %s", n, l)
 	}
 	f.set(func() { f.pollErr[P2] = "NOT_ALLOWED" })
 	eventually(t, "sync.poll's refusal drops the key", func() bool { return !hasKey(c, P2) })
@@ -1137,7 +1137,8 @@ func TestHalfOpenSocketGoesStale(t *testing.T) {
 // With the default timing a dead socket is found within LiveFresh: a ping every 10 s, 5 s of silence.
 func TestDefaultsFindADeadSocketWithinLiveFresh(t *testing.T) {
 	o := Options{}.withDefaults()
-	if o.PingEvery != 10*time.Second || o.Silence != 5*time.Second || o.PingEvery+o.Silence > core.LiveFresh {
+	if o.PingEvery != protocol.LivePingSeconds*time.Second || o.Silence != protocol.LivePongSeconds*time.Second ||
+		o.PingEvery+o.Silence > core.LiveFresh {
 		t.Fatalf("ping %v, silence %v, LiveFresh %v", o.PingEvery, o.Silence, core.LiveFresh)
 	}
 }
@@ -1215,6 +1216,62 @@ func TestExpiredAuthKeyWhileRunning(t *testing.T) {
 		t.Fatalf("the sync stopped: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+// ------------------------------------------------------------------ follow-up
+
+// A pong that arrives while an event is being applied (slowly) is heard: the silence check reads when the reader
+// last heard something, so a pong queued behind a slow apply never loses to the silence timer (no false reconnect).
+func TestPongBehindASlowApplyIsHeard(t *testing.T) {
+	f := newFake(t)
+	f.add(P1, 1)
+	c := machine(t, f, P1)
+	o := fast(nil, nil)
+	o.PingEvery, o.Silence = 30*time.Millisecond, 60*time.Millisecond
+	o.Applied = func(string, int64) { time.Sleep(200 * time.Millisecond) } // slower than the silence limit
+	f.set(func() { f.pongDelay = 15 * time.Millisecond })                  // an event lands between a ping and its pong
+	start(t, c, o)
+	eventually(t, "live", func() bool { return f.liveOn(P1) && cursor(c, P1) == 1 })
+	for seq := int64(2); seq <= 12; seq++ {
+		f.push(P1, seq, nil)
+		time.Sleep(40 * time.Millisecond)
+	}
+	eventually(t, "every event", func() bool { return cursor(c, P1) == 12 })
+	time.Sleep(300 * time.Millisecond)
+	if n := len(f.hellosFor(P1)); n != 1 {
+		t.Fatalf("%d hellos: a pong heard behind a slow apply was taken for silence", n)
+	}
+}
+
+// A link always slower than the silence limit: after 3 silence-caused reconnects in a row the sync backs off as for
+// failed connects and then falls back to sync.poll, instead of reconnecting forever.
+func TestSilentReconnectsInARowBackOff(t *testing.T) {
+	f := newFake(t)
+	f.add(P1, 1)
+	f.set(func() { f.silent = true })
+	c := machine(t, f, P1)
+	o := fast(nil, nil)
+	o.PingEvery, o.Silence = 20*time.Millisecond, 40*time.Millisecond
+	o.Backoff = []time.Duration{200 * time.Millisecond}
+	o.SocketRetry = time.Hour
+	start(t, c, o)
+	eventually(t, "the fallback", func() bool { return f.count("sync.poll") > 0 })
+	hs := f.hellosFor(P1)
+	if len(hs) != 5 {
+		t.Fatalf("%d sockets before the fallback, want 3 at once and 2 after a backoff", len(hs))
+	}
+	for i := 1; i < len(hs); i++ {
+		gap := hs[i].At.Sub(hs[i-1].At)
+		if i < 3 && gap >= 200*time.Millisecond || i >= 3 && gap < 200*time.Millisecond {
+			t.Fatalf("socket %d opened %v after the one before", i, gap)
+		}
+	}
+	time.Sleep(400 * time.Millisecond)
+	if n := len(f.hellosFor(P1)); n != 5 {
+		t.Fatalf("%d sockets while polling", n)
+	}
+	f.push(P1, 2, nil)
+	eventually(t, "events by poll", func() bool { return cursor(c, P1) == 2 })
 }
 
 // ------------------------------------------------------------------ helpers

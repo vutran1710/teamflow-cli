@@ -62,6 +62,7 @@ type fake struct {
 	urls                                []string                               // each /live request's URL
 	headers                             []http.Header                          // each /live request's headers
 	keyFetch                            string                                 // key.fetch refuses with this reason ("": answers)
+	pongDelay                           time.Duration                          // each pong waits this long
 	liveOff                             bool                                   // live.ticket refuses every project as a server with live sync off does
 	pollErr                             map[string]string                      // project -> the reason sync.poll refuses it with
 	emitHook                            func(n int, client string) (fail bool) // before signal.emit request n (1-based), outside the lock
@@ -269,8 +270,9 @@ func (f *fake) live(w http.ResponseWriter, r *http.Request) {
 func (f *fake) pong(ctx context.Context, conn *websocket.Conn) {
 	f.mu.Lock()
 	f.pings++
-	silent := f.silent
+	silent, delay := f.silent, f.pongDelay
 	f.mu.Unlock()
+	time.Sleep(delay)
 	if !silent {
 		_ = conn.Write(ctx, websocket.MessageText, []byte(protocol.LivePong))
 	}

@@ -7,8 +7,9 @@
 // message (LiveHello), then each LiveEvents applied in one transaction with its cursor and the project's live_at.
 // The first answer means the socket is live. The live rules:
 //
-//   - a ping every PingEvery (10 s) once live; nothing heard within Silence (5 s) of a ping: the socket is dead, and
-//     a new one opens at once with a fresh ticket from the cursor. live_at moves only when something is heard (a
+//   - a ping every LIVE_PING_SECONDS (10 s) once live; nothing heard within LIVE_PONG_SECONDS (5 s) of a ping: the
+//     socket is dead, and a new one opens at once with a fresh ticket from the cursor (after 3 such in a row, the
+//     backoff and the fallback, as for failed connects). live_at moves only when something is heard (a
 //     pong or a message) and is cleared when a socket ends, so hooks trust a dead socket for at most
 //     PingEvery + Silence (15 s, LiveFresh) and pull again at once after a socket closes;
 //   - reset (the cursor is beyond a restored server's head): the project's replica is dropped and caught up from 0;
@@ -39,6 +40,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -63,8 +65,8 @@ var ErrRunning = errors.New("the background sync is already running")
 // Options tune the sync; a zero field takes the protocol's value.
 type Options struct {
 	IdleExit        time.Duration   // no active agent session this long: exit (10 min)
-	PingEvery       time.Duration   // 10 s (the controller's ruling: the server answers pings without waking)
-	Silence         time.Duration   // 5 s: nothing heard this long after a ping, the socket is dead
+	PingEvery       time.Duration   // LIVE_PING_SECONDS (10 s)
+	Silence         time.Duration   // LIVE_PONG_SECONDS (5 s): nothing heard this long after a ping, the socket is dead
 	FirstAnswer     time.Duration   // a hello unanswered this long is a failed connect (LIVE_HELLO + LIVE_PONG)
 	Backoff         []time.Duration // waits after failed connects: 1, 2, 3, 5, 8, 13 s (the last repeats)
 	FailsBeforePoll int             // failed connects in a row before falling back to sync.poll (3)
@@ -78,8 +80,8 @@ type Options struct {
 // DefaultPingEvery and DefaultSilence: a socket that stops answering is found dead within their sum, which is
 // core.LiveFresh: hooks never trust a dead socket longer than they would trust a live one.
 const (
-	DefaultPingEvery = 10 * time.Second
-	DefaultSilence   = 5 * time.Second
+	DefaultPingEvery = protocol.LivePingSeconds * time.Second
+	DefaultSilence   = protocol.LivePongSeconds * time.Second
 )
 
 // lockRetry: a start finding the lock held tries again for this long (a --status or --stop probe holds it briefly).
@@ -432,22 +434,38 @@ type outcome int
 
 const (
 	stop    outcome = iota // never again in this run (ctx ended, REPLACED, NOT_A_MEMBER, UPGRADE_REQUIRED)
-	atOnce                 // reconnect at once (TOO_SLOW, reset, a live socket gone silent)
+	atOnce                 // reconnect at once (TOO_SLOW, reset)
+	silent                 // a live socket gone silent: at once, unless it keeps happening (silentInARow)
 	dropped                // a live socket closed: reconnect after the first backoff
 	failed                 // a failed connect: backoff, then the fallback
 )
 
+// silentInARow: after this many silence-caused reconnects in a row, a silence counts as a failed connect (backoff,
+// then the sync.poll fallback): a link always slower than the silence limit settles instead of reconnecting forever.
+const silentInARow = 3
+
 // work keeps the project's socket open until ctx ends or it must stop.
 func (r *runner) work(ctx context.Context, server, pid, key string) {
 	defer r.clearLive(pid) // the fallback's last answer is not trusted past the sync's end
-	fails := 0
+	fails, silences := 0, 0
 	for ctx.Err() == nil {
 		if fails >= r.o.FailsBeforePoll {
 			if !r.pollFor(ctx, server, pid, key, r.o.SocketRetry) {
 				return
 			}
 		}
-		switch r.session(ctx, server, pid, key) {
+		o := r.session(ctx, server, pid, key)
+		if o == silent {
+			silences++
+			if silences >= silentInARow {
+				o = failed
+			} else {
+				o = atOnce
+			}
+		} else {
+			silences = 0
+		}
+		switch o {
 		case stop:
 			return
 		case atOnce:
@@ -555,6 +573,11 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 			say("live.ticket refused, not reconnecting: %v", err)
 			return stop
 		}
+		if errors.As(err, &ae) && ae.Reason == string(protocol.RejectReasonNotAllowed) {
+			// Live sync off on this server ("use sync.poll"): said once per project, not at every retry.
+			r.logOnce("ticket refused "+pid, "teamflow sync: %s: live.ticket: %v", pid, err)
+			return failed
+		}
 		say("live.ticket: %v", err)
 		return failed
 	}
@@ -595,9 +618,13 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 	sctx, scancel := context.WithCancel(ctx)
 	defer scancel()
 	msgs := make(chan message, 16)
+	var heard atomic.Int64 // when the reader last got anything (unix ns): the silence check reads it
 	go func() {
 		for {
 			typ, data, err := conn.Read(sctx)
+			if err == nil {
+				heard.Store(time.Now().UnixNano())
+			}
 			select {
 			case msgs <- message{typ, data, err}:
 			case <-sctx.Done():
@@ -618,6 +645,7 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 	defer first.Stop()
 	var ping <-chan time.Time
 	var silence *time.Timer
+	var pingAt int64
 	silenceC := func() <-chan time.Time {
 		if silence == nil {
 			return nil
@@ -649,11 +677,16 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 				return dropped
 			}
 			if silence == nil {
+				pingAt = time.Now().UnixNano()
 				silence = time.NewTimer(r.o.Silence)
 			}
 		case <-silenceC():
+			if heard.Load() >= pingAt { // heard after the ping, still queued behind a slow apply: alive
+				stopSilence()
+				continue
+			}
 			say("nothing heard within %v of a ping: reconnecting", r.o.Silence)
-			return end(websocket.StatusNormalClosure, atOnce)
+			return end(websocket.StatusNormalClosure, silent)
 		case m := <-msgs:
 			if m.err != nil {
 				if ctx.Err() != nil {
