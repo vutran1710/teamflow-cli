@@ -196,6 +196,9 @@ func (a *Adapter) Install(binary string) ([]string, error) {
 		return done, err
 	}
 	done = append(done, fmt.Sprintf("MCP server '%s' in %s", mcpName, home.Display(ClaudeJSON())))
+	if _, err := os.Lstat(claudeMD()); errors.Is(err, fs.ErrNotExist) {
+		m.Created = append(m.Created, "CLAUDE.md")
+	}
 	if err := adapters.PlaceBlock(claudeMD(), protocol.AgentInstructions); err != nil {
 		return done, err
 	}
@@ -265,9 +268,17 @@ func hookCommand(binary, event string) string {
 // installSettings is settings with Teamflow's earlier hooks taken out (its own or the Python client's) and its
 // hooks and deny rules added; refused when the settings' shape is not Claude Code's.
 func installSettings(s ojson.Obj, binary string, m *manifest) (ojson.Obj, error) {
-	s, _, err := stripHooks(s, nil)
+	s, _, emptied, err := stripHooks(s, nil)
 	if err != nil {
 		return nil, err
+	}
+	// An event (or the whole hooks object) that held only Teamflow's earlier entries is Teamflow's: uninstall
+	// takes it out again.
+	for _, ev := range emptied {
+		m.Created = append(m.Created, "hooks."+ev)
+	}
+	if hooks, ok := adapters.Obj(get(s, "hooks")); ok && len(emptied) > 0 && len(emptied) == len(hooks) {
+		m.Created = append(m.Created, "hooks")
 	}
 	hooksV, has := s.Get("hooks")
 	if !has {
@@ -378,11 +389,11 @@ func DenyRules(binary string) []string {
 		texts = []string{dir}
 	}
 	rules := []string{"Read(" + p + ")", "Read(" + p + "/**)", "Edit(" + p + ")", "Edit(" + p + "/**)"}
-	if !strings.HasPrefix(binary, dir+string(filepath.Separator)) {
+	if !strings.HasPrefix(binary, dir+string(filepath.Separator)) && !strings.Contains(binary, ".teamflow/") {
 		for _, t := range texts {
 			rules = append(rules, "Bash(*"+t+"*)")
 		}
-		rules = append(rules, "Bash(*TEAMFLOW_HOME*)")
+		rules = append(rules, "Bash(*.teamflow/*)", "Bash(*TEAMFLOW_HOME*)")
 	}
 	return rules
 }
@@ -446,7 +457,7 @@ func (a *Adapter) Uninstall() ([]string, error) {
 		return nil, err
 	}
 	var done []string
-	s, changed, err := stripHooks(settings, &m)
+	s, changed, _, err := stripHooks(settings, &m)
 	if err != nil {
 		return nil, err
 	}
@@ -478,6 +489,12 @@ func (a *Adapter) Uninstall() ([]string, error) {
 		return done, err
 	} else if removed {
 		done = append(done, "removed the Teamflow instructions from "+home.Display(claudeMD()))
+		// A CLAUDE.md install made, left empty, goes too; one the person had, or wrote into, stays.
+		if b, err := adapters.ReadFile(claudeMD()); err == nil && len(b) == 0 && m.created("CLAUDE.md") {
+			if err := os.Remove(claudeMD()); err != nil {
+				return done, err
+			}
+		}
 	}
 	if b, err := adapters.ReadFile(teamfPath()); err != nil {
 		return done, err
@@ -538,21 +555,22 @@ func stripDeny(s ojson.Obj, m manifest) (ojson.Obj, bool) {
 // stripHooks takes Teamflow's hook entries (its own or the Python client's) out of the settings; a group left with
 // no hooks goes. With m (uninstall), an event list and the hooks object left empty go too when install made them
 // (or, with no record, as the Python client did). Refused when hooks is not Claude Code's shape.
-func stripHooks(s ojson.Obj, m *manifest) (ojson.Obj, bool, error) {
+func stripHooks(s ojson.Obj, m *manifest) (ojson.Obj, bool, []string, error) {
 	hooksV, has := s.Get("hooks")
 	if !has {
-		return s, false, nil
+		return s, false, nil, nil
 	}
 	hooks, ok := hooksV.(ojson.Obj)
 	if !ok {
-		return nil, false, fmt.Errorf("%s: hooks is not an object; fix it by hand first", home.Display(settingsPath()))
+		return nil, false, nil, fmt.Errorf("%s: hooks is not an object; fix it by hand first", home.Display(settingsPath()))
 	}
 	changed := false
+	var emptied []string
 	var out ojson.Obj
 	for _, kv := range hooks {
 		groups, ok := kv.Value.([]any)
 		if !ok {
-			return nil, false, fmt.Errorf("%s: hooks.%s is not a list; fix it by hand first", home.Display(settingsPath()), kv.Key)
+			return nil, false, nil, fmt.Errorf("%s: hooks.%s is not a list; fix it by hand first", home.Display(settingsPath()), kv.Key)
 		}
 		var kept []any
 		for _, g := range groups {
@@ -581,6 +599,9 @@ func stripHooks(s ojson.Obj, m *manifest) (ojson.Obj, bool, error) {
 		if kept == nil {
 			kept = []any{}
 		}
+		if len(kept) == 0 && len(groups) > 0 {
+			emptied = append(emptied, kv.Key)
+		}
 		if m != nil && len(kept) == 0 && len(groups) > 0 && (m.created("hooks."+kv.Key) || !m.found) {
 			continue
 		}
@@ -588,12 +609,12 @@ func stripHooks(s ojson.Obj, m *manifest) (ojson.Obj, bool, error) {
 	}
 	if m != nil && len(out) == 0 && changed && (m.created("hooks") || !m.found) {
 		s, _ = adapters.Without(s, "hooks")
-		return s, true, nil
+		return s, true, emptied, nil
 	}
 	if out == nil {
 		out = ojson.Obj{}
 	}
-	return s.Set("hooks", out), changed, nil
+	return s.Set("hooks", out), changed, emptied, nil
 }
 
 func hookEntries(g any) []any {

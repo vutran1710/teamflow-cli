@@ -2,8 +2,8 @@ package claudecode
 
 // Claude Code's hooks, mapped to Teamflow's: SessionStart (the session recorded against its Claude Code process;
 // the full context when shared; the background sync started again), UserPromptSubmit (what is new: notices,
-// approval requests, signals), PreToolUse (a new approval request mid-turn, added to the tool call's context once;
-// no guard), Stop (a new approval request at the turn's end keeps Claude going once, to ask), SessionEnd (the spool
+// approval requests, signals), PreToolUse (a new approval request mid-turn, added to the tool call's context once,
+// from the replica; no guard), Stop (a new approval request at the turn's end keeps Claude going once, to ask), SessionEnd (the spool
 // sent).
 
 import (
@@ -70,8 +70,8 @@ func (*Adapter) Hook(event string, stdin []byte, c *core.Core) ([]byte, error) {
 	case "UserPromptSubmit":
 		text, err := c.Prompt(ctx, sid, Name, adapters.AgentPID(EnvPID, "claude"), in.Cwd, in.Prompt)
 		return addContext(event, text), err
-	case "PreToolUse":
-		return addContext(event, c.AfterTurn(ctx, sid)), nil
+	case "PreToolUse": // every step of the turn: from the replica, the network at most once per 10 s
+		return addContext(event, c.MidTurn(ctx, sid)), nil
 	case "Stop":
 		if in.StopHookActive { // a turn the Stop hook continued is never blocked again
 			return nil, nil

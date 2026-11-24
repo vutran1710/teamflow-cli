@@ -146,7 +146,7 @@ func TestInstallFresh(t *testing.T) {
 				t.Fatalf("hook entry %v", h)
 			}
 			deny := s["permissions"].(map[string]any)["deny"].([]any)
-			for _, want := range []string{"Read(~/.teamflow)", "Read(~/.teamflow/**)", "Edit(~/.teamflow/**)", "Bash(*~/.teamflow*)", "Bash(*$HOME/.teamflow*)"} {
+			for _, want := range []string{"Read(~/.teamflow)", "Read(~/.teamflow/**)", "Edit(~/.teamflow/**)", "Bash(*~/.teamflow*)", "Bash(*$HOME/.teamflow*)", "Bash(*.teamflow/*)"} {
 				if !containsAny(deny, want) {
 					t.Fatalf("deny lacks %s: %v", want, deny)
 				}
@@ -188,8 +188,8 @@ func TestInstallFresh(t *testing.T) {
 			if _, err := os.Stat(e.teamf()); err == nil {
 				t.Fatal("teamf.md left")
 			}
-			if md := read(t, e.claudeMD()); md != "" {
-				t.Fatalf("CLAUDE.md left: %q", md)
+			if _, err := os.Stat(e.claudeMD()); err == nil {
+				t.Fatal("a CLAUDE.md that install made is left")
 			}
 			if j := decode(t, e.claudeJSON()); len(j) != 0 {
 				t.Fatalf("claude json left: %v", j)
@@ -503,4 +503,87 @@ func diffFiles(a, b map[string]string) []string {
 		}
 	}
 	return out
+}
+
+// A Python-era settings.json with only Teamflow's Stop hook: after install and uninstall it is as it was before
+// Teamflow (the person's own key kept, the Python entry and the hooks it lived in gone).
+func TestPythonOnlyHookRestoredAfterUninstall(t *testing.T) {
+	e := newEnv(t, true)
+	e.write(t, e.settings(), `{
+  "model": "x",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/tf/bin/teamflow hook claude-code Stop",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+`, 0o644)
+	_, err := New().Install(e.bin)
+	must(t, err)
+	_, err = New().Uninstall()
+	must(t, err)
+	if got := read(t, e.settings()); got != "{\n  \"model\": \"x\"\n}\n" {
+		t.Fatalf("not as before Teamflow:\n%s", got)
+	}
+}
+
+// CLAUDE.md: one install made is removed with the block; one the person had (even empty) stays.
+func TestClaudeMDMissingVersusEmpty(t *testing.T) {
+	e := newEnv(t, true)
+	_, err := New().Install(e.bin)
+	must(t, err)
+	_, err = New().Install(e.bin) // a reinstall still knows install made it
+	must(t, err)
+	_, err = New().Uninstall()
+	must(t, err)
+	if _, err := os.Stat(e.claudeMD()); err == nil {
+		t.Fatal("the CLAUDE.md install made is left")
+	}
+	e.write(t, e.claudeMD(), "", 0o644)
+	_, err = New().Install(e.bin)
+	must(t, err)
+	_, err = New().Uninstall()
+	must(t, err)
+	if b, err := os.ReadFile(e.claudeMD()); err != nil || len(b) != 0 {
+		t.Fatalf("the person's empty CLAUDE.md: %q %v", b, err)
+	}
+	// The person wrote into a CLAUDE.md install made: it stays, with their words.
+	must(t, os.Remove(e.claudeMD()))
+	_, err = New().Install(e.bin)
+	must(t, err)
+	must(t, os.WriteFile(e.claudeMD(), []byte(read(t, e.claudeMD())+"mine\n"), 0o644))
+	_, err = New().Uninstall()
+	must(t, err)
+	if got := read(t, e.claudeMD()); got != "mine\n" {
+		t.Fatalf("the person's words in a made CLAUDE.md: %q", got)
+	}
+}
+
+// The hook before each tool goes through core.MidTurn: 50 tool steps make at most one network sync (the throttle's
+// own sad paths, a black-holed server and a live background sync, are tested in core).
+func TestPreToolUseStaysOffTheNetwork(t *testing.T) {
+	m := newMachine(t, true)
+	m.share("huy-1", Huy)
+	for range 50 {
+		m.hook("PreToolUse", `{"session_id": "huy-1", "tool_name": "Bash"}`)
+	}
+	m.srv.mu.Lock()
+	polls := 0
+	for _, c := range m.srv.calls {
+		if c == "sync.poll" {
+			polls++
+		}
+	}
+	m.srv.mu.Unlock()
+	if polls > 1 {
+		t.Fatalf("50 tool steps made %d syncs", polls)
+	}
 }

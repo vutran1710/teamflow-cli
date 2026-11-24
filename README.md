@@ -63,6 +63,33 @@ result carries what is new for the session: approval requests waiting for you, a
 (`~/.teamflow/store.db`); a Python-era `client.sqlite` is left alone and can be deleted, so sign in once more with
 `teamflow login`.
 
+## Claude Code
+
+`teamflow install -a claude-code` writes only Teamflow's own entries ($CLAUDE_CONFIG_DIR, else `~/.claude`):
+
+- `.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` or `~/.claude.json`): the MCP server `teamflow`;
+- `settings.json`: hooks for SessionStart, UserPromptSubmit, PreToolUse, Stop and SessionEnd, and
+  `permissions.deny` rules for the Teamflow home (backed up once as `settings.json.teamflow-backup`);
+- `CLAUDE.md`: the instruction text, word for word, between `<!-- teamflow:begin … -->` and `<!-- teamflow:end -->`;
+- `commands/teamf.md`: the `/teamf` command;
+- `.teamflow-install.json`: what install added, so `teamflow uninstall` takes out exactly that.
+
+A malformed or read-only file stops the install before anything is written. Your own settings, hooks, rules and
+instructions stay byte for byte; a Python-era install's entries are replaced, never doubled. A hook never fails
+your agent's step: on any trouble it adds nothing and writes `~/.teamflow/hook.log`. The hook before each tool
+works from the local copy and goes to the network at most once every 10 seconds per project (1-second timeout;
+none for 30 seconds after a failure; none while the background sync is live).
+
+**The deny rules' limits.** The rules (`Read(~/.teamflow)`, `Read(~/.teamflow/**)`, `Edit(…)` the same, and
+`Bash(*~/.teamflow*)`, `Bash(*$HOME/.teamflow*)`, `Bash(*${HOME}/.teamflow*)`, `Bash(*<the home's full path>*)`,
+`Bash(*.teamflow/*)`, `Bash(*TEAMFLOW_HOME*)`) keep Claude Code's own file tools out of the Teamflow home and refuse
+shell commands that name it. They are a guard rail, not a sandbox. Bash rules match the command's text: a command
+that reaches the folder without naming it that way (`cd ~ && cat .team*/config.json`, a variable, a script, a glob such as
+`~/.team*`, or a case variant of the path on a case-insensitive disk) is not stopped by them. Read and Edit rules
+apply to Claude Code's built-in tools and the shell commands it recognises, not to programs that open files
+themselves. For a hard boundary use Claude Code's sandbox. The instruction text also tells every agent the home is
+not theirs.
+
 ## What it sends, and where
 
 The client talks to one place only: the Teamflow server you sign in to, over HTTPS (`/rpc`, JSON-RPC) and a
