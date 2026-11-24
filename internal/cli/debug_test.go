@@ -153,3 +153,51 @@ func TestDebugRefusesAnOpenHome(t *testing.T) {
 		t.Fatal("a store was made in an open home")
 	}
 }
+
+// TestDebugStateShowsCwdFromHome: a session's cwd under the home reads "~/…", so no real home path is printed.
+func TestDebugStateShowsCwdFromHome(t *testing.T) {
+	user := filepath.Join(t.TempDir(), "someone")
+	t.Setenv("HOME", user)
+	dir := filepath.Join(t.TempDir(), "home")
+	t.Setenv("TEAMFLOW_HOME", dir)
+	must(t, os.MkdirAll(dir, 0o700))
+	st, err := store.Open(dir)
+	must(t, err)
+	cwds := map[string]string{
+		"in":      filepath.Join(user, "work", "pricing"),
+		"home":    user,
+		"slash":   user + "/",
+		"sibling": user + "else/work", // shares a prefix only: not under the home
+		"outside": "/srv/work",
+		"empty":   "",
+	}
+	for id, cwd := range cwds {
+		_, err := st.UpsertSession(id, "agent", 1, cwd, t0)
+		must(t, err)
+	}
+	must(t, st.Close())
+	code, out, errOut := run("state", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if strings.Contains(out, filepath.Join(user, "work")) || strings.Contains(out, `"`+user+`"`) {
+		t.Fatalf("a real home path is printed:\n%s", out)
+	}
+	var state State
+	must(t, json.Unmarshal([]byte(out), &state))
+	want := map[string]string{"in": "~/work/pricing", "home": "~", "slash": "~", "sibling": user + "else/work",
+		"outside": "/srv/work", "empty": ""}
+	if len(state.Sessions) != len(want) {
+		t.Fatalf("sessions %+v", state.Sessions)
+	}
+	for _, s := range state.Sessions {
+		if s.Cwd != want[s.ID] {
+			t.Errorf("%s: cwd %q, want %q", s.ID, s.Cwd, want[s.ID])
+		}
+	}
+
+	t.Setenv("HOME", "") // no home known: paths are left as they are, never an error
+	if code, _, errOut := run("state", "--json"); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+}

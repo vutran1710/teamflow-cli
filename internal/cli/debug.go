@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/store"
@@ -37,6 +38,11 @@ func Debug(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "teamflow: read the store: %v\n", err)
 		return 1
+	}
+	for i := range state.Sessions { // never a real home path: "~/…"
+		if cwd := state.Sessions[i].Cwd; cwd != "" {
+			state.Sessions[i].Cwd = home.Display(filepath.Clean(cwd))
+		}
 	}
 	out, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
