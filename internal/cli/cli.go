@@ -9,6 +9,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/term"
 
@@ -27,13 +29,47 @@ var (
 		b, err := term.ReadPassword(int(os.Stdin.Fd()))
 		return string(b), err
 	}
-	// findSession is the agent session this process runs under: the session recorded against the nearest of its
-	// ancestors (an agent's adapter records its sessions against the agent's process).
-	findSession = func(st *store.Store) (store.Session, bool) {
-		s, ok, err := st.SessionOfPIDs(procs.Ancestors(os.Getpid(), 12))
-		return s, ok && err == nil
-	}
+	// sessionLog is where a store that can't say which session this runs under is reported (once).
+	sessionLog     io.Writer = os.Stderr
+	sessionLogOnce sync.Once
 )
+
+// pidReuseSlack is how much later than its session was last seen an agent process may seem to have started (clock
+// granularity) before its pid is taken as reused by another process.
+const pidReuseSlack = 2 * time.Second
+
+// findSession is the agent session this process runs under: the session recorded against the nearest of its
+// ancestors (an agent's adapter records its sessions against the agent's process). A session whose pid now belongs
+// to a process that started after the session was last seen is a dead agent's, its pid reused: never this one.
+func findSession(st *store.Store) (store.Session, bool) {
+	s, ok, err := st.SessionOfPIDs(procs.Ancestors(os.Getpid(), 12), func(s store.Session) bool {
+		started, ok := procs.StartTime(s.AgentPID)
+		return ok && !started.After(s.UpdatedAt.Add(pidReuseSlack))
+	})
+	if err != nil {
+		sessionLogOnce.Do(func() {
+			fmt.Fprintf(sessionLog, "teamflow: could not look up the agent session: %v\n", err)
+		})
+		return store.Session{}, false
+	}
+	return s, ok
+}
+
+// agentMarkers are environment variables an agent sets for the commands it runs; any of them set means this runs
+// under an agent. TODO(Task 9): confirm the Cursor CLI, Copilot CLI and Antigravity CLI markers against a real
+// install of each (CLAUDECODE is Claude Code's; AI_AGENT is the cross-agent convention).
+var agentMarkers = []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "AI_AGENT", "CURSOR_AGENT", "CURSOR_TRACE_ID",
+	"COPILOT_CLI", "COPILOT_AGENT", "ANTIGRAVITY_AGENT", "GEMINI_CLI"}
+
+// underAgent says whether an agent marker is set.
+func underAgent() bool {
+	for _, m := range agentMarkers {
+		if os.Getenv(m) != "" {
+			return true
+		}
+	}
+	return os.Getenv("TEAMFLOW_ACTOR") == "agent"
+}
 
 // kind of a flag's value.
 type kind int
@@ -161,7 +197,7 @@ type inv struct {
 // command shows the person only "Shell command failed", and the agent gets nothing to tell them).
 func (r *inv) fail(msg string) int {
 	if r.relay {
-		fmt.Fprintf(r.out, "Teamflow refused: %s\n", msg)
+		fmt.Fprintf(r.out, "Teamflow refused: %s\n", strings.TrimPrefix(msg, "refused: "))
 		return 0
 	}
 	fmt.Fprintln(r.errw, msg)

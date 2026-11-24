@@ -454,13 +454,25 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("no pid should read as 0, got %d", s3.AgentPID)
 	}
 
-	got, ok, err := st.SessionOfPIDs([]int{555, 100})
+	got, ok, err := st.SessionOfPIDs([]int{555, 100}, nil)
 	must(t, err)
 	if !ok || got.ID != "ss_2" {
 		t.Fatalf("SessionOfPIDs = %+v %v, want the latest in pid 100", got, ok)
 	}
-	if _, ok, _ := st.SessionOfPIDs([]int{555}); ok {
+	if _, ok, _ := st.SessionOfPIDs([]int{555}, nil); ok {
 		t.Fatal("a session for an unknown pid")
+	}
+	if got.UpdatedAt.IsZero() || !got.UpdatedAt.Equal(t0.Add(time.Second)) {
+		t.Fatalf("UpdatedAt %v", got.UpdatedAt)
+	}
+	// A session the caller finds stale (its pid now belongs to another process) is skipped for the next one.
+	got, ok, err = st.SessionOfPIDs([]int{555, 100}, func(s Session) bool { return s.ID != "ss_2" })
+	must(t, err)
+	if !ok || got.ID != "ss_1" {
+		t.Fatalf("skipping the stale session: %+v %v", got, ok)
+	}
+	if _, ok, _ := st.SessionOfPIDs([]int{100}, func(Session) bool { return false }); ok {
+		t.Fatal("every session stale: none")
 	}
 	prev, ok, _ := st.PreviousSession(100, "ss_2")
 	if !ok || prev.ID != "ss_1" {

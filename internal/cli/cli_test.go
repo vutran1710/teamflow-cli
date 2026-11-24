@@ -200,6 +200,9 @@ func newMachine(t *testing.T, signedIn bool) *machine {
 	}
 	t.Setenv("TEAMFLOW_HOME", dir)
 	t.Setenv("TEAMFLOW_ACTOR", "")
+	for _, marker := range agentMarkers { // these tests may run inside an agent
+		t.Setenv(marker, "")
+	}
 	m := &machine{t: t, dir: dir, srv: newServer(t)}
 	if signedIn {
 		if err := config.Save(dir, config.Config{Server: m.srv.URL(), AuthKey: auth, Email: "lan@acme.test"}); err != nil {
@@ -375,6 +378,19 @@ func (m *machine) inSession(id, project string, topics []string) {
 		if err := st.Share(id, project, M1, "ref", topics); err != nil {
 			m.t.Fatal(err)
 		}
+	}
+}
+
+// staleSession records a session against this process's parent as an agent that last ran long before that
+// process started: the pid was reused, so it is not this process's agent.
+func (m *machine) staleSession(id, project string) {
+	m.t.Helper()
+	st := m.store()
+	if _, err := st.UpsertSession(id, "claude-code", os.Getppid(), m.dir, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		m.t.Fatal(err)
+	}
+	if err := st.Share(id, project, M1, "ref", nil); err != nil {
+		m.t.Fatal(err)
 	}
 }
 

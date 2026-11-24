@@ -196,12 +196,34 @@ func (c *Core) Login(ctx context.Context, server, email, password string) (proto
 	if err := a.Call(ctx, "auth.login", protocol.Login{Email: email, Password: password}, &out); err != nil {
 		return out, err
 	}
+	if c.Cfg != nil && (c.Cfg.Server != server || !strings.EqualFold(c.Cfg.Email, out.Account.Email)) {
+		// Another server or another account: the old sign-in's project keys must never reach the new one.
+		if err := c.forgetProjects(); err != nil {
+			return out, err
+		}
+	}
 	cfg := config.Config{Server: server, AuthKey: out.AuthKey, Email: out.Account.Email}
 	if err := config.Save(c.Dir, cfg); err != nil {
 		return out, err
 	}
 	c.Cfg = &cfg
 	return out, nil
+}
+
+// forgetProjects drops every project key and unshares every session shared with them.
+func (c *Core) forgetProjects() error {
+	return c.St.Tx(func(tx *store.Tx) error {
+		shared, err := tx.SharedSessions()
+		if err != nil {
+			return err
+		}
+		for _, s := range shared {
+			if err := tx.Share(s.ID, "", "", "", nil); err != nil {
+				return err
+			}
+		}
+		return tx.DropProjectKeys()
+	})
 }
 
 // Logout revokes the auth key (best effort: offline it is still forgotten here), and forgets it and this

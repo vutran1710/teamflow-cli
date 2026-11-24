@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 )
 
 func TestParentOfSelf(t *testing.T) {
@@ -41,5 +42,25 @@ func TestChildSeesUsAsAncestor(t *testing.T) {
 	}
 	if got := Ancestors(1<<30, 12); len(got) != 0 {
 		t.Fatalf("a pid that does not exist has no ancestors: %v", got)
+	}
+}
+
+func TestStartTime(t *testing.T) {
+	before := time.Now()
+	cmd := exec.Command("sleep", "5")
+	if err := cmd.Start(); err != nil {
+		t.Skip("no sleep")
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	got, ok := StartTime(cmd.Process.Pid)
+	if !ok || got.Before(before.Add(-2*time.Second)) || got.After(time.Now().Add(2*time.Second)) {
+		t.Fatalf("StartTime of a child started at %v: %v %v", before, got, ok)
+	}
+	self, ok := StartTime(os.Getpid())
+	if !ok || !self.Before(got.Add(2*time.Second)) {
+		t.Fatalf("this process started before its child: %v vs %v", self, got)
+	}
+	if _, ok := StartTime(1 << 30); ok {
+		t.Fatal("a pid that does not exist has no start time")
 	}
 }

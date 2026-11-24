@@ -106,3 +106,25 @@ func TestDefaultServer(t *testing.T) {
 		t.Fatal(DefaultServer)
 	}
 }
+
+// Save replaces the file in one step (a temp file renamed over it): a reader never sees it half written, and no
+// temp file is left behind.
+func TestSaveIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if err := os.WriteFile(path, []byte(`{"server":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(path)
+	if err := Save(dir, Config{Server: "https://tf.example", AuthKey: "tfa_x"}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.Stat(path)
+	if os.SameFile(before, after) {
+		t.Fatal("config.json was rewritten in place, not replaced")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("left behind: %v", entries)
+	}
+}

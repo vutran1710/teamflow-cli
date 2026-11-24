@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"os"
+	"errors"
 	"strings"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
@@ -50,9 +50,10 @@ var rejectCmd = &command{
 	},
 }
 
-// verdict records the person's APPROVE or REJECT. Approvals are trusted to the person and their agent: the actor
-// is AGENT when it runs through the agent (inside an agent session, TEAMFLOW_ACTOR=agent, or --via-agent), else
-// MEMBER. It is sent alone.
+// verdict records the person's APPROVE or REJECT. Approvals are trusted to the person and their agent, and the
+// record says which: it fails toward "via agent". The actor is MEMBER only when everything says a person typed it
+// in their own terminal: stdin is a terminal, no agent session is found above this process, no agent marker is
+// set, and it came neither through the relay nor with --via-agent. Otherwise AGENT. It is sent alone.
 func (r *inv) verdict(kind protocol.SignalKind, signal, note string, viaAgent bool) int {
 	if kind == protocol.SignalKindReject && strings.TrimSpace(note) == "" {
 		return r.fail("say why you reject it: reject " + signal + " <why>")
@@ -61,12 +62,13 @@ func (r *inv) verdict(kind protocol.SignalKind, signal, note string, viaAgent bo
 	if err != nil {
 		return r.failErr(err)
 	}
-	actor, sid := protocol.ActorMember, ""
-	if sess, ok := r.session(); ok {
-		actor, sid = protocol.ActorAgent, sess.ID
+	actor, sid := protocol.ActorAgent, ""
+	sess, inSession := r.session()
+	if inSession {
+		sid = sess.ID
 	}
-	if viaAgent || os.Getenv("TEAMFLOW_ACTOR") == "agent" {
-		actor = protocol.ActorAgent
+	if !inSession && !viaAgent && !r.relay && !underAgent() && isTerminal() {
+		actor = protocol.ActorMember
 	}
 	res, err := c.Verdict(r.ctx, sid, signal, kind, note, actor)
 	if err != nil {
@@ -110,8 +112,12 @@ func runTeam(r *inv, a *parsed) int {
 		}
 		args = args[1:]
 	}
-	if len(args) == 1 && strings.ContainsAny(args[0], " \t") { // the command's arguments arrive as one word
-		args = shellSplit(args[0])
+	if len(args) == 1 && strings.ContainsAny(args[0], " \t\"'\\") { // the command's arguments arrive as one word
+		split, err := shellSplit(args[0])
+		if err != nil {
+			return r.fail(err.Error())
+		}
+		args = split
 	}
 	sub, rest := "status", []string(nil)
 	if len(args) > 0 {
@@ -202,8 +208,9 @@ func (r *inv) approvals(all bool) int {
 	return 0
 }
 
-// shellSplit splits a line as a POSIX shell would (Python's shlex.split): quotes group, a backslash escapes.
-func shellSplit(s string) []string {
+// shellSplit splits a line as a POSIX shell would (Python's shlex.split): quotes group, a backslash escapes
+// outside single quotes. An unterminated quote or a trailing backslash is refused, as shlex refuses it.
+func shellSplit(s string) ([]string, error) {
 	var out []string
 	var cur strings.Builder
 	in, quote, esc := false, rune(0), false
@@ -213,7 +220,7 @@ func shellSplit(s string) []string {
 			cur.WriteRune(c)
 			esc, in = false, true
 		case c == '\\' && quote != '\'':
-			esc = true
+			esc, in = true, true
 		case quote != 0 && c == quote:
 			quote = 0
 		case quote != 0:
@@ -231,8 +238,14 @@ func shellSplit(s string) []string {
 			in = true
 		}
 	}
+	switch {
+	case quote != 0:
+		return nil, errors.New("No closing quotation")
+	case esc:
+		return nil, errors.New("No escaped character")
+	}
 	if in {
 		out = append(out, cur.String())
 	}
-	return out
+	return out, nil
 }

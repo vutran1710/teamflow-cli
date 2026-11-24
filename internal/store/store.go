@@ -342,7 +342,8 @@ type Session struct {
 	KeyRef       string
 	LastSeq      int64
 	StateVersion int64
-	Topics       []string // the topics followed; nil: all of them (an empty list follows none)
+	Topics       []string  // the topics followed; nil: all of them (an empty list follows none)
+	UpdatedAt    time.Time // when the session was last seen
 }
 
 // Follows says whether the session follows a topic; the project's system topics always come along.
@@ -358,15 +359,18 @@ func (s Session) Follows(topic string, system map[string]bool) bool {
 	return false
 }
 
-const sessionCols = "id, agent, agent_pid, cwd, project, member, key_ref, last_seq, state_version, topics"
+const sessionCols = "id, agent, agent_pid, cwd, project, member, key_ref, last_seq, state_version, topics, updated_at"
 
 func scanSession(r interface{ Scan(...any) error }) (Session, error) {
 	var s Session
 	var pid sql.NullInt64
 	var project, member, keyRef, topics sql.NullString
-	if err := r.Scan(&s.ID, &s.Agent, &pid, &s.Cwd, &project, &member, &keyRef, &s.LastSeq, &s.StateVersion, &topics); err != nil {
+	var updated string
+	if err := r.Scan(&s.ID, &s.Agent, &pid, &s.Cwd, &project, &member, &keyRef, &s.LastSeq, &s.StateVersion, &topics,
+		&updated); err != nil {
 		return Session{}, err
 	}
+	s.UpdatedAt = parseTS(updated)
 	s.AgentPID, s.Project, s.Member, s.KeyRef = int(pid.Int64), project.String, member.String, keyRef.String
 	if topics.Valid && topics.String != "" {
 		s.Topics = []string{}
@@ -422,12 +426,18 @@ func (o ops) UpsertSession(id, agent string, pid int, cwd string, now time.Time)
 // Session is the session with this id.
 func (o ops) Session(id string) (Session, bool, error) { return o.sessionWhere("id = ?", id) }
 
-// SessionOfPIDs is the session most recently seen in the nearest of these agent processes.
-func (o ops) SessionOfPIDs(pids []int) (Session, bool, error) {
+// SessionOfPIDs is the session most recently seen in the nearest of these agent processes that live (nil: any)
+// accepts: a caller rejects a session whose pid now belongs to another process.
+func (o ops) SessionOfPIDs(pids []int, live func(Session) bool) (Session, bool, error) {
 	for _, pid := range pids {
-		s, ok, err := o.sessionWhere("agent_pid = ? ORDER BY updated_at DESC LIMIT 1", pid)
-		if ok || err != nil {
-			return s, ok, err
+		ss, err := o.sessionsWhere("agent_pid = ? ORDER BY updated_at DESC", pid)
+		if err != nil {
+			return Session{}, false, err
+		}
+		for _, s := range ss {
+			if live == nil || live(s) {
+				return s, true, nil
+			}
 		}
 	}
 	return Session{}, false, nil

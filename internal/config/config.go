@@ -88,11 +88,13 @@ func Save(dir string, cfg Config) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, FileName)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// A temp file at 0600, renamed over config.json: hooks and the background sync never read it half written.
+	f, err := os.CreateTemp(dir, ".config-*.json")
 	if err != nil {
 		return fmt.Errorf("write %s: %w", FileName, errors.Unwrap(err))
 	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // gone once renamed; removes it after a failure
 	if err := f.Chmod(0o600); err != nil {
 		f.Close()
 		return err
@@ -101,5 +103,12 @@ func Save(dir string, cfg Config) error {
 		f.Close()
 		return err
 	}
-	return f.Close()
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(dir, FileName))
 }

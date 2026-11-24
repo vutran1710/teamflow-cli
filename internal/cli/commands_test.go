@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
@@ -51,6 +52,7 @@ func TestApprove(t *testing.T) {
 	m := newMachine(t, true)
 	approvalReplica(t, m)
 	m.srv.on("signal.emit", accepted)
+	terminal(t, true, "") // the person, in their own terminal
 	r := m.run("", "approve", S1)
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "approved "+S1)
@@ -110,11 +112,17 @@ func TestVerdictActor(t *testing.T) {
 		actor   string
 		session string
 	}{
-		{"in the person's own terminal", func(*machine) {}, []string{"approve", S1}, "MEMBER", ""},
-		{"TEAMFLOW_ACTOR=agent", func(m *machine) { m.t.Setenv("TEAMFLOW_ACTOR", "agent") }, []string{"approve", S1}, "AGENT", ""},
-		{"--via-agent", func(*machine) {}, []string{"approve", "--via-agent", S1}, "AGENT", ""},
-		{"inside an agent session", func(m *machine) { m.inSession("s1", P, nil) }, []string{"approve", S1}, "AGENT", "s1"},
-		{"the relay", func(m *machine) { m.inSession("s1", P, nil) }, []string{"team", "--relay", "--via-agent", "approve " + S1}, "AGENT", "s1"},
+		// MEMBER only when everything says a person typed it: a terminal, no agent session, no agent marker, no relay.
+		{"the person in a plain terminal", tty, []string{"approve", S1}, "MEMBER", ""},
+		{"a pid reused from a dead agent's session", func(m *machine) { tty(m); m.staleSession("old", P) }, []string{"approve", S1}, "MEMBER", ""},
+		{"stdin not a terminal", func(*machine) {}, []string{"approve", S1}, "AGENT", ""},
+		{"TEAMFLOW_ACTOR=agent", func(m *machine) { tty(m); m.t.Setenv("TEAMFLOW_ACTOR", "agent") }, []string{"approve", S1}, "AGENT", ""},
+		{"CLAUDECODE=1", func(m *machine) { tty(m); m.t.Setenv("CLAUDECODE", "1") }, []string{"approve", S1}, "AGENT", ""},
+		{"CURSOR_AGENT=1", func(m *machine) { tty(m); m.t.Setenv("CURSOR_AGENT", "1") }, []string{"approve", S1}, "AGENT", ""},
+		{"--via-agent", tty, []string{"approve", "--via-agent", S1}, "AGENT", ""},
+		{"inside an agent session", func(m *machine) { tty(m); m.inSession("s1", P, nil) }, []string{"approve", S1}, "AGENT", "s1"},
+		{"the relay", func(m *machine) { tty(m); m.inSession("s1", P, nil) }, []string{"team", "--relay", "approve " + S1}, "AGENT", "s1"},
+		{"the relay without a session", tty, []string{"team", "--relay", "approve " + S1}, "AGENT", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,6 +140,8 @@ func TestVerdictActor(t *testing.T) {
 		})
 	}
 }
+
+func tty(m *machine) { terminal(m.t, true, "") }
 
 func TestVerdictSupersedesMyEarlierOne(t *testing.T) {
 	m := newMachine(t, true)
@@ -215,6 +225,66 @@ func TestTeamRelayRefusesOnStdout(t *testing.T) {
 	r = m.run("", "team", "stop")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "no agent session found")
+}
+
+func TestTeamRelayRefusesOnce(t *testing.T) {
+	m := newMachine(t, true)
+	approvalReplica(t, m)
+	m.srv.on("signal.emit", `{"result": {"signal": "sg_00000000000000000000000077", "accepted": false, "reason": "NOT_ALLOWED", "message": "you are not an approver", "seq": null, "received_at": null, "state": null}}`)
+	r := m.run("", "team", "--relay", "approve "+S1)
+	wantCode(t, r, 0)
+	if r.out != "Teamflow refused: NOT_ALLOWED you are not an approver\n" {
+		t.Fatalf("one refusal prefix: %q", r.out)
+	}
+}
+
+// The command's arguments are split as a shell would (Python's shlex): an unterminated quote is refused.
+func TestTeamSplitsLikeAShell(t *testing.T) {
+	m := newMachine(t, true)
+	m.inSession("s1", "", nil)
+	for _, line := range []string{`project "Pricing`, `project 'Pricing`, `project Pricing\`} {
+		r := m.run("", "team", "--relay", line)
+		wantCode(t, r, 0)
+		contains(t, "stdout", r.out, "Teamflow refused: ")
+		lacks(t, "stdout", r.out, "This session now works")
+	}
+	if got, err := shellSplit(`project "Acme/Big Project" 'a b' c\ d`); err != nil ||
+		!slices.Equal(got, []string{"project", "Acme/Big Project", "a b", "c d"}) {
+		t.Fatalf("shellSplit: %q %v", got, err)
+	}
+}
+
+// A session recorded against a pid that now belongs to a newer process (the agent died, the pid was reused) is
+// not the session this runs under.
+func TestStaleSessionIsNotFound(t *testing.T) {
+	m := newMachine(t, true)
+	m.staleSession("old", P)
+	r := m.run("", "stop")
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "no agent session found")
+	if s, _, _ := m.store().Session("old"); s.Project != P {
+		t.Fatal("the stale session was unshared")
+	}
+}
+
+// A store that can't answer is said once, not taken silently as "no session".
+func TestFindSessionLogsAStoreErrorOnce(t *testing.T) {
+	m := newMachine(t, true)
+	st := m.store()
+	st.Close()
+	var log strings.Builder
+	old := sessionLog
+	sessionLog = &log
+	t.Cleanup(func() { sessionLog = old; sessionLogOnce = sync.Once{} })
+	sessionLogOnce = sync.Once{}
+	for range 3 {
+		if _, ok := findSession(st); ok {
+			t.Fatal("a closed store found a session")
+		}
+	}
+	if n := strings.Count(log.String(), "teamflow: could not look up the agent session"); n != 1 {
+		t.Fatalf("logged %d times: %q", n, log.String())
+	}
 }
 
 func TestTeamStatusAndStop(t *testing.T) {
@@ -321,6 +391,51 @@ func TestTeamProjectSadPaths(t *testing.T) {
 	m2 := newMachine(t, true)
 	r = m2.run("", "team", "--relay", "project Pricing")
 	contains(t, "stdout", r.out, "Teamflow refused: no agent session found")
+}
+
+// ------------------------------------------------------------------ signing in as someone else
+
+// Another server or another account: this machine's project keys (and the sessions shared with them) belong to
+// the old sign-in and are never sent to the new one.
+func TestLoginElsewhereForgetsProjectKeys(t *testing.T) {
+	other := `{"result": {"auth_key": "tfa_other", "account": {"id": "ac_2", "email": "mai@acme.test", "name": "mai", "alias": "", "avatar": null, "created_at": "2026-01-15T09:00:00Z", "disabled_at": null}, "expires_at": "2026-01-15T09:00:01Z"}}`
+	cases := []struct {
+		name   string
+		args   func(m *machine, srv2 *fakeServer) []string
+		answer string
+		kept   bool
+	}{
+		{"the same account again", func(m *machine, _ *fakeServer) []string { return []string{"-e", "LAN@acme.test"} }, "auth.login.1", true},
+		{"another account", func(m *machine, _ *fakeServer) []string { return []string{"-e", "mai@acme.test"} }, other, false},
+		{"another server", func(m *machine, srv2 *fakeServer) []string { return []string{"-s", srv2.URL(), "-e", "lan@acme.test"} }, "auth.login.1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMachine(t, true)
+			m.key()
+			m.inSession("s1", P, nil)
+			srv2 := newServer(t)
+			m.srv.on("auth.login", tc.answer)
+			srv2.on("auth.login", tc.answer)
+			r := m.run("pw\n", append([]string{"login", "--password-stdin"}, tc.args(m, srv2)...)...)
+			wantCode(t, r, 0)
+			_, _, _, _, ok := m.store().ProjectKey(P)
+			s, _, _ := m.store().Session("s1")
+			if ok != tc.kept || (s.Project != "") != tc.kept {
+				t.Fatalf("key kept %v, session %q; want kept %v", ok, s.Project, tc.kept)
+			}
+		})
+	}
+	// login -s another server signs in there only, and the old keys go.
+	m := newMachine(t, true)
+	m.key()
+	srv2 := newServer(t)
+	srv2.on("auth.login", "auth.login.1")
+	m.run("pw\n", "login", "-s", srv2.URL(), "-e", "lan@acme.test", "--password-stdin")
+	if _, _, _, _, ok := m.store().ProjectKey(P); ok {
+		t.Fatal("a key of the old server is kept")
+	}
+	noCall(t, m.srv, "auth.login")
 }
 
 // ------------------------------------------------------------------ topic delete
