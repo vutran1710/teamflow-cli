@@ -24,10 +24,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -114,7 +116,7 @@ func fast(l *logs, a *applied) Options {
 	o := Options{
 		IdleExit: time.Hour, PingEvery: 60 * time.Millisecond, Silence: 150 * time.Millisecond,
 		FirstAnswer: 2 * time.Second, Backoff: []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
-		SocketRetry: 300 * time.Millisecond, Rescan: 20 * time.Millisecond, Heartbeat: 20 * time.Millisecond,
+		SocketRetry: 300 * time.Millisecond, Rescan: 20 * time.Millisecond,
 	}
 	o.Logf = func(string, ...any) {}
 	if l != nil {
@@ -799,6 +801,41 @@ func TestIdleExit(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("a session seen ahead of now (clock set back)", func(t *testing.T) {
+		f := newFake(t)
+		c := machine(t, f)
+		must(t, c.St.Tx(func(tx *store.Tx) error {
+			_, err := tx.UpsertSession("s1", "agent", 0, "", time.Now().Add(time.Hour))
+			return err
+		}))
+		o := fast(nil, nil)
+		o.IdleExit = 100 * time.Millisecond
+		wait, stop := start(t, c, o)
+		select {
+		case err := <-waitCh(wait):
+			t.Fatalf("exited with a session seen ahead of now: %v", err)
+		case <-time.After(500 * time.Millisecond):
+		}
+		stop()
+		if err := wait(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("a reused agent pid", func(t *testing.T) {
+		f := newFake(t)
+		c := machine(t, f)
+		// This process is alive, but started after the session was last seen: another process now has the pid.
+		must(t, c.St.Tx(func(tx *store.Tx) error {
+			_, err := tx.UpsertSession("s1", "agent", os.Getpid(), "", time.Now().Add(-23*time.Hour))
+			return err
+		}))
+		o := fast(nil, nil)
+		o.IdleExit = 100 * time.Millisecond
+		wait, _ := start(t, c, o)
+		if err := wait(); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("signed out while running", func(t *testing.T) {
 		f := newFake(t)
 		f.add(P1, 1)
@@ -944,28 +981,68 @@ func TestHookPullsWhenStale(t *testing.T) {
 // ------------------------------------------------------------------ the outbox
 
 // The background sync sends the outbox only through Core.Sync, under the sender lock: with a command flushing the
-// same outbox at the same time (two real processes), never two requests in flight, every signal once, in order.
+// same outbox at the same time (two real processes), never two requests in flight, every signal once, in order,
+// and both really send. The background copy is held on its first request until the command is waiting on the
+// lock (contention); its second request fails (503), so it lets go and the command sends the rest.
 func TestBackgroundSyncAndACommandNeverInterleave(t *testing.T) {
 	f := newFake(t)
 	f.add(P1, 1)
-	f.set(func() { f.emitDelay = 20 * time.Millisecond })
+	first := make(chan string, 1)
+	release := make(chan struct{})
+	f.set(func() {
+		f.emitDelay = 20 * time.Millisecond
+		f.emitHook = func(n int, client string) bool {
+			switch n {
+			case 1:
+				first <- client
+				<-release
+			case 2:
+				return strings.Contains(client, "/bg ")
+			}
+			return false
+		}
+	})
 	c := machine(t, f, P1)
 	ids := queue(t, c, P1, 0, 2*protocol.MaxBatch+10)
 	bg, _ := helper(t, "run")
+	select {
+	case who := <-first:
+		if !strings.Contains(who, "/bg ") {
+			t.Fatalf("the first request came from %q", who)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the background sync never sent")
+	}
 	cmd, r := helper(t, "sync")
-	_, _ = r.ReadString('\n')
+	if line, _ := r.ReadString('\n'); !strings.HasPrefix(line, "syncing") {
+		t.Fatalf("command: %q", line)
+	}
+	time.Sleep(300 * time.Millisecond) // the command now waits on the lock the background copy holds
+	close(release)
 	_ = cmd.Wait()
 	eventually(t, "the outbox sent", func() bool { return len(queued(t, c, P1)) == 0 })
 	_ = bg.Process.Signal(syscall.SIGTERM)
 	_ = bg.Wait()
 	f.mu.Lock()
-	order := append([]string(nil), f.order...)
+	order, clients := append([]string(nil), f.order...), append([]string(nil), f.clients...)
 	f.mu.Unlock()
 	if m := f.maxIn.Load(); m != 1 {
 		t.Fatalf("%d outbox requests in flight at once", m)
 	}
 	if !slices.Equal(order, ids) {
 		t.Fatalf("sent %d, want %d once each in order", len(order), len(ids))
+	}
+	var bgN, cmdN int
+	for _, cl := range clients {
+		switch {
+		case strings.Contains(cl, "/bg "):
+			bgN++
+		case strings.Contains(cl, "/cmd "):
+			cmdN++
+		}
+	}
+	if bgN == 0 || cmdN == 0 {
+		t.Fatalf("requests: background %d, command %d (%q)", bgN, cmdN, clients)
 	}
 }
 
@@ -981,6 +1058,156 @@ func TestBackgroundSyncSendsTheOutbox(t *testing.T) {
 	defer f.mu.Unlock()
 	if !slices.Equal(f.order, ids) {
 		t.Fatalf("sent %v", f.order)
+	}
+}
+
+// ------------------------------------------------------------------ review fixes
+
+// A server with live sync off refuses live.ticket NOT_ALLOWED ("use sync.poll"): every project falls back to
+// sync.poll and keeps its key. Only sync.poll's own refusal of the key drops it.
+func TestLiveSyncOffFallsBackToPollAndKeepsKeys(t *testing.T) {
+	f := newFake(t)
+	f.add(P1, 1, 2)
+	f.add(P2, 1)
+	f.set(func() { f.liveOff = true })
+	c := machine(t, f, P1, P2)
+	l := &logs{}
+	start(t, c, fast(l, nil))
+	eventually(t, "both projects by poll", func() bool { return cursor(c, P1) == 2 && cursor(c, P2) == 1 })
+	f.push(P2, 2, nil)
+	eventually(t, "a new event by poll", func() bool { return cursor(c, P2) == 2 })
+	time.Sleep(400 * time.Millisecond) // a socket retry or two
+	if !hasKey(c, P1) || !hasKey(c, P2) {
+		t.Fatal("a key was dropped for live sync being off")
+	}
+	if len(f.helloList()) != 0 {
+		t.Fatal("a socket opened without a ticket")
+	}
+	if !strings.Contains(l.String(), "use sync.poll") {
+		t.Fatalf("not logged: %s", l)
+	}
+	f.set(func() { f.pollErr[P2] = "NOT_ALLOWED" })
+	eventually(t, "sync.poll's refusal drops the key", func() bool { return !hasKey(c, P2) })
+	if !hasKey(c, P1) {
+		t.Fatal("the other project's key went too")
+	}
+}
+
+// A half-open socket (pings go out, nothing comes back) never looks fresh past what was last heard: live_at stops
+// moving, so a hook pulls again once LiveFresh has passed since then, however long the silence limit.
+func TestHalfOpenSocketGoesStale(t *testing.T) {
+	f := newFake(t)
+	f.add(P1, 1)
+	c := machine(t, f, P1)
+	must(t, c.St.Seen("s1", 1, 1))
+	o := fast(nil, nil)
+	o.Silence = time.Hour // never found dead here: only live_at protects the hooks
+	start(t, c, o)
+	eventually(t, "live", func() bool { return f.liveOn(P1) })
+	time.Sleep(200 * time.Millisecond) // pongs heard: live_at moves
+	f.set(func() { f.silent = true })
+	time.Sleep(150 * time.Millisecond)
+	heard := c.St.LiveAt(P1)
+	time.Sleep(400 * time.Millisecond) // several pings, no answer
+	f.mu.Lock()
+	pings := f.pings
+	f.mu.Unlock()
+	if at := c.St.LiveAt(P1); !at.Equal(heard) || heard.IsZero() || pings < 5 {
+		t.Fatalf("live_at moved with nothing heard: %v then %v (%d pings)", heard, at, pings)
+	}
+	hook, err := core.Open()
+	must(t, err)
+	defer hook.Close()
+	hook.Now = func() time.Time { return heard.Add(core.LiveFresh + time.Second) }
+	polls := f.count("sync.poll")
+	if _, err := hook.Prompt(context.Background(), "s1", "agent", 0, "", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if f.count("sync.poll") == polls {
+		t.Fatal("the hook trusted a socket not heard from for LiveFresh")
+	}
+}
+
+// With the default timing a dead socket is found within LiveFresh: a ping every 10 s, 5 s of silence.
+func TestDefaultsFindADeadSocketWithinLiveFresh(t *testing.T) {
+	o := Options{}.withDefaults()
+	if o.PingEvery != 10*time.Second || o.Silence != 5*time.Second || o.PingEvery+o.Silence > core.LiveFresh {
+		t.Fatalf("ping %v, silence %v, LiveFresh %v", o.PingEvery, o.Silence, core.LiveFresh)
+	}
+}
+
+// However a socket ends (dropped by the network, refused, replaced, gone silent), live_at is cleared at once: the
+// next hook pulls.
+func TestSocketEndClearsLiveAt(t *testing.T) {
+	for _, end := range []string{"drop", "NOT_ALLOWED", "REPLACED", "silent"} {
+		t.Run(end, func(t *testing.T) {
+			f := newFake(t)
+			f.add(P1, 1)
+			c := machine(t, f, P1)
+			o := fast(nil, nil)
+			o.Backoff = []time.Duration{time.Hour} // nothing reconnects to set it again
+			start(t, c, o)
+			eventually(t, "live", func() bool { return f.liveOn(P1) && !c.St.LiveAt(P1).IsZero() })
+			switch end {
+			case "drop":
+				f.kick(P1)
+			case "silent":
+				f.set(func() { f.silent = true; f.closeWith[P1] = []string{"drop"} }) // the reconnect fails
+			default:
+				f.closeLive(P1, end)
+			}
+			eventually(t, "live_at cleared", func() bool { return c.St.LiveAt(P1).IsZero() })
+			if c.LiveFresh(P1) {
+				t.Fatal("still fresh")
+			}
+		})
+	}
+}
+
+// A --status or --stop probe holding the lock for a moment never makes a starting copy give up.
+func TestStartingBesideAStatusProbe(t *testing.T) {
+	f := newFake(t)
+	c := machine(t, f)
+	fh, err := os.OpenFile(filepath.Join(c.Dir, LockFile), os.O_RDWR|os.O_CREATE, 0o600)
+	must(t, err)
+	defer fh.Close()
+	fd := int(fh.Fd())
+	must(t, unix.Flock(fd, unix.LOCK_SH|unix.LOCK_NB))
+	unlocked := make(chan struct{})
+	go func() { time.Sleep(20 * time.Millisecond); _ = unix.Flock(fd, unix.LOCK_UN); close(unlocked) }()
+	defer func() { <-unlocked }()
+	wait, _ := start(t, c, fast(nil, nil))
+	eventually(t, "running", func() bool { pid, ok := Status(c.Dir); return ok && pid == os.Getpid() })
+	select {
+	case err := <-waitCh(wait):
+		t.Fatalf("the starting copy gave up: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// The auth key expiring while the sync runs: sockets on project keys go on; a project whose items wait without a
+// key asks for one once (refused), not on every round; nothing is lost, nothing crashes.
+func TestExpiredAuthKeyWhileRunning(t *testing.T) {
+	f := newFake(t)
+	f.add(P1, 1)
+	f.set(func() { f.keyFetch = "NOT_ALLOWED" })
+	c := machine(t, f, P1)
+	wait, _ := start(t, c, fast(nil, nil))
+	eventually(t, "live", func() bool { return f.liveOn(P1) })
+	ids := queue(t, c, P2, 0, 2) // queued for a project with no key on this machine
+	time.Sleep(400 * time.Millisecond)
+	if n := f.count("key.fetch"); n != 1 {
+		t.Fatalf("the refused key fetched %d times", n)
+	}
+	if got := queued(t, c, P2); !slices.Equal(got, ids) {
+		t.Fatalf("queued %v", got)
+	}
+	f.push(P1, 2, nil)
+	eventually(t, "the socket goes on", func() bool { return cursor(c, P1) == 2 })
+	select {
+	case err := <-waitCh(wait):
+		t.Fatalf("the sync stopped: %v", err)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -1029,6 +1256,7 @@ func queued(t *testing.T, c *core.Core, project string) []string {
 func TestMain(m *testing.M) {
 	switch os.Getenv("TEST_LIVE_MODE") {
 	case "run":
+		api.Version = "bg" // the server tells the two senders apart by their Teamflow-Client
 		c, err := core.Open()
 		if err != nil {
 			fmt.Println("error", err)
@@ -1037,12 +1265,16 @@ func TestMain(m *testing.M) {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 		defer stop()
 		fmt.Println("running")
-		if err := Run(ctx, c, fast(nil, nil)); err != nil {
+		o := fast(nil, nil)
+		o.Backoff = []time.Duration{300 * time.Millisecond} // an outbox left short waits: a command gets its turn
+		if err := Run(ctx, c, o); err != nil {
 			fmt.Println("error", err)
 			os.Exit(1)
 		}
 		os.Exit(0)
 	case "sync":
+		api.Version = "cmd"
+		core.SyncLockWait = 5 * time.Second // waits for the background copy's lock, then sends
 		c, err := core.Open()
 		if err != nil {
 			fmt.Println("error", err)

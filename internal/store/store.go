@@ -996,6 +996,12 @@ func (o ops) SetLiveAt(project string, t time.Time) error {
 	return err
 }
 
+// ClearLiveAt forgets when the project's live socket was heard from (it ended): hooks pull again.
+func (o ops) ClearLiveAt(project string) error {
+	_, err := o.exec("DELETE FROM live WHERE project = ?", project)
+	return wrap(err)
+}
+
 // ClaimHookSync takes a hook's turn to sync the project over the network: true at most once per every (racing
 // hooks: one wins), and never while the project is marked offline (SetHookOffline) for at most offlineFor. A clock
 // set back never keeps the hook off the network: a last sync later than now, or an offline mark further ahead than

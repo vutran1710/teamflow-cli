@@ -7,12 +7,15 @@
 // message (LiveHello), then each LiveEvents applied in one transaction with its cursor and the project's live_at.
 // The first answer means the socket is live. The live rules:
 //
-//   - a ping every PingEvery once live; nothing heard within Silence of a ping: the socket is dead, and a new one
-//     opens at once with a fresh ticket from the cursor;
+//   - a ping every PingEvery (10 s) once live; nothing heard within Silence (5 s) of a ping: the socket is dead, and
+//     a new one opens at once with a fresh ticket from the cursor. live_at moves only when something is heard (a
+//     pong or a message) and is cleared when a socket ends, so hooks trust a dead socket for at most
+//     PingEvery + Silence (15 s, LiveFresh) and pull again at once after a socket closes;
 //   - reset (the cursor is beyond a restored server's head): the project's replica is dropped and caught up from 0;
 //   - REPLACED: stop, never reconnect; NOT_A_MEMBER (from the socket or live.ticket): the key is dropped and the
-//     socket stays closed; TOO_SLOW: reconnect at once; any other refusal or a failed connect: reconnect after the
-//     backoff (1, 2, 3, 5, 8, 13 s);
+//     socket stays closed; TOO_SLOW: reconnect at once; any other refusal or a failed connect (live.ticket refused
+//     NOT_ALLOWED too: a server with live sync off) reconnects after the backoff (1, 2, 3, 5, 8, 13 s); only
+//     sync.poll's own refusal of the key drops it there;
 //   - seq holes are allowed; an event at or below the cursor (another sync brought it first) is not applied again;
 //   - after FailsBeforePoll failed connects in a row (WebSockets blocked), sync.poll with wait 25 s instead, trying
 //     the socket again every SocketRetry.
@@ -60,18 +63,30 @@ var ErrRunning = errors.New("the background sync is already running")
 // Options tune the sync; a zero field takes the protocol's value.
 type Options struct {
 	IdleExit        time.Duration   // no active agent session this long: exit (10 min)
-	PingEvery       time.Duration   // LIVE_PING_SECONDS
-	Silence         time.Duration   // LIVE_PONG_SECONDS: nothing heard this long after a ping, the socket is dead
+	PingEvery       time.Duration   // 10 s (the controller's ruling: the server answers pings without waking)
+	Silence         time.Duration   // 5 s: nothing heard this long after a ping, the socket is dead
 	FirstAnswer     time.Duration   // a hello unanswered this long is a failed connect (LIVE_HELLO + LIVE_PONG)
 	Backoff         []time.Duration // waits after failed connects: 1, 2, 3, 5, 8, 13 s (the last repeats)
 	FailsBeforePoll int             // failed connects in a row before falling back to sync.poll (3)
 	PollWait        time.Duration   // sync.poll's wait in the fallback (25 s)
 	SocketRetry     time.Duration   // in the fallback, the socket is tried again this often (60 s)
 	Rescan          time.Duration   // sign-in, keys, outbox and sessions are read again this often (2 s)
-	Heartbeat       time.Duration   // a live project's live_at is refreshed this often (5 s, under LiveFresh)
 	Logf            func(format string, a ...any)
 	Applied         func(project string, seq int64) // hears each event applied from the socket (tests)
 }
+
+// DefaultPingEvery and DefaultSilence: a socket that stops answering is found dead within their sum, which is
+// core.LiveFresh: hooks never trust a dead socket longer than they would trust a live one.
+const (
+	DefaultPingEvery = 10 * time.Second
+	DefaultSilence   = 5 * time.Second
+)
+
+// lockRetry: a start finding the lock held tries again for this long (a --status or --stop probe holds it briefly).
+const lockRetry = 50 * time.Millisecond
+
+// writeTimeout bounds one ping's write.
+const writeTimeout = 5 * time.Second
 
 // DefaultIdleExit is how long the sync runs with no active agent session.
 const DefaultIdleExit = 10 * time.Minute
@@ -93,13 +108,12 @@ func (o Options) withDefaults() Options {
 		}
 	}
 	def(&o.IdleExit, DefaultIdleExit)
-	def(&o.PingEvery, sec(protocol.LivePingSeconds))
-	def(&o.Silence, sec(protocol.LivePongSeconds))
+	def(&o.PingEvery, DefaultPingEvery)
+	def(&o.Silence, DefaultSilence)
 	def(&o.FirstAnswer, sec(protocol.LiveHelloSeconds+protocol.LivePongSeconds))
 	def(&o.PollWait, 25*time.Second)
 	def(&o.SocketRetry, 60*time.Second)
 	def(&o.Rescan, 2*time.Second)
-	def(&o.Heartbeat, 5*time.Second)
 	if len(o.Backoff) == 0 {
 		o.Backoff = []time.Duration{1 * time.Second, 2 * time.Second, 3 * time.Second, 5 * time.Second, 8 * time.Second, 13 * time.Second}
 	}
@@ -125,12 +139,21 @@ func lock(dir string) (func(), error) {
 		return nil, fmt.Errorf("sync lock: %w", err)
 	}
 	_ = f.Chmod(0o600)
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		_ = f.Close()
-		if errors.Is(err, unix.EWOULDBLOCK) {
+	deadline := time.Now().Add(lockRetry)
+	for {
+		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EINTR) {
+			_ = f.Close()
+			return nil, fmt.Errorf("sync lock: %w", err)
+		}
+		if !time.Now().Before(deadline) {
+			_ = f.Close()
 			return nil, ErrRunning
 		}
-		return nil, fmt.Errorf("sync lock: %w", err)
+		time.Sleep(5 * time.Millisecond)
 	}
 	_ = f.Truncate(0)
 	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
@@ -339,7 +362,8 @@ func (r *runner) round(ctx context.Context) string {
 }
 
 // flush sends each outbox that has something waiting through core.Core.Sync (the sender lock, the order, the key
-// fetch with its own backoff). An outbox that stays stuck is tried again after a growing wait.
+// fetch with its own backoff). An outbox a flush left items in is tried again after a wait, growing while nothing
+// moves (and the lock's holder, a command, gets its turn meanwhile).
 func (r *runner) flush(ctx context.Context, b store.KeyBinding, cfg *config.Config) {
 	projects, _ := r.st.KeyProjects(b)
 	waiting, _ := r.st.OutboxProjects(b)
@@ -357,17 +381,20 @@ func (r *runner) flush(ctx context.Context, b store.KeyBinding, cfg *config.Conf
 			delete(r.flushAt, pid)
 			continue
 		}
-		if at, ok := r.flushAt[pid]; ok && time.Now().Before(at) {
+		if at, ok := r.flushAt[pid]; ok && r.now().Before(at) && !at.After(r.now().Add(time.Hour)) {
 			continue
 		}
 		c.Sync(ctx, core.DefaultTimeout, pid)
 		left, err := r.st.Waiting(ob)
-		if err != nil || left == 0 || left < n {
+		if err != nil || left == 0 {
 			delete(r.flushStep, pid)
 			delete(r.flushAt, pid)
 			continue
 		}
-		r.flushAt[pid] = time.Now().Add(r.o.backoff(r.flushStep[pid]))
+		if left < n { // it moved, then stopped short: the next try after the first wait
+			r.flushStep[pid] = 0
+		}
+		r.flushAt[pid] = r.now().Add(r.o.backoff(r.flushStep[pid]))
 		r.flushStep[pid]++
 	}
 }
@@ -412,6 +439,7 @@ const (
 
 // work keeps the project's socket open until ctx ends or it must stop.
 func (r *runner) work(ctx context.Context, server, pid, key string) {
+	defer r.clearLive(pid) // the fallback's last answer is not trusted past the sync's end
 	fails := 0
 	for ctx.Err() == nil {
 		if fails >= r.o.FailsBeforePoll {
@@ -463,15 +491,17 @@ func (r *runner) says(pid string, secrets ...string) func(format string, a ...an
 	}
 }
 
-// refusal acts on a refusal of the project's key or membership (from live.ticket, sync.poll or the socket): true
-// when the project must stop (the key is dropped for NOT_A_MEMBER and NOT_ALLOWED from the RPC, as Core.Sync does).
-func (r *runner) refusal(pid, key, reason string, fromRPC bool) bool {
+// refusal acts on a refusal of the project's key or membership: true when the project must stop. NOT_A_MEMBER
+// (live.ticket, sync.poll, the socket) drops the key. NOT_ALLOWED drops it only from sync.poll (keyRefusal), as
+// Core.Sync does: from live.ticket it means a server with live sync off ("use sync.poll"), and on the socket an
+// expired ticket or a disabled account: a failed connect, the fallback deciding.
+func (r *runner) refusal(pid, key, reason string, keyRefusal bool) bool {
 	switch protocol.RejectReason(reason) {
 	case protocol.RejectReasonNotAMember:
 		r.dropKey(pid, key)
 		return true
 	case protocol.RejectReasonNotAllowed:
-		if fromRPC {
+		if keyRefusal {
 			r.dropKey(pid, key)
 			return true
 		}
@@ -521,7 +551,7 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 			return stop
 		}
 		var ae *api.APIError
-		if errors.As(err, &ae) && r.refusal(pid, key, ae.Reason, true) {
+		if errors.As(err, &ae) && r.refusal(pid, key, ae.Reason, false) {
 			say("live.ticket refused, not reconnecting: %v", err)
 			return stop
 		}
@@ -548,6 +578,7 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 		return failed
 	}
 	defer conn.CloseNow()
+	defer r.clearLive(pid) // however it ends, hooks stop trusting it at once
 	conn.SetReadLimit(readLimit)
 	cursors, err := r.st.CursorsErr()
 	if err != nil { // never from 0 because the store could not say where we are
@@ -585,7 +616,7 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 	live := false
 	first := time.NewTimer(r.o.FirstAnswer)
 	defer first.Stop()
-	var ping, heartbeat <-chan time.Time
+	var ping <-chan time.Time
 	var silence *time.Timer
 	silenceC := func() <-chan time.Time {
 		if silence == nil {
@@ -610,7 +641,10 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 				return end(websocket.StatusNormalClosure, failed)
 			}
 		case <-ping:
-			if err := conn.Write(ctx, websocket.MessageText, []byte(protocol.LivePing)); err != nil {
+			wctx, wcancel := context.WithTimeout(ctx, writeTimeout)
+			err := conn.Write(wctx, websocket.MessageText, []byte(protocol.LivePing))
+			wcancel()
+			if err != nil {
 				say("the live socket closed: %v", err)
 				return dropped
 			}
@@ -620,10 +654,6 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 		case <-silenceC():
 			say("nothing heard within %v of a ping: reconnecting", r.o.Silence)
 			return end(websocket.StatusNormalClosure, atOnce)
-		case <-heartbeat:
-			if silence == nil { // not while a ping waits for its answer
-				_ = r.tx(func(tx *store.Tx) error { return tx.SetLiveAt(pid, r.now()) })
-			}
 		case m := <-msgs:
 			if m.err != nil {
 				if ctx.Err() != nil {
@@ -638,6 +668,9 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 			}
 			stopSilence() // anything heard: the socket lives
 			if m.typ == websocket.MessageText && string(m.data) == protocol.LivePong {
+				if live { // heard: hooks may trust the replica a while longer
+					_ = r.tx(func(tx *store.Tx) error { return tx.SetLiveAt(pid, r.now()) })
+				}
 				continue
 			}
 			msg, err := protocol.DecodeLiveMessage(m.data)
@@ -665,9 +698,6 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 					t := time.NewTicker(r.o.PingEvery)
 					defer t.Stop()
 					ping = t.C
-					h := time.NewTicker(r.o.Heartbeat)
-					defer h.Stop()
-					heartbeat = h.C
 				}
 			case protocol.LiveClosed:
 				reason := string(v.Reason)
@@ -682,9 +712,19 @@ func (r *runner) session(ctx context.Context, server, pid, key string) outcome {
 				say("closed (%s: %s)", reason, v.Message)
 				return failed
 			case protocol.UnknownLiveMessage:
+				if live {
+					_ = r.tx(func(tx *store.Tx) error { return tx.SetLiveAt(pid, r.now()) })
+				}
 				r.logOnce("live message "+v.Tag, "teamflow sync: skipped %q live messages: this server is newer than this client", v.Tag)
 			}
 		}
+	}
+}
+
+// clearLive forgets the project's live_at: its socket ended, hooks pull again.
+func (r *runner) clearLive(pid string) {
+	if err := r.tx(func(tx *store.Tx) error { return tx.ClearLiveAt(pid) }); err != nil {
+		r.o.Logf("teamflow sync: %s: could not clear live_at: %v", pid, err)
 	}
 }
 

@@ -59,9 +59,14 @@ type fake struct {
 	pollHold  time.Duration // a poll with nothing new waits this long (never its full wait)
 	// what had happened when the first poll came
 	urlsAtFirstPoll, ticketsAtFirstPoll int
-	urls                                []string      // each /live request's URL
-	headers                             []http.Header // each /live request's headers
-	keyFetch                            string        // key.fetch refuses with this reason ("": answers)
+	urls                                []string                               // each /live request's URL
+	headers                             []http.Header                          // each /live request's headers
+	keyFetch                            string                                 // key.fetch refuses with this reason ("": answers)
+	liveOff                             bool                                   // live.ticket refuses every project as a server with live sync off does
+	pollErr                             map[string]string                      // project -> the reason sync.poll refuses it with
+	emitHook                            func(n int, client string) (fail bool) // before signal.emit request n (1-based), outside the lock
+	emitN                               int
+	clients                             []string // the Teamflow-Client of each signal.emit request
 	// the outbox
 	emitDelay time.Duration
 	order     []string
@@ -72,7 +77,7 @@ type fake struct {
 
 func newFake(t *testing.T) *fake {
 	f := &fake{t: t, events: map[string][]json.RawMessage{}, seqs: map[string][]int64{}, tickets: map[string]string{},
-		used: map[string]bool{}, ticketErr: map[string]string{}, closeWith: map[string][]string{},
+		used: map[string]bool{}, ticketErr: map[string]string{}, pollErr: map[string]string{}, closeWith: map[string][]string{},
 		conns: map[string]*websocket.Conn{}, calls: map[string]int{}, results: map[string]bool{},
 		pollHold: 20 * time.Millisecond}
 	mux := http.NewServeMux()
@@ -337,8 +342,15 @@ func (f *fake) rpc(w http.ResponseWriter, r *http.Request) {
 		}
 		defer f.inFlight.Add(-1)
 		f.mu.Lock()
-		d := f.emitDelay
+		d, hook := f.emitDelay, f.emitHook
+		f.emitN++
+		n, client := f.emitN, r.Header.Get(protocol.ClientHeader)
+		f.clients = append(f.clients, client)
 		f.mu.Unlock()
+		if hook != nil && hook(n, client) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		time.Sleep(d)
 	}
 	var outs []protocol.Response
@@ -364,6 +376,10 @@ func (f *fake) answer(r *http.Request, q protocol.Request) protocol.Response {
 		_ = json.Unmarshal(q.Params, &p)
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if f.liveOff {
+			out.Error = rpcErr("NOT_ALLOWED", "live sync is not set up on this server; use sync.poll")
+			return out
+		}
 		if reason := f.ticketErr[p.Project]; reason != "" {
 			out.Error = rpcErr(reason, "refused by the test")
 			return out
@@ -378,6 +394,13 @@ func (f *fake) answer(r *http.Request, q protocol.Request) protocol.Response {
 		var p protocol.SyncPoll
 		_ = json.Unmarshal(q.Params, &p)
 		f.mu.Lock()
+		for proj := range p.Cursors {
+			if reason := f.pollErr[proj]; reason != "" {
+				f.mu.Unlock()
+				out.Error = rpcErr(reason, "refused by the test")
+				return out
+			}
+		}
 		if len(f.polls) == 0 {
 			f.urlsAtFirstPoll, f.ticketsAtFirstPoll = len(f.urls), f.calls["live.ticket"]
 		}
