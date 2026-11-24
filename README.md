@@ -346,6 +346,8 @@ In detail:
 - `internal/sendlock`: the outbox's sender lock (one sender per outbox across processes).
 - `internal/syncer`: the outbox flush (in order, batches, human acts alone), and pulling events into the replica.
 - `internal/live`: the background sync (`teamflow sync`): live sockets, the `sync.poll` fallback, the one-copy lock.
+- `bench/`: what an agent waits for, measured in CI: the prompt hook, a fresh `teamflow` process on a warm store,
+  p95 under 30 ms over 200 runs, with the background sync running and with the hook starting it.
 - `protocol/`: the protocol exported from the Teamflow server: `schema.json`, `methods.json`, golden messages,
   Deliverables test vectors, hook fixtures and agent texts (instructions, `/teamf`, the commands). `VERSION` names the server commit and
   protocol version it came from.
