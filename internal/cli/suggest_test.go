@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/vutran1710/teamflow-cli/internal/adapters"
 )
 
 // A guessed command name is refused (exit 2) with the closest real ones, so the next try is right.
@@ -40,9 +43,10 @@ func TestUnknownCommandSuggestsTheClosest(t *testing.T) {
 	}
 }
 
-// Nothing close: the refusal stands alone; setup and hidden commands are never offered to a guess.
+// Nothing close: the refusal stands alone. Hidden commands (hook, debug) and setup commands (login, sync, outbox…)
+// are never offered to a guess; a short word is matched only one letter away.
 func TestUnknownCommandSadPaths(t *testing.T) {
-	for _, args := range [][]string{{"zzzzqqq"}, {"project", "xqzw"}, {"-x"}} {
+	for _, args := range [][]string{{"zzzzqqq"}, {"project", "xqzw"}, {"-x"}, {"foo"}} {
 		var out, errw strings.Builder
 		if code := Main(args, strings.NewReader(""), &out, &errw); code != 2 {
 			t.Errorf("%v: exit %d", args, code)
@@ -51,12 +55,15 @@ func TestUnknownCommandSadPaths(t *testing.T) {
 			t.Errorf("%v: suggested something for nothing close:\n%s", args, errw.String())
 		}
 	}
-	for _, w := range []string{"hook", "debug", "mcp"} {
+	for _, w := range []string{"hook", "debug", "mcp", "login", "logout", "sync", "outbox", "install", "update"} {
 		for _, s := range suggest("", w) {
-			if strings.Fields(s)[0] == w {
-				t.Errorf("%q suggested the hidden command %q", w, s)
+			if slices.Contains(adapters.SetupCommands, strings.Fields(s)[0]) || strings.Fields(s)[0] == "mcp" {
+				t.Errorf("%q suggested %q, a hidden or setup command", w, s)
 			}
 		}
+	}
+	if got := suggest("", "plan"); slices.Contains(got, "artifact archive") {
+		t.Errorf("plan: %v (artifact archive is no typo of it)", got)
 	}
 	if s := suggest("", ""); s != nil {
 		t.Errorf("an empty word: %v", s)

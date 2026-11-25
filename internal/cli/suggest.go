@@ -5,8 +5,10 @@ package cli
 // request-update").
 
 import (
+	"slices"
 	"strings"
 
+	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
 
@@ -15,7 +17,8 @@ const maxSuggestions = 3
 
 type candidate struct{ path, help string }
 
-// candidates are every command a person or agent may run (hidden ones left out), by path, with what it does.
+// candidates are the commands a guess may mean, by path, with what they do: never hidden ones, nor setup commands
+// (signing in, installing, the background sync, the outbox): those are the person's to choose, never a correction.
 func candidates() []candidate {
 	var out []candidate
 	seen := map[string]bool{}
@@ -28,7 +31,7 @@ func candidates() []candidate {
 	var walk func(prefix string, cs []*command)
 	walk = func(prefix string, cs []*command) {
 		for _, c := range cs {
-			if c.hidden {
+			if c.hidden || (prefix == "" && slices.Contains(adapters.SetupCommands, c.name)) {
 				continue
 			}
 			path := strings.TrimSpace(prefix + " " + c.name)
@@ -48,8 +51,9 @@ func candidates() []candidate {
 }
 
 // suggest is up to maxSuggestions real command paths closest to an unknown word typed after prefix ("" at the top):
-// a command with that very word in its path first, then one with a word a typo away, then one whose description
-// names the word. Inside a group, its own commands come first.
+// a command with that very word in its path first, then one with a word a typo away; a command whose description
+// names the word only beside an exact match in its group, and only when it changes it. Inside a group, its own
+// commands come first.
 func suggest(prefix, typed string) []string {
 	w := strings.ToLower(strings.TrimSpace(typed))
 	if w == "" || strings.HasPrefix(w, "-") {
@@ -69,7 +73,7 @@ func suggest(prefix, typed string) []string {
 			switch {
 			case cw == w:
 				score = best(score, 0)
-			case len(w) >= 3 && (levenshtein(cw, w) <= 2 || strings.HasPrefix(cw, w)):
+			case len(w) >= 3 && (levenshtein(cw, w) <= typos(w) || strings.HasPrefix(cw, w)):
 				score = best(score, 1)
 			}
 		}
@@ -99,11 +103,17 @@ func suggest(prefix, typed string) []string {
 			exact[parent(g.path)] = true
 		}
 	}
-	for i, g := range got {
-		if g.score%3 == 2 && exact[parent(g.path)] && changes(helpOf[g.path]) {
-			got[i].score-- // a guessed noun usually means doing something to it: the commands that change it
+	kept := got[:0]
+	for _, g := range got {
+		if g.score%3 == 2 { // named only in its description: kept beside an exact match in its group, if it changes it
+			if !exact[parent(g.path)] || !changes(helpOf[g.path]) {
+				continue
+			}
+			g.score-- // a guessed noun usually means doing something to it
 		}
+		kept = append(kept, g)
 	}
+	got = kept
 	var out []string
 	for s := 0; s <= 5 && len(out) < maxSuggestions; s++ {
 		for _, g := range got {
@@ -131,6 +141,15 @@ func parent(path string) string {
 		return path[:i]
 	}
 	return ""
+}
+
+// typos is how far a word may be from a command's to be a typo of it: 1 for short words (no "log" for "foo"),
+// 2 from five letters.
+func typos(w string) int {
+	if len(w) <= 4 {
+		return 1
+	}
+	return 2
 }
 
 func best(a, b int) int {
