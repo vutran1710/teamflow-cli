@@ -648,6 +648,17 @@ func TestDeliverablesPublishing(t *testing.T) {
 	if p := params(t, onlyCall(t, m.srv, "deliverables.publish")); p["base_version"] != nil {
 		t.Fatalf("the first needs no base: %v", p)
 	}
+	// The help says "none for the first": `--base-version none` is the first publish too (an agent read it so).
+	m = agentMachine(t)
+	writeFile(t, "d.json", goodMilestones)
+	r = m.run("", "deliverables", "publish", "--base-version", "none", "--file", "d.json", "--json")
+	wantCode(t, r, 0)
+	if p := params(t, onlyCall(t, m.srv, "deliverables.publish")); p["base_version"] != nil {
+		t.Fatalf("--base-version none sent a base: %v", p)
+	}
+	for _, bad := range []string{"0", "-1", "", "None of it"} {
+		wantCode(t, m.run("", "deliverables", "publish", "--base-version", bad, "--file", "d.json"), 2)
+	}
 	// With Deliverables v1 here: the base is required and must be current (a stale base sends nothing).
 	m = agentMachine(t)
 	withDeliverables(m)

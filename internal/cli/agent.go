@@ -320,14 +320,16 @@ func jsonKind(raw json.RawMessage) string {
 	return "other"
 }
 
-// baseVersion is --base-version: the Deliverables version read (none for the first).
+// baseVersion is --base-version: the Deliverables version read (none for the first: the flag left out, or the
+// word "none", as the help says).
 func baseVersion(a *parsed) (*int64, error) {
-	if !a.has("base-version") {
+	if !a.has("base-version") || strings.EqualFold(strings.TrimSpace(a.get("base-version")), "none") {
 		return nil, nil
 	}
 	n, err := strconv.ParseInt(strings.TrimSpace(a.get("base-version")), 10, 64)
 	if err != nil || n < 1 {
-		return nil, usageError{"Invalid value for '--base-version': " + a.get("base-version") + " (the version you read, a number)"}
+		return nil, usageError{"Invalid value for '--base-version': " + a.get("base-version") +
+			" (the version you read, a number; none, or leave it out, for the first)"}
 	}
 	return &n, nil
 }
