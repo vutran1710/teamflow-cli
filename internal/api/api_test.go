@@ -824,3 +824,25 @@ func TestLiveURL(t *testing.T) {
 		t.Fatalf("ids not escaped: %s", got)
 	}
 }
+
+// The key refusal is matched exactly: NOT_ALLOWED with the router's message. Sad paths: another NOT_ALLOWED
+// message, the message under another reason, an UPGRADE_REQUIRED answer.
+func TestKeyRefusedIsExact(t *testing.T) {
+	cases := []struct {
+		err  *APIError
+		want bool
+	}{
+		{&APIError{Code: protocol.CodeRuleFailed, Reason: "NOT_ALLOWED", Message: KeyRefusalMessage}, true},
+		{&APIError{Code: protocol.CodeRuleFailed, Reason: "NOT_ALLOWED", Message: "only the org's admin can do this"}, false},
+		{&APIError{Code: protocol.CodeRuleFailed, Reason: "NOT_A_MEMBER", Message: KeyRefusalMessage}, false},
+		{&APIError{Code: protocol.CodeRuleFailed, Reason: "UPGRADE_REQUIRED", Message: KeyRefusalMessage}, false},
+	}
+	for _, tc := range cases {
+		if got := errors.Is(fmt.Errorf("wrapped: %w", tc.err), ErrKeyRefused); got != tc.want {
+			t.Errorf("%v: %v, want %v", tc.err, got, tc.want)
+		}
+	}
+	if errors.Is(cases[0].err, ErrUpgradeRequired) {
+		t.Error("a key refusal is not UPGRADE_REQUIRED")
+	}
+}

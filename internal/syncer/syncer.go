@@ -120,7 +120,8 @@ func Push(ctx context.Context, st *store.Store, c *api.Client, ob store.Outbox) 
 // accepted, or refused for good (INVALID_PARAMS, a reasoned refusal, too large, never sendable, given up on): its
 // session is told, unless it is one of the caller's own (mine), whose answers come back in Flushed.Answers
 // instead. A transient failure (offline, 5xx, 429, a lost or unreadable answer, UPGRADE_REQUIRED, a key no
-// longer a member's) stops the flush there: the item and everything after it wait, and the error is returned.
+// longer a member's, a key the server refuses for itself: api.ErrKeyRefused, even as a signal.emit answered
+// accepted:false) stops the flush there: the item and everything after it wait, and the error is returned.
 // Retries send the same ids, which the server answers once. Items queued while it runs are sent too. The caller
 // holds the outbox's sender lock (see core).
 func Flush(ctx context.Context, st *store.Store, c *api.Client, ob store.Outbox, mine map[string]bool) (Flushed, error) {
@@ -192,6 +193,7 @@ func flushPass(ctx context.Context, st *store.Store, c *api.Client, ob store.Out
 					res[i].Err = rerr
 				}
 			}
+			res = keyRefusals(chunk, res)
 			// A failure is the item's own only when it went alone, or others in its request were answered.
 			own := len(chunk) == 1
 			for i, r := range res {
@@ -251,11 +253,32 @@ func sendAlone(ctx context.Context, st *store.Store, c *api.Client, ob store.Out
 	}
 	var raw json.RawMessage
 	cerr := c.Call(ctx, p.item.Method, json.RawMessage(p.item.Params), &raw)
-	if cerr != nil && p.drift.Drift != "" && p.item.Tries > 0 && (reason(cerr) == protocol.RejectReasonDriftClosed ||
-		reason(cerr) == protocol.RejectReasonNotAllowed) {
+	if cerr != nil && p.drift.Drift != "" && p.item.Tries > 0 && !errors.Is(cerr, api.ErrKeyRefused) &&
+		(reason(cerr) == protocol.RejectReasonDriftClosed || reason(cerr) == protocol.RejectReasonNotAllowed) {
 		raw, cerr = confirmDrift(ctx, st, c, ob, p, cerr)
 	}
-	return api.Result{Result: raw, Err: cerr}, nil
+	return keyRefusal(p, api.Result{Result: raw, Err: cerr}), nil
+}
+
+// keyRefusal turns a signal.emit answered accepted:false for the key itself (api.KeyRefused: the server no longer
+// knows the key) into the refusal error it is, so the item is kept for a new key, never answered as rejected.
+func keyRefusal(p pending, r api.Result) api.Result {
+	if r.Err != nil || p.item.Method != "signal.emit" {
+		return r
+	}
+	var res protocol.SignalResult
+	if json.Unmarshal(r.Result, &res) != nil || res.Accepted || res.Reason == nil ||
+		!api.KeyRefused(string(*res.Reason), res.Message) {
+		return r
+	}
+	return api.Result{Err: &api.APIError{Code: protocol.CodeRuleFailed, Reason: string(*res.Reason), Message: res.Message}}
+}
+
+func keyRefusals(ps []pending, res []api.Result) []api.Result {
+	for i := range res {
+		res[i] = keyRefusal(ps[i], res[i])
+	}
+	return res
 }
 
 // answered says whether r is the server's final word on p: a result this client can read, or p's own refusal.
@@ -301,7 +324,7 @@ func confirmGiveUp(ctx context.Context, st *store.Store, c *api.Client, ob store
 		rs, berr := c.Batch(ctx, []api.Call{{Method: nx.item.Method, Params: json.RawMessage(nx.item.Params)}})
 		res = api.Result{Err: berr}
 		if berr == nil && len(rs) == 1 {
-			res = rs[0]
+			res = keyRefusal(nx, rs[0])
 		}
 	}
 	if !answered(nx, res) {
@@ -506,8 +529,8 @@ func refused(err error) bool {
 		return true
 	}
 	var ae *api.APIError
-	if !errors.As(err, &ae) || errors.Is(err, api.ErrUpgradeRequired) {
-		return false
+	if !errors.As(err, &ae) || errors.Is(err, api.ErrUpgradeRequired) || errors.Is(err, api.ErrKeyRefused) {
+		return false // the key refused itself (restored, re-added): the caller fetches a new one, the outbox waits
 	}
 	switch protocol.RejectReason(ae.Reason) {
 	case protocol.RejectReasonNotAMember: // the key is no longer good: the caller drops it, the outbox waits
@@ -522,7 +545,7 @@ func counts(err error) bool {
 	if errors.Is(err, api.ErrServerFault) || errors.Is(err, errUnreadableAnswer) {
 		return true
 	}
-	if errors.Is(err, api.ErrOffline) || errors.Is(err, api.ErrUpgradeRequired) {
+	if errors.Is(err, api.ErrOffline) || errors.Is(err, api.ErrUpgradeRequired) || errors.Is(err, api.ErrKeyRefused) {
 		return false
 	}
 	var ae *api.APIError

@@ -93,7 +93,7 @@ func (q *Queued) Error() string {
 }
 
 // Hard says whether the wait needs the person: the server refused this client or this key (update teamflow, the
-// membership revoked), not a server that is unreachable, busy or briefly failing. A command reports it as a
+// membership revoked, a key refused and no new one to be had), not a server that is unreachable, busy or briefly failing. A command reports it as a
 // failure; the item still waits in the outbox, never lost. (NOT_ALLOWED on an item is that item's refusal: it
 // leaves the outbox, never waits.)
 func (q *Queued) Hard() bool { return hard(q.Cause) }
@@ -103,7 +103,8 @@ func hard(err error) bool {
 	if !errors.As(err, &ae) {
 		return false
 	}
-	return errors.Is(err, api.ErrUpgradeRequired) || ae.Reason == string(protocol.RejectReasonNotAMember)
+	return errors.Is(err, api.ErrUpgradeRequired) || errors.Is(err, api.ErrKeyRefused) ||
+		ae.Reason == string(protocol.RejectReasonNotAMember)
 }
 
 func queuedMessage(ahead int, cause error) string {
@@ -160,10 +161,11 @@ func (c *Core) lockOutbox(ctx context.Context, ob store.Outbox, wait time.Durati
 	return sendlock.Acquire(ctx, c.Dir, ob.Ref(), wait)
 }
 
-// pushOutbox sends the outbox ob with a (the sign-in's current key for its project) when the sender lock is free
+// pushOutbox sends the outbox ob with key (the sign-in's current key for its project) when the sender lock is free
 // within SyncLockWait, all of it within timeout (a hook's budget); otherwise its holder sends it, and pushOutbox
-// does nothing.
-func (c *Core) pushOutbox(ctx context.Context, a *api.Client, ob store.Outbox, timeout time.Duration) error {
+// does nothing. It returns the key the project has now: a new one when the server refused key itself (see
+// flushKeyed).
+func (c *Core) pushOutbox(ctx context.Context, key string, ob store.Outbox, timeout time.Duration) (string, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -171,14 +173,60 @@ func (c *Core) pushOutbox(ctx context.Context, a *api.Client, ob store.Outbox, t
 	}
 	release, err := c.lockOutbox(ctx, ob, SyncLockWait)
 	if errors.Is(err, sendlock.ErrBusy) {
-		return nil
+		return key, nil
 	}
 	if err != nil {
-		return err
+		return key, err
 	}
 	defer release()
-	_, err = syncer.Push(ctx, c.St, a.Ungated(), ob)
-	return err
+	_, key, err = c.flushKeyed(ctx, ob, key, timeout, nil)
+	return key, err
+}
+
+// flushKeyed flushes the outbox ob with key (the caller holds its sender lock). When the server refuses the key
+// itself (api.ErrKeyRefused: it no longer knows it, after a restore or the member re-added), every item stays
+// queued, the key is dropped, a new one is fetched with the auth key and the flush runs once more under it (never
+// more than once: a new key refused as well waits for a later sync). It returns what both flushes sent and the
+// key the project has now ("" when none could be fetched).
+func (c *Core) flushKeyed(ctx context.Context, ob store.Outbox, key string, timeout time.Duration,
+	mine map[string]bool) (syncer.Flushed, string, error) {
+	f, err := syncer.Flush(ctx, c.St, c.client(key, timeout), ob, mine)
+	if !errors.Is(err, api.ErrKeyRefused) {
+		return f, key, err
+	}
+	nk, kerr := c.renewKey(ctx, ob, key)
+	if kerr != nil {
+		if errors.Is(kerr, api.ErrOffline) {
+			return f, "", kerr
+		}
+		return f, "", err // the membership refused too: the items wait, the key is asked for after KeyRetryAfter
+	}
+	g, err := syncer.Flush(ctx, c.St, c.client(nk, timeout), ob, mine)
+	g.Sent += f.Sent
+	for id, a := range f.Answers {
+		g.Answers[id] = a
+	}
+	return g, nk, err
+}
+
+// renewKey drops key, the sign-in's key for ob's project that the server refused for itself, and fetches a new
+// one with the auth key (another process that renewed it already leaves its new key, which is used). A refused
+// fetch (the membership gone) waits KeyRetryAfter before the key is asked for again.
+func (c *Core) renewKey(ctx context.Context, ob store.Outbox, key string) (string, error) {
+	b, err := c.binding()
+	if err != nil {
+		return "", err
+	}
+	if cur, _, _, _, ok := c.St.ProjectKey(b, ob.Project); ok && cur == key {
+		if err := c.St.DropProjectKey(b, ob.Project); err != nil {
+			return "", err
+		}
+	}
+	nk, err := c.ProjectKey(ctx, ob.Project)
+	if err != nil && !errors.Is(err, api.ErrOffline) {
+		_ = c.St.SetKeyFetchRefused(ob, c.Now().Add(KeyRetryAfter))
+	}
+	return nk, err
 }
 
 // sendMine queues the caller's own items (add) and flushes the outbox ob with key, holding the sender lock across
@@ -204,7 +252,7 @@ func (c *Core) sendMine(ctx context.Context, ob store.Outbox, key string, keyErr
 	if keyErr != nil { // no key to send with (offline): queued for the next sync
 		return f, keyErr, nil
 	}
-	f, stopped = syncer.Flush(ctx, c.St, c.client(key, timeout), ob, mine)
+	f, _, stopped = c.flushKeyed(ctx, ob, key, timeout, mine)
 	return f, stopped, nil
 }
 
@@ -225,7 +273,7 @@ func (c *Core) gate(ob store.Outbox, key string) api.Gate {
 			return &NotSent{Method: method, Waiting: n, Cause: err}
 		}
 		defer release()
-		_, ferr := syncer.Flush(ctx, c.St, c.client(key, DefaultTimeout), ob, nil)
+		_, _, ferr := c.flushKeyed(ctx, ob, key, DefaultTimeout, nil)
 		n, err := c.St.Waiting(ob)
 		if err != nil {
 			return err

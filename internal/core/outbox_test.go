@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,7 +45,10 @@ type outboxServer struct {
 	results    map[string]bool // signal ids with a stored result
 	auths      []string        // the Authorization of each outbox request
 	inFlight   atomic.Int32
-	keyRefused bool // key.fetch answers NOT_A_MEMBER
+	keyRefused bool   // key.fetch answers NOT_A_MEMBER
+	forgot     string // a project key the server no longer knows (a restore, a member re-added): refused for the key
+	whole      bool   // with forgot: a batch under that key is refused whole (one error, not an array)
+	accepted   []string
 	keyFetchN  int
 	maxIn      atomic.Int32
 	outboxN    int
@@ -103,8 +107,32 @@ func (s *outboxServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	forgotten := s.forgot != "" && r.Header.Get("Authorization") == "Bearer "+s.forgot
+	keyRefusal := &protocol.RpcError{Code: protocol.CodeRuleFailed, Message: api.KeyRefusalMessage,
+		Data: map[string]any{"reason": "NOT_ALLOWED"}}
+	if forgotten && batch && s.whole {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.Response{JSONRPC: "2.0", Error: keyRefusal})
+		return
+	}
 	answer := func(q protocol.Request) protocol.Response {
 		out := protocol.Response{JSONRPC: "2.0", ID: q.ID}
+		if forgotten && q.Method != "key.fetch" {
+			if q.Method == "signal.emit" { // the router's _call: a result, refused for the key
+				var p struct {
+					Signal struct {
+						ID string `json:"id"`
+					} `json:"signal"`
+				}
+				_ = json.Unmarshal(q.Params, &p)
+				s.order = append(s.order, p.Signal.ID)
+				out.Result = json.RawMessage(fmt.Sprintf(`{"signal": %q, "accepted": false, "reason": "NOT_ALLOWED", "message": %q}`,
+					p.Signal.ID, api.KeyRefusalMessage))
+				return out
+			}
+			out.Error = keyRefusal
+			return out
+		}
 		var p struct {
 			Drift  string `json:"drift"`
 			Signal struct {
@@ -131,6 +159,9 @@ func (s *outboxServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		switch q.Method {
 		case "signal.emit":
+			if !s.results[id] {
+				s.accepted = append(s.accepted, id)
+			}
 			s.results[id] = true
 			out.Result = json.RawMessage(fmt.Sprintf(`{"signal": %q, "accepted": true, "message": "", "state": "IN_FORCE"}`, id))
 		case "drift.resolve", "drift.dismiss":
@@ -938,5 +969,178 @@ func TestKeyFetchForARefusedMembershipBacksOff(t *testing.T) {
 	}
 	if len(outbox(t, c)) != 1 {
 		t.Fatal("the item was lost")
+	}
+}
+
+// rejectedNotices are the "rejected" notices session s1 holds.
+func rejectedNotices(t *testing.T, c *Core) []store.Notice {
+	t.Helper()
+	ns, err := c.St.Notices("s1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []store.Notice
+	for _, n := range ns {
+		if n.Type == protocol.NoticeTypeSignalRejected {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func (s *outboxServer) acceptedIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.accepted...)
+}
+
+// The server forgets this machine's project key (restored from a backup, the member re-added) while two signals
+// wait: signal.emit answers accepted:false NOT_ALLOWED "use a project key for this project", or the whole batch is
+// refused for the key. Both are kept (never a "rejected" notice), the key is dropped, a new one fetched with the
+// auth key, and both are sent under it once, in order. Sad paths: a stale key (restore), the per-call refusal and
+// the whole-batch refusal, no notice for a refusal that is about the key, a fresh process after the refusal.
+func TestForgottenKeyKeepsTheQueue(t *testing.T) {
+	for _, whole := range []bool{false, true} {
+		t.Run(fmt.Sprintf("whole=%v", whole), func(t *testing.T) {
+			ctx := context.Background()
+			s, srv := newOutboxServer(t)
+			c := outboxCore(t, srv.URL)
+			ids := queueNotes(t, c, 0, 2)
+			s.set(func() { s.forgot, s.whole = "tfk_example", whole })
+			c.Sync(ctx, DefaultTimeout, "")
+			if got := s.acceptedIDs(); strings.Join(got, ",") != strings.Join(ids, ",") {
+				t.Fatalf("accepted %v, want %v once each, in order", got, ids)
+			}
+			if n := len(outbox(t, c)); n != 0 {
+				t.Fatalf("outbox %v", outbox(t, c))
+			}
+			if ns := rejectedNotices(t, c); len(ns) != 0 {
+				t.Fatalf("a key refusal told the session its signals were rejected: %+v", ns)
+			}
+			if key, _, _, _, _ := c.St.ProjectKey(mustBinding(t, c), P); key != "tfk_minted" {
+				t.Fatalf("key %q, want the new one", key)
+			}
+			if n := s.fetches(); n != 1 {
+				t.Fatalf("key.fetch %d times", n)
+			}
+		})
+	}
+}
+
+// The same refusal while the agent emits (its own signal behind a queued one) and while the person acts (a drift
+// act, whose refusal is a RULE_FAILED error with the same message): nothing is dropped, the agent's signal and the
+// act are answered by the server under the new key, after what was queued before them.
+func TestForgottenKeyOnEmitAndHumanAct(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	ids := queueNotes(t, c, 0, 1)
+	s.set(func() { s.forgot = "tfk_example" })
+	answers, err := c.Emit(ctx, "s1", []map[string]any{note(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := answers[0].Get("accepted"); a != true {
+		t.Fatalf("emit answered %v", answers[0])
+	}
+	got := s.acceptedIDs()
+	if len(got) != 2 || got[0] != ids[0] {
+		t.Fatalf("accepted %v", got)
+	}
+	// The minted key is forgotten in turn: a drift act behind a queued signal.
+	more := queueNotes(t, c, 5, 1)
+	if err := c.St.PutProjectKey(mustBinding(t, c), P, "tfk_minted", tM1, "og_x", "Pricing", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.set(func() { s.forgot = "tfk_minted" })
+	// key.fetch mints tfk_minted again: forget it only for the first round, then take it.
+	n := 0
+	s.set(func() {
+		s.block = func(int) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if n++; n > 1 {
+				s.forgot = ""
+			}
+		}
+	})
+	if _, err := c.DriftAct(ctx, P, "s1", "drift.dismiss", "dr_1", "not a drift", nil); err != nil {
+		t.Fatalf("drift act: %v", err)
+	}
+	order, _ := s.got()
+	if last := order[len(order)-1]; last != "drift.dismiss dr_1" || !slices.Contains(s.acceptedIDs(), more[0]) {
+		t.Fatalf("order %v accepted %v", order, s.acceptedIDs())
+	}
+	if ns := rejectedNotices(t, c); len(ns) != 0 {
+		t.Fatalf("rejected notices %+v", ns)
+	}
+}
+
+// The member really is gone: the key is refused and key.fetch is refused too (NOT_A_MEMBER). Every item stays
+// (never a "rejected" notice), the key is dropped, and the flush asks for a key once, never looping. A new key
+// refused again in the same flush is not asked for a second time. Sad paths: revoked membership, a renewed key
+// also refused, no loop, nothing lost.
+func TestForgottenKeyWithTheMembershipGone(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	ids := queueNotes(t, c, 0, 2)
+	s.set(func() { s.forgot, s.keyRefused = "tfk_example", true })
+	c.Sync(ctx, DefaultTimeout, "")
+	if got := outbox(t, c); strings.Join(got, ",") != strings.Join(ids, ",") {
+		t.Fatalf("outbox %v, want both kept", got)
+	}
+	if ns := rejectedNotices(t, c); len(ns) != 0 {
+		t.Fatalf("rejected notices %+v", ns)
+	}
+	if _, _, _, _, ok := c.St.ProjectKey(mustBinding(t, c), P); ok {
+		t.Fatal("the refused key was kept")
+	}
+	if n := s.fetches(); n != 1 {
+		t.Fatalf("key.fetch %d times", n)
+	}
+	// A renewed key refused as well: one renewal per flush, the items kept.
+	if err := c.St.PutProjectKey(mustBinding(t, c), P, "tfk_example", tM1, "og_x", "Pricing", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.set(func() { s.forgot, s.keyRefused, s.keyFetchN = "", false, 0 })
+	s.set(func() {
+		s.callErr = func(string) *protocol.RpcError {
+			return &protocol.RpcError{Code: protocol.CodeRuleFailed, Message: api.KeyRefusalMessage, Data: map[string]any{"reason": "NOT_ALLOWED"}}
+		}
+	})
+	c.Sync(ctx, DefaultTimeout, "")
+	if got := outbox(t, c); len(got) != 2 {
+		t.Fatalf("outbox %v", got)
+	}
+	if n := s.fetches(); n != 1 {
+		t.Fatalf("key.fetch %d times in one flush", n)
+	}
+	if ns := rejectedNotices(t, c); len(ns) != 0 {
+		t.Fatalf("rejected notices %+v", ns)
+	}
+}
+
+// Any other NOT_ALLOWED refusal is the item's own: it leaves the outbox and its session is told (the key match is
+// exact, never a reason alone). Sad path: a reasoned refusal that is not about the key.
+func TestOtherNotAllowedStillRejects(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	ids := queueNotes(t, c, 0, 1)
+	s.set(func() {
+		s.callErr = func(string) *protocol.RpcError {
+			return &protocol.RpcError{Code: protocol.CodeRuleFailed, Message: "only the org's admin can do this", Data: map[string]any{"reason": "NOT_ALLOWED"}}
+		}
+	})
+	c.Sync(ctx, DefaultTimeout, "")
+	if got := outbox(t, c); len(got) != 0 {
+		t.Fatalf("outbox %v", got)
+	}
+	if ns := rejectedNotices(t, c); len(ns) != 1 || ns[0].About != ids[0] {
+		t.Fatalf("notices %+v", ns)
+	}
+	if n := s.fetches(); n != 0 {
+		t.Fatalf("key.fetch %d times for an item's own refusal", n)
 	}
 }

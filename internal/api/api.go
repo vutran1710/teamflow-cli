@@ -44,6 +44,11 @@ var (
 	ErrTooLarge = errors.New("request too large")
 )
 
+// KeyRefusalMessage is the server's message, with reason NOT_ALLOWED, when it does not take the key as a project
+// key at all (router `_call` and `who_refuses`): a key it no longer knows (restored from a backup, the member
+// re-added). The refusal is about the key, never the call: the call is sent again under a new key.
+const KeyRefusalMessage = "use a project key for this project"
+
 // APIError is the server's JSON-RPC error answer (or an answer that is not JSON-RPC: Code is then the HTTP status).
 type APIError struct {
 	Code    int
@@ -61,9 +66,26 @@ func (e *APIError) Error() string {
 	return strconv.Itoa(e.Code) + ": " + e.Message
 }
 
-// Is makes errors.Is(err, ErrUpgradeRequired) true for UPGRADE_REQUIRED answers.
+// Is makes errors.Is(err, ErrUpgradeRequired) true for UPGRADE_REQUIRED answers, and errors.Is(err, ErrKeyRefused)
+// for the server's refusal of the key itself (KeyRefused).
 func (e *APIError) Is(target error) bool {
-	return target == ErrUpgradeRequired && e.Reason == string(protocol.RejectReasonUpgradeRequired)
+	switch target {
+	case ErrUpgradeRequired:
+		return e.Reason == string(protocol.RejectReasonUpgradeRequired)
+	case ErrKeyRefused:
+		return KeyRefused(e.Reason, e.Message)
+	}
+	return false
+}
+
+// ErrKeyRefused matches (errors.Is) the server's refusal of the project key itself: NOT_ALLOWED with exactly
+// KeyRefusalMessage. Nothing sent under that key was refused for its own sake.
+var ErrKeyRefused = errors.New("the server no longer takes this project key")
+
+// KeyRefused says whether a refusal (reason and message, from an error or a rejected signal result) is the
+// server's refusal of the key itself. The match is exact: any other NOT_ALLOWED is the call's own refusal.
+func KeyRefused(reason, message string) bool {
+	return reason == string(protocol.RejectReasonNotAllowed) && message == KeyRefusalMessage
 }
 
 // ProtocolRecorder keeps what the server said about protocols (store.Store is one).

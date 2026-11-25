@@ -197,8 +197,7 @@ func (c *Core) sync(ctx context.Context, timeout time.Duration, only string, for
 				continue
 			}
 		}
-		a := c.client(key, timeout)
-		err := c.syncOne(ctx, a, ob, pid, timeout)
+		err := c.syncOne(ctx, key, ob, pid, timeout)
 		if errors.Is(err, api.ErrOffline) {
 			return false
 		}
@@ -219,10 +218,12 @@ func (c *Core) LiveFresh(project string) bool {
 	return !live.IsZero() && now.Sub(live) <= LiveFresh && !live.After(now)
 }
 
-func (c *Core) syncOne(ctx context.Context, a *api.Client, ob store.Outbox, pid string, timeout time.Duration) error {
-	if err := c.pushOutbox(ctx, a, ob, timeout); err != nil {
+func (c *Core) syncOne(ctx context.Context, key string, ob store.Outbox, pid string, timeout time.Duration) error {
+	key, err := c.pushOutbox(ctx, key, ob, timeout)
+	if err != nil {
 		return err
 	}
+	a := c.client(key, timeout)
 	if _, err := syncer.Pull(ctx, c.St, a, timeout); err != nil {
 		return err
 	}
