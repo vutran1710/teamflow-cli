@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/home"
+	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
@@ -199,7 +201,9 @@ var agentFlag = flagSpec{name: "agent", short: "a", kind: list,
 
 var installCmd = &command{
 	name: "install", help: "Sign in, set Teamflow up in your agents, and start the background sync.",
-	flags: []flagSpec{agentFlag, emailFlag, serverFlag, passwordStdinFlag}, nargs: exactly(0), run: runInstall,
+	flags: []flagSpec{agentFlag, emailFlag, serverFlag, passwordStdinFlag,
+		{name: "json", kind: flag, help: "Print one JSON object: installed, failed, on_path (the rest goes to stderr)"}},
+	nargs: exactly(0), run: runInstall,
 }
 
 // chooseAgents is the agents named with -a (checked: supported, and in this build), or, with none named, the
@@ -272,9 +276,57 @@ func (r *inv) chooseAgents(named []string, verb string) ([]adapters.Adapter, int
 	return out, 0
 }
 
+// executable is this binary's path (os.Executable; a test sets its own).
+var executable = os.Executable
+
+// onPath says whether `teamflow`, run by name, is this binary (the same file, through links too). found is what
+// the PATH gives ("" when nothing).
+func onPath(bin string) (ok bool, found string) {
+	found, err := exec.LookPath("teamflow")
+	if err != nil {
+		return false, ""
+	}
+	if abs, err := filepath.Abs(found); err == nil {
+		found = abs
+	}
+	a, aerr := os.Stat(found)
+	b, berr := os.Stat(bin)
+	return aerr == nil && berr == nil && os.SameFile(a, b), found
+}
+
+// pathHint is how to put dir on the PATH, for zsh and bash ($HOME for the home folder, never the person's path).
+func pathHint(dir string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, err := filepath.Rel(home, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+			dir = "$HOME/" + rel
+			if rel == "." {
+				dir = "$HOME"
+			}
+		}
+	}
+	return "Add its folder to your PATH, then open a new terminal:\n" +
+		"  zsh:  echo 'export PATH=\"" + dir + ":$PATH\"' >> ~/.zshrc\n" +
+		"  bash: echo 'export PATH=\"" + dir + ":$PATH\"' >> ~/.bashrc\n" +
+		"Your agents' hooks call teamflow by its full path and work as they are; you, the /teamf command and the " +
+		"agents' own `teamflow ...` commands run it by name and need it on the PATH.\n"
+}
+
+// pathWarning is the loud warning when `teamflow` on the PATH is not bin ("" when it is).
+func pathWarning(bin string) (string, bool) {
+	ok, found := onPath(bin)
+	if ok {
+		return "", true
+	}
+	head := "WARNING: teamflow is not on your PATH (" + bin + ").\n"
+	if found != "" {
+		head = "WARNING: the teamflow on your PATH is " + found + ", not this one (" + bin + ").\n"
+	}
+	return "\n" + head + pathHint(filepath.Dir(bin)), false
+}
+
 // binary is how agents call this CLI: an absolute path, so hooks work from any folder.
 func binary() string {
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		exe = os.Args[0]
 	}
@@ -285,21 +337,40 @@ func binary() string {
 }
 
 func runInstall(r *inv, a *parsed) int {
+	if !a.has("json") {
+		code, _ := install(r, a)
+		return code
+	}
+	// --json: the human lines go to stderr; stdout is one JSON object (what was set up, and on_path).
+	stdout := r.out
+	r.out = r.errw
+	code, answer := install(r, a)
+	r.out = stdout
+	if answer == nil {
+		return code
+	}
+	r.printJSON(answer)
+	return code
+}
+
+// install signs in and sets up the chosen agents. It returns the exit code and, once agents were set up (or
+// refused), the answer install --json prints: installed, failed, on_path.
+func install(r *inv, a *parsed) (int, ojson.Obj) {
 	email := a.get("email")
 	if email == "" {
-		return usageFail(r, "install", "Missing option '-e' / '--email'")
+		return usageFail(r, "install", "Missing option '-e' / '--email'"), nil
 	}
 	chosen, code := r.chooseAgents(a.lists["agent"], "install")
 	if chosen == nil {
-		return code
+		return code, nil
 	}
 	c, err := r.core()
 	if err != nil {
-		return r.failErr(err)
+		return r.failErr(err), nil
 	}
 	if !c.SignedIn() || !strings.EqualFold(c.Cfg.Email, email) || (a.get("server") != "" && store.NormalizeServer(a.get("server")) != store.NormalizeServer(c.Cfg.Server)) {
 		if code := r.signIn(serverFor(a.get("server"), c.Cfg), email, a.has("password-stdin")); code != 0 {
-			return code
+			return code, nil
 		}
 	} else {
 		r.printf("signed in as %s\n", c.Cfg.Email)
@@ -307,7 +378,7 @@ func runInstall(r *inv, a *parsed) int {
 	bin := binary()
 	// Each agent on its own: one refusing (a malformed or read-only file of its own, checked before it writes
 	// anything) leaves it untouched and the others set up.
-	var failed []string
+	var failed, done []string
 	for _, ad := range chosen {
 		lines, err := ad.Install(bin)
 		r.printf("%s:\n", ad.Name())
@@ -317,7 +388,9 @@ func runInstall(r *inv, a *parsed) int {
 		if err != nil {
 			fmt.Fprintf(r.errw, "%s: not set up: %v\n", ad.Name(), err)
 			failed = append(failed, ad.Name())
+			continue
 		}
+		done = append(done, ad.Name())
 	}
 	// The agents that were set up get the background sync even when another refused.
 	if len(failed) < len(chosen) && adapters.StartSync != nil {
@@ -325,11 +398,16 @@ func runInstall(r *inv, a *parsed) int {
 			fmt.Fprintf(r.errw, "the background sync did not start: %v\n", err)
 		}
 	}
+	// Still installed when teamflow is not on the PATH (the hooks use its full path): said loudly, never a failure.
+	warning, on := pathWarning(bin)
+	fmt.Fprint(r.errw, warning)
+	answer := ojson.Obj{{Key: "installed", Value: append([]string{}, done...)},
+		{Key: "failed", Value: append([]string{}, failed...)}, {Key: "on_path", Value: on}}
 	if len(failed) > 0 {
-		return r.fail("not set up in " + strings.Join(failed, ", ") + "; fix what is said above, then run the install again")
+		return r.fail("not set up in " + strings.Join(failed, ", ") + "; fix what is said above, then run the install again"), answer
 	}
 	r.println("Done. In a session, ask your agent which Teamflow project it works on (or run /teamf project).")
-	return 0
+	return 0, answer
 }
 
 var uninstallCmd = &command{

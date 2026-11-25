@@ -120,13 +120,34 @@ main() {
 
 	new=""
 	echo "Installed teamflow $tag to $bindir/teamflow"
+	found="$(command -v teamflow 2>/dev/null || true)"
 	case ":$PATH:" in
-	*":$bindir:"*) ;;
-	*) echo "Note: $bindir is not on your PATH; add it, for example: export PATH=\"$bindir:\$PATH\"" ;;
+	*":$bindir:"*)
+		if [ -n "$found" ] && [ "$found" != "$bindir/teamflow" ]; then
+			path_warning "the teamflow on your PATH is $found, not this one ($bindir/teamflow)"
+		fi
+		;;
+	*) path_warning "teamflow is not on your PATH ($bindir is not in it)" ;;
 	esac
 	echo
 	echo "Next: teamflow install -a <agent> -e <email> [-s <server>]"
 	echo "  (agents: claude-code, cursor, antigravity, copilot; the server defaults to https://teamflow.vutr.io)"
+}
+
+# path_warning says loudly that `teamflow` run by name is not the binary just installed, and how to fix it for zsh
+# and bash ($HOME for the home folder). The agents' hooks call it by its full path; the rest runs it by name.
+path_warning() {
+	shown="$bindir"
+	case "$bindir" in
+	"$HOME"/*) shown="\$HOME/${bindir#"$HOME"/}" ;;
+	esac
+	echo
+	echo "WARNING: $1."
+	echo "Add its folder to your PATH, then open a new terminal:"
+	echo "  zsh:  echo 'export PATH=\"$shown:\$PATH\"' >> ~/.zshrc"
+	echo "  bash: echo 'export PATH=\"$shown:\$PATH\"' >> ~/.bashrc"
+	echo "Your agents' hooks call teamflow by its full path and work as they are; you, the /teamf command and the"
+	echo "agents' own \`teamflow ...\` commands run it by name and need it on the PATH."
 }
 
 fail() {

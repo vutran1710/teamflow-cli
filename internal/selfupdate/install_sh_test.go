@@ -191,7 +191,10 @@ func TestInstallShNoMinisignNote(t *testing.T) {
 		"only the checksum was checked; to verify the signature:",
 		"minisign -Vm checksums.txt -x checksums.txt.minisig -P " + pub,
 		"teamflow install -a <agent> -e <email> [-s <server>]",
-		"is not on your PATH", // the temp HOME's bin is not on the test's PATH
+		// the temp HOME's bin is not on the test's PATH: said loudly, with the line for zsh and bash
+		"WARNING: teamflow is not on your PATH",
+		`zsh:  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`,
+		`bash: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`,
 	} {
 		if !strings.Contains(s.out, want) {
 			t.Fatalf("output lacks %q\n%s", want, s.out)
@@ -512,5 +515,37 @@ func TestInstallShInterruptLeavesNothing(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(tmpRoot); len(left) != 0 {
 		t.Fatalf("left in TMPDIR: %v", left)
+	}
+}
+
+// The bin folder on the PATH: no warning. Another teamflow earlier on the PATH: the warning names it. Sad paths: a
+// shadowing older install, a folder outside the home (named as it is), the install still done in both.
+func TestInstallShPathWarning(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newShRelease(t, sk, runtime.GOOS, runtime.GOARCH)
+	s := newShRun(t, pub, rel)
+	bin := filepath.Join(s.home, ".local", "bin")
+	s.run("PATH=" + s.tools + ":" + bin)
+	s.wantOK()
+	if !s.installed(bin) || strings.Contains(s.out, "WARNING") {
+		t.Fatalf("on the PATH\n%s", s.out)
+	}
+	old := filepath.Join(t.TempDir(), "old")
+	if err := os.MkdirAll(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(old, "teamflow"), []byte(oldScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.run("PATH=" + s.tools + ":" + old + ":" + bin)
+	s.wantOK()
+	if !s.installed(bin) || !strings.Contains(s.out, "WARNING: the teamflow on your PATH is "+filepath.Join(old, "teamflow")+", not this one") {
+		t.Fatalf("shadowed\n%s", s.out)
+	}
+	dir := filepath.Join(t.TempDir(), "elsewhere")
+	s.run("TEAMFLOW_BIN_DIR=" + dir)
+	s.wantOK()
+	if !strings.Contains(s.out, `export PATH="`+dir+`:$PATH"`) {
+		t.Fatalf("outside the home\n%s", s.out)
 	}
 }

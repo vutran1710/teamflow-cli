@@ -23,6 +23,13 @@ It checks the archive's SHA-256 against the release's `checksums.txt`, and that 
 when `minisign` is installed; otherwise it says only the checksum was checked and how to check the signature by
 hand. You can also download a release from this repo's Releases page directly. There is no Homebrew formula.
 
+**`teamflow` must be on your PATH.** Your agents' hooks call the binary by its full path, so they work wherever it
+is; but you, the `/teamf` command and the agents themselves run `teamflow ...` by name (the instruction block can
+only tell them the command, not where it lives). When the folder is not on the PATH, or another `teamflow` (an
+older install, the retired Python one) comes first, `install.sh` and `teamflow install` still install but print a
+loud warning with the line to add for zsh (`~/.zshrc`) and bash (`~/.bashrc`); `teamflow install --json` says
+`"on_path": false`.
+
 `teamflow self-update` replaces the binary with the newest release, always checking the signature (with the key
 compiled into the binary) and the checksum first; on any failure the old binary stays. See
 [docs/VERIFY.md](docs/VERIFY.md). The first release is not published yet.
