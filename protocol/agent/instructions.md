@@ -16,8 +16,9 @@ word for word, and you see what they record.
   - this session and the person: `teamflow whoami`, `teamflow status`, `teamflow inbox`, `teamflow projects`,
     `teamflow team approvals`, `teamflow stop`;
   - the project: `teamflow project get`, `teamflow project history`, `teamflow tasks`; to bring the plan up to date
-    from what was recorded, `teamflow project request-update`; `teamflow project plan` shows the plan (writing it by
-    hand, `teamflow project add-member|title|remove-member` and `teamflow project create` as the person asks);
+    from what was recorded, `teamflow project request-update`; `teamflow project plan` shows the plan and, on the
+    person's words, writes it by hand; `teamflow project add-member|title|remove-member` and `teamflow project create`
+    as the person asks;
   - recording and reading: `teamflow signal emit|get|list|cite`, `teamflow topic create|update|delete`,
     `teamflow artifact write|link|pull|list|archive`;
   - planning: `teamflow deliverables`, `teamflow deliverables
