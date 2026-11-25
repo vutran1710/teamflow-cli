@@ -135,6 +135,13 @@ func warm(t *testing.T, bin, url string) string {
 	if out, err := hook(t, bin, dir); err != nil || !strings.Contains(out, "Decision 50") {
 		t.Fatalf("the first prompt hook did not give the context (%v):\n%s", err, out)
 	}
+	// That hook started the background sync (signed in, none running): stop it, so each test sets up its own case.
+	if !started(dir, 5*time.Second) {
+		t.Fatal("the first prompt hook did not start the background sync")
+	}
+	if stopped, err := live.Stop(dir, 10*time.Second); err != nil || !stopped {
+		t.Fatalf("stopping the background sync: stopped %v, %v", stopped, err)
+	}
 	return dir
 }
 
