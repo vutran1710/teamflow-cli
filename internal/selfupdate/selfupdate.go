@@ -56,6 +56,7 @@ type Updater struct {
 	GOOS      string
 	GOARCH    string
 	Out       io.Writer // what is said on success
+	Replaced  func()    // when set, called once the new binary is in place (never when nothing changed)
 }
 
 // Default is the updater for the running binary.
@@ -204,6 +205,9 @@ func (u *Updater) Update(ctx context.Context, current string) error {
 	}
 	keep = true
 	fmt.Fprintf(u.Out, "teamflow updated: %s -> %s (%s)\n", current, strings.TrimPrefix(rel.Tag, "v"), exe)
+	if u.Replaced != nil {
+		u.Replaced()
+	}
 	return nil
 }
 

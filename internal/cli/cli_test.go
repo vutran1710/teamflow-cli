@@ -16,7 +16,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -982,4 +984,58 @@ func TestExpiredAuthKeySaysSignInAgain(t *testing.T) {
 		contains(t, "stderr", r.err, "NOT_ALLOWED: your sign-in has expired: sign in again")
 		lacks(t, "stderr", r.err, "panic", "goroutine")
 	}
+}
+
+// fakeUpdate makes self-update's update replace (or not, or refuse), and counts the stops of the background sync.
+func fakeUpdate(t *testing.T, replace bool, refuse error, stopErr error) *int {
+	t.Helper()
+	stops := 0
+	oldU, oldS := update, stopSync
+	update = func(_ context.Context, out io.Writer, replaced func()) error {
+		if refuse != nil {
+			return refuse
+		}
+		if replace {
+			fmt.Fprintln(out, "teamflow updated: 0.1.0 -> 0.2.0")
+			replaced()
+		}
+		return nil
+	}
+	stopSync = func(string) (bool, error) { stops++; return stopErr == nil, stopErr }
+	t.Cleanup(func() { update, stopSync = oldU, oldS })
+	return &stops
+}
+
+// After a successful update the running background sync (the old binary) is stopped, so the next hook starts the
+// new binary's. Sad paths: nothing to update (left running), a refused update (left running, exit 1), the stop
+// failing (said, still exit 0: the update is done).
+func TestSelfUpdateStopsTheBackgroundSync(t *testing.T) {
+	m := newMachine(t, true)
+	_ = m
+	stops := fakeUpdate(t, true, nil, nil)
+	r := m.run("", "self-update")
+	wantCode(t, r, 0)
+	if *stops != 1 {
+		t.Fatalf("stopped %d times", *stops)
+	}
+	contains(t, "stdout", r.out, "teamflow updated", "the background sync (the old version) was stopped; the next agent hook starts the new one")
+
+	stops = fakeUpdate(t, false, nil, nil)
+	r = m.run("", "self-update")
+	wantCode(t, r, 0)
+	if *stops != 0 {
+		t.Fatal("stopped with nothing updated")
+	}
+
+	stops = fakeUpdate(t, true, errors.New("signed by another key"), nil)
+	r = m.run("", "self-update")
+	wantCode(t, r, 1)
+	if *stops != 0 {
+		t.Fatal("stopped on a refused update")
+	}
+
+	stops = fakeUpdate(t, true, nil, errors.New("did not stop within 3s"))
+	r = m.run("", "self-update")
+	wantCode(t, r, 0)
+	contains(t, "stderr", r.err, "the background sync could not be stopped (did not stop within 3s); run `teamflow sync --stop`")
 }

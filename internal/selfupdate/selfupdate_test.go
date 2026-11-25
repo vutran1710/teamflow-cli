@@ -247,8 +247,18 @@ func TestSelfUpdateReplacesBinary(t *testing.T) {
 	sk, pub := throwawayKey(t)
 	rel := newRelease(t, sk, "v0.2.0", newScript)
 	u, exe, out := rel.updater(t, pub)
+	replaced := 0
+	u.Replaced = func() {
+		replaced++
+		if b, _ := os.ReadFile(exe); string(b) != newScript { // told only once the new binary is in place
+			t.Error("Replaced before the binary was replaced")
+		}
+	}
 	if err := u.Update(context.Background(), "0.1.0"); err != nil {
 		t.Fatal(err)
+	}
+	if replaced != 1 {
+		t.Fatalf("Replaced called %d times", replaced)
 	}
 	b, _ := os.ReadFile(exe)
 	if string(b) != newScript {
@@ -272,6 +282,7 @@ func TestSelfUpdateUpToDate(t *testing.T) {
 	for _, current := range []string{"0.2.0", "v0.2.0", "0.3.0"} {
 		rel := newRelease(t, sk, "v0.2.0", newScript)
 		u, exe, out := rel.updater(t, pub)
+		u.Replaced = func() { t.Errorf("%s: Replaced with nothing to update", current) }
 		if err := u.Update(context.Background(), current); err != nil {
 			t.Fatalf("%s: %v", current, err)
 		}
@@ -325,6 +336,7 @@ func TestSelfUpdateRefusesBadSignature(t *testing.T) {
 			rel := newRelease(t, sk, "v0.2.0", newScript)
 			c.edit(rel)
 			u, exe, _ := rel.updater(t, pub)
+			u.Replaced = func() { t.Error("Replaced on a refused update") }
 			wantRefusal(t, u.Update(context.Background(), "0.1.0"), c.want)
 			untouched(t, exe)
 			if rel.fetched(asset()) {
