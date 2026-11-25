@@ -351,7 +351,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	c := find(commands, args[0])
 	if c == nil {
-		fmt.Fprintf(stderr, "usage: teamflow <command> [options]\nTry 'teamflow --help' for help.\n\nError: No such command '%s'.\n", args[0])
+		fmt.Fprintf(stderr, "usage: teamflow <command> [options]\nTry 'teamflow --help' for help.\n\nError: No such command '%s'.\n%s", args[0], didYouMean("", args[0]))
 		return 2
 	}
 	if c.name == "debug" {
@@ -378,7 +378,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				commandUsage(stderr, path, c)
 				return 2
 			}
-			fmt.Fprintf(stderr, "usage: teamflow %s <command>\n\nError: No such command '%s'.\n", path, rest[0])
+			fmt.Fprintf(stderr, "usage: teamflow %s <command>\n\nError: No such command '%s'.\n%s", path, rest[0], didYouMean(path, rest[0]))
 			return 2
 		}
 		if sub == nil {

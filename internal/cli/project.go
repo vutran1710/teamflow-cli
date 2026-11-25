@@ -267,7 +267,8 @@ var deliverablesCmd = &command{name: "deliverables",
 
 func runDeliverables(r *inv, a *parsed) int {
 	if len(a.pos) > 0 {
-		return usageFail(r, "deliverables", "No such command '"+a.pos[0]+"'.")
+		return usageFail(r, "deliverables", "No such command '"+a.pos[0]+"'.\n"+
+			strings.TrimSuffix(didYouMean("deliverables", a.pos[0]), "\n"))
 	}
 	c, err := r.core()
 	if err != nil {
