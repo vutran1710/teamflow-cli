@@ -795,6 +795,7 @@ func TestConstantsMatchExport(t *testing.T) {
 		"LIVE_PING_SECONDS":    LivePingSeconds,
 		"LIVE_PONG_SECONDS":    LiveSilenceSeconds,
 		"HOOK_TIMEOUT":         HookTimeout,
+		"KEY_REFUSAL":          KeyRefusal,
 		"RPC_PATH":             RPCPath,
 		"CLIENT_HEADER":        ClientHeader,
 		"CLIENT_HEADER_FORMAT": ClientHeaderFormat,

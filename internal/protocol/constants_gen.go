@@ -4,31 +4,32 @@ package protocol
 
 // Constants from the schema's x-constants.
 const (
-	ProtocolVersion    = 1                               // PROTOCOL_VERSION
-	MinClientProtocol  = 1                               // MIN_CLIENT_PROTOCOL
-	MaxBatch           = 50                              // MAX_BATCH
-	MaxBodyBytes       = 8388608                         // MAX_BODY_BYTES
-	MaxArtifactBytes   = 5242880                         // MAX_ARTIFACT_BYTES
-	AvatarMaxBytes     = 204800                          // AVATAR_MAX_BYTES
-	MaxMilestones      = 20                              // MAX_MILESTONES
-	MaxActions         = 200                             // MAX_ACTIONS
-	MaxAfter           = 10                              // MAX_AFTER
-	LivePath           = "/live"                         // LIVE_PATH
-	LiveTicketSeconds  = 60                              // LIVE_TICKET_SECONDS
-	LiveHelloSeconds   = 10                              // LIVE_HELLO_SECONDS
-	LiveMaxEvents      = 500                             // LIVE_MAX_EVENTS
-	LiveMaxSockets     = 8                               // LIVE_MAX_SOCKETS
-	LiveCloseCode      = 1008                            // LIVE_CLOSE_CODE
-	LivePing           = "ping"                          // LIVE_PING
-	LivePong           = "pong"                          // LIVE_PONG
-	LivePingSeconds    = 10                              // LIVE_PING_SECONDS
-	LivePongSeconds    = 5                               // LIVE_PONG_SECONDS
-	LiveSilenceSeconds = LivePongSeconds                 // seconds of silence after a ping that mean the socket is dead
-	HookTimeout        = 4.0                             // HOOK_TIMEOUT
-	RPCPath            = "/rpc"                          // RPC_PATH
-	ClientHeader       = "Teamflow-Client"               // CLIENT_HEADER
-	ClientHeaderFormat = "<name>/<version> (protocol N)" // CLIENT_HEADER_FORMAT
-	ProtocolHeader     = "Teamflow-Protocol"             // PROTOCOL_HEADER
+	ProtocolVersion    = 1                                    // PROTOCOL_VERSION
+	MinClientProtocol  = 1                                    // MIN_CLIENT_PROTOCOL
+	MaxBatch           = 50                                   // MAX_BATCH
+	MaxBodyBytes       = 8388608                              // MAX_BODY_BYTES
+	MaxArtifactBytes   = 5242880                              // MAX_ARTIFACT_BYTES
+	AvatarMaxBytes     = 204800                               // AVATAR_MAX_BYTES
+	MaxMilestones      = 20                                   // MAX_MILESTONES
+	MaxActions         = 200                                  // MAX_ACTIONS
+	MaxAfter           = 10                                   // MAX_AFTER
+	LivePath           = "/live"                              // LIVE_PATH
+	LiveTicketSeconds  = 60                                   // LIVE_TICKET_SECONDS
+	LiveHelloSeconds   = 10                                   // LIVE_HELLO_SECONDS
+	LiveMaxEvents      = 500                                  // LIVE_MAX_EVENTS
+	LiveMaxSockets     = 8                                    // LIVE_MAX_SOCKETS
+	LiveCloseCode      = 1008                                 // LIVE_CLOSE_CODE
+	LivePing           = "ping"                               // LIVE_PING
+	LivePong           = "pong"                               // LIVE_PONG
+	LivePingSeconds    = 10                                   // LIVE_PING_SECONDS
+	LivePongSeconds    = 5                                    // LIVE_PONG_SECONDS
+	LiveSilenceSeconds = LivePongSeconds                      // seconds of silence after a ping that mean the socket is dead
+	HookTimeout        = 4.0                                  // HOOK_TIMEOUT
+	KeyRefusal         = "use a project key for this project" // KEY_REFUSAL
+	RPCPath            = "/rpc"                               // RPC_PATH
+	ClientHeader       = "Teamflow-Client"                    // CLIENT_HEADER
+	ClientHeaderFormat = "<name>/<version> (protocol N)"      // CLIENT_HEADER_FORMAT
+	ProtocolHeader     = "Teamflow-Protocol"                  // PROTOCOL_HEADER
 )
 
 // HUMAN_ACTS

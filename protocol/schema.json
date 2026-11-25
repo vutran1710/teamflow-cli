@@ -34,6 +34,7 @@
     "LIVE_PING_SECONDS": 10,
     "LIVE_PONG_SECONDS": 5,
     "HOOK_TIMEOUT": 4.0,
+    "KEY_REFUSAL": "use a project key for this project",
     "RPC_PATH": "/rpc",
     "CLIENT_HEADER": "Teamflow-Client",
     "CLIENT_HEADER_FORMAT": "<name>/<version> (protocol N)",

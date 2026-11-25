@@ -46,8 +46,9 @@ var (
 
 // KeyRefusalMessage is the server's message, with reason NOT_ALLOWED, when it does not take the key as a project
 // key at all (router `_call` and `who_refuses`): a key it no longer knows (restored from a backup, the member
-// re-added). The refusal is about the key, never the call: the call is sent again under a new key.
-const KeyRefusalMessage = "use a project key for this project"
+// re-added). The refusal is about the key, never the call: the call is sent again under a new key. It is the
+// exported KEY_REFUSAL, generated from the server's own value (the server's tests pin it).
+const KeyRefusalMessage = protocol.KeyRefusal
 
 // APIError is the server's JSON-RPC error answer (or an answer that is not JSON-RPC: Code is then the HTTP status).
 type APIError struct {
