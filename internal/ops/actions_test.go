@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
@@ -601,4 +602,24 @@ func TestOrgAndProfileTools(t *testing.T) {
 	// More than one org (or none): which one?
 	m.srv.on("account.me", `{"result": {"account": {"id": "ac_1", "email": "lan@acme.test", "name": "lan", "alias": "", "avatar": null, "created_at": "2026-01-15T09:00:00Z", "disabled_at": null}, "orgs": [], "protocol": 1, "min_client_protocol": 1}}`)
 	wantErr(t, m.call("org_set_title", map[string]any{"member": "huy", "title": "x"}), "which org? you are in: none")
+}
+
+// signal get of a signal the replica does not have pulls for it even while the background sync is live (the
+// project heard from just now); one the replica has costs no network.
+func TestSignalGetMissPullsWhileLive(t *testing.T) {
+	m := newMachine(t, true)
+	m.withStore(func(st *store.Store) error { return seedApproval(st) })
+	m.withStore(func(st *store.Store) error { return st.SetLiveAt(P, time.Now()) })
+	m.srv.on("sync.poll", `{"result": {"events": [], "cursors": {}, "reset": []}}`)
+	m.srv.reset()
+	wantText(t, m.call("signal_get", map[string]any{"signal": S1}), "["+S1+"]")
+	if n := len(m.srv.sent("sync.poll")); n != 0 {
+		t.Fatalf("a signal the replica has: %d pulls while live", n)
+	}
+	m.withStore(func(st *store.Store) error { return st.SetLiveAt(P, time.Now()) })
+	wantErr(t, m.call("signal_get", map[string]any{"signal": "sg_00000000000000000000000099"}),
+		"no signal sg_00000000000000000000000099 in your projects")
+	if n := len(m.srv.sent("sync.poll")); n == 0 {
+		t.Fatal("a miss trusted the live replica and never pulled")
+	}
 }

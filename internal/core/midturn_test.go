@@ -219,3 +219,47 @@ func TestALookupMissPullsEvenWhileLive(t *testing.T) {
 		t.Fatalf("archive and verdict on a miss pulled %d times, want a pull each", calls.Load()-before)
 	}
 }
+
+// Offline: PullNow says so (false) and changes nothing; a verdict on a target the replica lacks does not try the
+// network a second time once the first sync found the server unreachable.
+func TestPullNowOffline(t *testing.T) {
+	ctx := context.Background()
+	var n atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	c, now := midTurnCore(t, srv.URL)
+	if err := c.St.SetLiveAt(P, *now); err != nil {
+		t.Fatal(err)
+	}
+	if c.PullNow(ctx, time.Second, "") {
+		t.Fatal("PullNow said online with the server down")
+	}
+	if n.Load() == 0 {
+		t.Fatal("PullNow did not try the network while live")
+	}
+	if _, ok, err := c.St.Signal("sg_01MISSING0000000000000000"); err != nil || ok {
+		t.Fatalf("offline pull changed the replica: %v %v", ok, err)
+	}
+	if err := c.St.ClearLiveAt(P); err != nil { // not live: the verdict's own sync tries, and fails
+		t.Fatal(err)
+	}
+	n.Store(0)
+	if _, err := c.Verdict(ctx, "s1", "sg_01MISSING0000000000000000", protocol.SignalKindApprove, ""); err == nil ||
+		!strings.Contains(err.Error(), "no signal") {
+		t.Fatalf("an offline verdict on a missing target: %v", err)
+	}
+	first := n.Load()
+	if first == 0 {
+		t.Fatal("the verdict never tried the server")
+	}
+	// one sync attempt (it may retry inside its own request policy), never a second PullNow round: compare with a
+	// sync alone
+	n.Store(0)
+	c.Sync(ctx, DefaultTimeout, "")
+	if alone := n.Load(); first > alone {
+		t.Fatalf("an offline verdict made %d requests, a sync alone %d: it pulled again after finding the server down", first, alone)
+	}
+}

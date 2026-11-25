@@ -39,9 +39,9 @@ func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.Si
 	if !c.SignedIn() {
 		return r, ErrNotSignedIn
 	}
-	c.Sync(ctx, DefaultTimeout, "")
+	online := c.Sync(ctx, DefaultTimeout, "")
 	st, ok, err := c.St.Signal(target)
-	if err == nil && !ok { // a request just arrived may still be on its way over the live socket
+	if err == nil && !ok && online { // a request just arrived may still be on its way over the live socket
 		c.PullNow(ctx, DefaultTimeout, "")
 		st, ok, err = c.St.Signal(target)
 	}
