@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/core"
@@ -646,24 +647,36 @@ func TestClaudeMDMissingVersusEmpty(t *testing.T) {
 	}
 }
 
-// The hook before each tool goes through core.MidTurn: 50 tool steps make at most one network sync (the throttle's
+// The hook before each tool goes through core.MidTurn: 50 tool steps in one HookSyncEvery window make at most one
+// network sync, and a step past the window syncs again (the throttle's
 // own sad paths, a black-holed server and a live background sync, are tested in core).
 func TestPreToolUseStaysOffTheNetwork(t *testing.T) {
 	m := newMachine(t, true)
+	now := time.Now()
+	m.now = func() time.Time { return now } // the 50 steps fall in one window however slow the machine
 	m.share("huy-1", Huy)
+	polls := func() int {
+		m.srv.mu.Lock()
+		defer m.srv.mu.Unlock()
+		n := 0
+		for _, c := range m.srv.calls {
+			if c == "sync.poll" {
+				n++
+			}
+		}
+		return n
+	}
 	for range 50 {
 		m.hook("PreToolUse", `{"session_id": "huy-1", "tool_name": "Bash"}`)
 	}
-	m.srv.mu.Lock()
-	polls := 0
-	for _, c := range m.srv.calls {
-		if c == "sync.poll" {
-			polls++
-		}
+	if n := polls(); n > 1 {
+		t.Fatalf("50 tool steps made %d syncs", n)
 	}
-	m.srv.mu.Unlock()
-	if polls > 1 {
-		t.Fatalf("50 tool steps made %d syncs", polls)
+	in1 := polls()
+	now = now.Add(core.HookSyncEvery + time.Second)
+	m.hook("PreToolUse", `{"session_id": "huy-1", "tool_name": "Bash"}`)
+	if polls() == in1 {
+		t.Fatal("no sync after the window passed (the clock is not the hooks' clock)")
 	}
 }
 

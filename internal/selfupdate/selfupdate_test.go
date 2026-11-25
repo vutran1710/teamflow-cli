@@ -261,6 +261,9 @@ func TestSelfUpdateReplacesBinary(t *testing.T) {
 	if !strings.Contains(out.String(), "0.1.0 -> 0.2.0") {
 		t.Fatalf("out: %s", out)
 	}
+	if u.Client.CheckRedirect != nil {
+		t.Fatal("Update changed the caller's client (it works on a copy)")
+	}
 }
 
 // Up to date (or a newer build than the latest release): nothing is downloaded or changed. A dev build updates.

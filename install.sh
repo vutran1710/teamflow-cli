@@ -37,8 +37,19 @@ main() {
 	asset="teamflow_${os}_${arch}.tar.gz"
 
 	releases="${TEAMFLOW_RELEASES_URL:-https://github.com/$REPO/releases}"
+	https=1
 	case "$releases" in
-	https://* | http://127.0.0.1:* | http://localhost:*) ;;
+	*@*) fail "TEAMFLOW_RELEASES_URL must be an https URL" ;;
+	https://?*) ;;
+	http://127.0.0.1:* | http://localhost:*)
+		# A local mirror or test server only: http://127.0.0.1:<port> or http://localhost:<port>[/path].
+		port="${releases#http://*:}"
+		port="${port%%/*}"
+		case "$port" in
+		"" | *[!0-9]*) fail "TEAMFLOW_RELEASES_URL must be an https URL" ;;
+		esac
+		https=0
+		;;
 	*) fail "TEAMFLOW_RELEASES_URL must be an https URL" ;;
 	esac
 	tag="${TEAMFLOW_VERSION:-}"
@@ -58,15 +69,16 @@ main() {
 	fi
 
 	if [ -z "$tag" ]; then
-		latest="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$releases/latest" 2>/dev/null)" ||
+		latest="$(get -o /dev/null -w '%{url_effective}' "$releases/latest" 2>/dev/null)" ||
 			fail "cannot find the latest release at $releases (offline, or none published yet)"
 		tag="${latest##*/tag/}"
 		is_tag "$tag" || fail "cannot find the latest release at $releases (offline, or none published yet)"
 	fi
 	base="$releases/download/$tag"
 
+	new=""
 	tmp="$(mktemp -d "${TMPDIR:-/tmp}/teamflow-install.XXXXXX")"
-	trap 'rm -rf "$tmp"' EXIT
+	trap 'rm -rf "$tmp"; if [ -n "$new" ]; then rm -f "$new"; fi' EXIT
 	trap 'exit 130' INT TERM
 
 	echo "Downloading teamflow $tag ($asset) ..."
@@ -103,10 +115,10 @@ main() {
 	new="$(mktemp "$bindir/.teamflow-install.XXXXXX" 2>/dev/null)" ||
 		fail "cannot write to $bindir; set TEAMFLOW_BIN_DIR to a folder you can write"
 	if ! cp "$tmp/x/teamflow" "$new" 2>/dev/null || ! chmod 0755 "$new" || ! mv -f "$new" "$bindir/teamflow"; then
-		rm -f "$new"
 		fail "cannot write to $bindir; set TEAMFLOW_BIN_DIR to a folder you can write"
 	fi
 
+	new=""
 	echo "Installed teamflow $tag to $bindir/teamflow"
 	case ":$PATH:" in
 	*":$bindir:"*) ;;
@@ -135,8 +147,17 @@ is_tag() {
 	return 1
 }
 
+# get is curl; for an https Releases page, every hop (redirects too) must stay https.
+get() {
+	if [ "$https" = 1 ]; then
+		curl --proto '=https' --proto-redir '=https' -fsSL "$@"
+	else
+		curl -fsSL "$@"
+	fi
+}
+
 fetch() {
-	curl -fsSL --retry 2 -o "$tmp/$1" "$base/$1" || fail "download failed: $base/$1"
+	get --retry 2 -o "$tmp/$1" "$base/$1" || fail "download failed: $base/$1"
 }
 
 # check_signed_tag COMMENT TAG: the trusted comment's one tab-separated "tag:" field is TAG.

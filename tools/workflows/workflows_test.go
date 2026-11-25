@@ -10,6 +10,9 @@ import (
 	"testing"
 )
 
+// anyReleaseEnv: a job declaring the release environment, in either form (environment: release, or name: release).
+var anyReleaseEnv = regexp.MustCompile(`(?m)^\s+(environment:\s*['"]?release['"]?|name:\s*['"]?release['"]?)\s*(#.*)?$`)
+
 var releaseEnv = regexp.MustCompile(`(?m)^    environment: release(\s+#.*)?$`)
 
 var pinned = regexp.MustCompile(`^\s*(- )?uses: [\w.-]+/[\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+\s*$`)
@@ -123,6 +126,9 @@ func TestReleaseKeepsTheKeyAwayFromWrites(t *testing.T) {
 func TestReleaseKeyLivesInTheReleaseEnvironment(t *testing.T) {
 	all := workflows(t)
 	js := jobs(all["release.yml"])
+	if anyReleaseEnv.MatchString("    environment: build\n") || !anyReleaseEnv.MatchString("    environment:\n      name: release\n") {
+		t.Fatal("the environment check is wrong")
+	}
 	for job, body := range js {
 		inEnv := releaseEnv.MatchString(body)
 		if inEnv != (job == "sign" || job == "publish") {
@@ -132,6 +138,9 @@ func TestReleaseKeyLivesInTheReleaseEnvironment(t *testing.T) {
 	for name, text := range all {
 		if name != "release.yml" && strings.Contains(text, "TEAMFLOW_SIGNING_KEY") {
 			t.Errorf("%s names TEAMFLOW_SIGNING_KEY", name)
+		}
+		if name != "release.yml" && anyReleaseEnv.MatchString(text) {
+			t.Errorf("%s declares the release environment", name)
 		}
 	}
 	for job, body := range js {

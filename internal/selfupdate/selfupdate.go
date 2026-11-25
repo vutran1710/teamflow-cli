@@ -108,7 +108,9 @@ func (u *Updater) Update(ctx context.Context, current string) error {
 		client = *u.Client
 	}
 	client.CheckRedirect = httpsOnly
-	u = &Updater{API: u.API, Client: &client, PublicKey: u.PublicKey, Exe: u.Exe, GOOS: u.GOOS, GOARCH: u.GOARCH, Out: u.Out}
+	c := *u // the caller's Updater (and its Client) stay as they were
+	c.Client = &client
+	u = &c
 
 	rel, err := u.latest(ctx)
 	if err != nil {

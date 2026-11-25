@@ -246,6 +246,7 @@ type machine struct {
 	env *env
 	srv *fakeServer
 	seq int64
+	now func() time.Time // when set, the hooks' clock (a time-window test holds it still)
 }
 
 // newMachine is a temp HOME and Claude Code config with a Teamflow home; signed in (on a fake server) when
@@ -333,7 +334,17 @@ func (m *machine) emit(id, by, topic, title, summary string, points []string, wh
 // hook runs one hook as `teamflow hook claude-code <event>` would: a fresh client from disk each time.
 func (m *machine) hook(event, stdin string) string {
 	m.t.Helper()
-	return string(adapters.RunHook(New(), event, []byte(stdin), core.Open))
+	open := core.Open
+	if m.now != nil {
+		open = func() (*core.Core, error) {
+			c, err := core.Open()
+			if c != nil {
+				c.Now = m.now
+			}
+			return c, err
+		}
+	}
+	return string(adapters.RunHook(New(), event, []byte(stdin), open))
 }
 
 func (m *machine) hookLog() string {

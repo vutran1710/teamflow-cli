@@ -58,6 +58,8 @@ environment (the release workflow's `sign` and `publish`) can read it, and the e
 tag ruleset lets only admins create, move or delete `v*` tags. Pushing a `v*` tag is the release: there is no
 manual approval step.
 
+Run steps 1–4 in one shell session: they share `$REPO` and `$d` (the key's temporary folder).
+
 1. The environment (only `v*` tags deploy to it; no required reviewer):
 
    ```sh

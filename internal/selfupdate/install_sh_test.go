@@ -122,6 +122,7 @@ func newShRun(t *testing.T, pub string, rel *shRelease) *shRun {
 }
 
 func (s *shRun) fake(name, script string) {
+	_ = os.Remove(filepath.Join(s.tools, name)) // a link to the system's tool is replaced, never written through
 	if err := os.WriteFile(filepath.Join(s.tools, name), []byte(script), 0o755); err != nil {
 		s.t.Fatal(err)
 	}
@@ -420,5 +421,96 @@ func TestInstallShPlaceholderKey(t *testing.T) {
 	s.wantOK()
 	if !strings.Contains(s.out, "carries no release key yet; only the checksum was checked") {
 		t.Fatalf("output:\n%s", s.out)
+	}
+}
+
+// An https Releases page: every curl (the /latest lookup and each download) is held to https, redirects included
+// (--proto '=https' --proto-redir '=https'). A local http test server gets neither (curl would refuse it).
+func TestInstallShCurlStaysOnHTTPS(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newShRelease(t, sk, runtime.GOOS, runtime.GOARCH)
+	log := filepath.Join(t.TempDir(), "curl.log")
+	real := filepath.Join(t.TempDir(), "curl")
+	s := newShRun(t, pub, rel)
+	if err := os.Rename(filepath.Join(s.tools, "curl"), real); err != nil {
+		t.Fatal(err)
+	}
+	s.fake("curl", "#!/bin/sh\necho \"$*\" >> "+log+"\nexec "+real+" \"$@\"\n")
+
+	// https: the lookup and the downloads (pinned, so all three files are fetched) all carry both flags. The
+	// address refuses connections, so each curl fails fast after being called.
+	s.run("TEAMFLOW_RELEASES_URL=https://127.0.0.1:1", "TEAMFLOW_VERSION=v0.2.0")
+	s.wantRefused("download failed")
+	s.run("TEAMFLOW_RELEASES_URL=https://127.0.0.1:1")
+	s.wantRefused("cannot find the latest release")
+	b, _ := os.ReadFile(log)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("curl calls: %q", lines)
+	}
+	for _, l := range lines {
+		if !strings.Contains(l, "--proto =https --proto-redir =https") {
+			t.Fatalf("a curl without https-only: %s", l)
+		}
+	}
+
+	// The local http server: no https-only flags, and it installs.
+	_ = os.Remove(log)
+	s.run()
+	s.wantOK()
+	b, _ = os.ReadFile(log)
+	if strings.Contains(string(b), "--proto") || strings.Count(string(b), "\n") != 4 {
+		t.Fatalf("local curl calls:\n%s", b)
+	}
+}
+
+// The http exception is http://127.0.0.1:<port> or http://localhost:<port> only: a userinfo trick, a look-alike
+// host, a port that is not digits, no port, another scheme, or http elsewhere are refused before any download.
+func TestInstallShRefusesLookAlikeLocalURLs(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newShRelease(t, sk, runtime.GOOS, runtime.GOARCH)
+	for _, u := range []string{
+		"http://127.0.0.1:80@evil.example", "http://localhost:80@evil.example/x", "http://localhost.evil.example:80",
+		"http://127.0.0.1.evil.example:80", "http://127.0.0.1:abc", "http://localhost:", "http://localhost",
+		"http://example.com", "ftp://127.0.0.1:21", "https://user@example.com", "https://",
+	} {
+		s := newShRun(t, pub, rel)
+		s.run("TEAMFLOW_RELEASES_URL=" + u)
+		s.wantRefused("TEAMFLOW_RELEASES_URL must be an https URL")
+	}
+	if rel.requests != 0 {
+		t.Fatalf("%d requests", rel.requests)
+	}
+}
+
+// Interrupted while copying into the bin folder (TERM after the temporary file is made): the script exits 130 and
+// the temporary file is removed with the download folder; the old binary is untouched.
+func TestInstallShInterruptLeavesNothing(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newShRelease(t, sk, runtime.GOOS, runtime.GOARCH)
+	dir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "teamflow"), []byte(oldScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmpRoot := t.TempDir()
+	s := newShRun(t, pub, rel)
+	realCp, _ := os.Readlink(filepath.Join(s.tools, "cp"))
+	s.fake("cp", "#!/bin/sh\n"+realCp+" \"$@\"\nkill -TERM $PPID\nsleep 2\n")
+	s.run("TEAMFLOW_BIN_DIR="+dir, "TMPDIR="+tmpRoot)
+	if s.code != 130 {
+		t.Fatalf("exit %d\n%s", s.code, s.out)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("left in the bin folder: %v", entries)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "teamflow")); string(b) != oldScript {
+		t.Fatal("the old binary changed")
+	}
+	if left, _ := os.ReadDir(tmpRoot); len(left) != 0 {
+		t.Fatalf("left in TMPDIR: %v", left)
 	}
 }

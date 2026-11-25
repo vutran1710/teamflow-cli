@@ -376,6 +376,9 @@ type Machine struct {
 	Srv *Server
 	A   adapters.Adapter
 	seq int64
+	// Now, when set, is the clock the hooks' core reads (a test of a time window holds it still, so a slow machine
+	// cannot stretch the window).
+	Now func() time.Time
 }
 
 // NewMachine is a Machine; signed out when !signedIn.
@@ -472,7 +475,17 @@ func (m *Machine) Emit(id, by, title, approver string) {
 // Hook runs one hook as `teamflow hook <agent> <event>` would: a fresh client from disk each time.
 func (m *Machine) Hook(event, stdin string) string {
 	m.T.Helper()
-	return string(adapters.RunHook(m.A, event, []byte(stdin), core.Open))
+	open := core.Open
+	if m.Now != nil {
+		open = func() (*core.Core, error) {
+			c, err := core.Open()
+			if c != nil {
+				c.Now = m.Now
+			}
+			return c, err
+		}
+	}
+	return string(adapters.RunHook(m.A, event, []byte(stdin), open))
 }
 
 // HookLog is the Teamflow home's hook.log.

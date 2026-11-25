@@ -271,18 +271,31 @@ func TestHookResumeAfterRestart(t *testing.T) {
 	}
 }
 
-// 50 tool steps in a turn make at most one network sync (the tool hooks stay off the network).
+// 50 tool steps within one HookSyncEvery window make at most one network sync (the tool hooks stay off the
+// network); past the window, the next step syncs again. The hooks' clock is held still for the 50 steps, so a slow
+// machine taking longer than the window to run them does not open a second one.
 func TestPostToolUseStaysOffTheNetwork(t *testing.T) {
 	m := at.NewMachine(t, New(), true)
+	now := time.Now()
+	m.Now = func() time.Time { return now }
 	m.Share("cp-1", at.Huy)
 	m.Hook("sessionStart", in("cp-1", `"source": "startup"`))
 	before := m.Srv.Count("sync.poll")
-	for range 50 {
+	step := func() {
 		m.Hook("preToolUse", in("cp-1", `"toolName": "bash", "toolArgs": {"command": "ls"}`))
 		m.Hook("postToolUse", in("cp-1", `"toolName": "bash"`))
 	}
+	for range 50 {
+		step()
+	}
 	if n := m.Srv.Count("sync.poll") - before; n > 1 {
 		t.Fatalf("%d syncs for 50 tool steps", n)
+	}
+	in1 := m.Srv.Count("sync.poll")
+	now = now.Add(core.HookSyncEvery + time.Second)
+	step()
+	if m.Srv.Count("sync.poll") == in1 {
+		t.Fatal("no sync after the window passed (the clock is not the hooks' clock)")
 	}
 }
 

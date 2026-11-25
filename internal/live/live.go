@@ -72,6 +72,7 @@ type Options struct {
 	FailsBeforePoll int             // failed connects in a row before falling back to sync.poll (3)
 	PollWait        time.Duration   // sync.poll's wait in the fallback (25 s)
 	SocketRetry     time.Duration   // in the fallback, the socket is tried again this often (60 s)
+	Healthy         time.Duration   // a socket live this long resets the failure and silence streaks (2 × (PingEvery + Silence))
 	Rescan          time.Duration   // sign-in, keys, outbox and sessions are read again this often (2 s)
 	Logf            func(format string, a ...any)
 	Applied         func(project string, seq int64) // hears each event applied from the socket (tests)
@@ -116,6 +117,7 @@ func (o Options) withDefaults() Options {
 	def(&o.PollWait, 25*time.Second)
 	def(&o.SocketRetry, 60*time.Second)
 	def(&o.Rescan, 2*time.Second)
+	def(&o.Healthy, 2*(o.PingEvery+o.Silence))
 	if len(o.Backoff) == 0 {
 		o.Backoff = []time.Duration{1 * time.Second, 2 * time.Second, 3 * time.Second, 5 * time.Second, 8 * time.Second, 13 * time.Second}
 	}
@@ -477,7 +479,7 @@ func (k *streak) end(o outcome, liveFor, healthy time.Duration) outcome {
 // work keeps the project's socket open until ctx ends or it must stop.
 func (r *runner) work(ctx context.Context, server, pid, key string) {
 	defer r.clearLive(pid) // the fallback's last answer is not trusted past the sync's end
-	healthy := 2 * (r.o.PingEvery + r.o.Silence)
+	healthy := r.o.Healthy
 	var k streak
 	for ctx.Err() == nil {
 		if k.fails >= r.o.FailsBeforePoll {

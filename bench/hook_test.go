@@ -310,22 +310,42 @@ func TestPromptHookSadPathsStayQuiet(t *testing.T) {
 	dir := warm(t, bin, srv.URL)
 	holdSyncLock(t, dir)
 	calls.Store(0)
-	for _, tc := range []struct{ name, stdin string }{
-		{"not JSON", "not json"},
-		{"no session id", `{"cwd":"/","prompt":"x"}`},
-		{"an unknown session", `{"session_id":"nobody","cwd":"/","prompt":"x"}`},
-	} {
-		cmd := exec.Command(bin, "hook", "claude-code", "UserPromptSubmit")
-		cmd.Env = append(env(dir), "TEAMFLOW_HOME="+dir)
-		cmd.Stdin = strings.NewReader(tc.stdin)
-		t0 := time.Now()
-		out, err := cmd.Output()
-		took := time.Since(t0)
-		if err != nil || len(bytes.TrimSpace(out)) != 0 {
-			t.Errorf("%s: exit %v, output %q; want exit 0 and nothing", tc.name, err, out)
+	// "At once" is judged on the fastest of a few runs, against the same binary's --version run just as often: a
+	// wait the hook makes (a lock, a timeout) is in every run and does not scale with the machine's load; a slow,
+	// loaded runner delays every process alike. The bound is 10 hook budgets, or 10 times that baseline when the
+	// machine is so loaded that starting a process alone is slower.
+	fastest := func(stdin func(i int) string, args ...string) (time.Duration, []string) {
+		best := time.Duration(1<<63 - 1)
+		var bad []string
+		for i := range 5 {
+			cmd := exec.Command(bin, args...)
+			cmd.Env = append(env(dir), "TEAMFLOW_HOME="+dir)
+			cmd.Stdin = strings.NewReader(stdin(i))
+			t0 := time.Now()
+			out, err := cmd.Output()
+			best = min(best, time.Since(t0))
+			if err != nil || (args[0] == "hook" && len(bytes.TrimSpace(out)) != 0) {
+				bad = append(bad, fmt.Sprintf("exit %v, output %q", err, out))
+			}
 		}
-		if took >= 10*budget {
-			t.Errorf("%s: took %v", tc.name, took)
+		return best, bad
+	}
+	baseline, _ := fastest(func(int) string { return "" }, "--version")
+	bound := max(10*budget, 10*baseline)
+	for _, tc := range []struct {
+		name  string
+		stdin func(i int) string
+	}{
+		{"not JSON", func(int) string { return "not json" }},
+		{"no session id", func(int) string { return `{"cwd":"/","prompt":"x"}` }},
+		{"an unknown session", func(i int) string { return fmt.Sprintf(`{"session_id":"nobody-%d","cwd":"/","prompt":"x"}`, i) }},
+	} {
+		took, bad := fastest(tc.stdin, "hook", "claude-code", "UserPromptSubmit")
+		for _, b := range bad {
+			t.Errorf("%s: %s; want exit 0 and nothing", tc.name, b)
+		}
+		if took >= bound {
+			t.Errorf("%s: took %v at best (bound %v; --version took %v)", tc.name, took, bound, baseline)
 		}
 	}
 	// A broken store (the file is not a database) is answered with nothing, at once.

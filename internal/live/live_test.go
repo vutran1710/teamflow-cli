@@ -1141,6 +1141,12 @@ func TestDefaultsFindADeadSocketWithinLiveFresh(t *testing.T) {
 		o.PingEvery+o.Silence > core.LiveFresh {
 		t.Fatalf("ping %v, silence %v, LiveFresh %v", o.PingEvery, o.Silence, core.LiveFresh)
 	}
+	if o.Healthy != 2*(o.PingEvery+o.Silence) {
+		t.Fatalf("healthy %v, want 2 × (ping + silence)", o.Healthy)
+	}
+	if h := (Options{PingEvery: time.Second, Silence: time.Second}).withDefaults().Healthy; h != 4*time.Second {
+		t.Fatalf("healthy %v from the given ping and silence", h)
+	}
 }
 
 // However a socket ends (dropped by the network, refused, replaced, gone silent), live_at is cleared at once: the
@@ -1304,7 +1310,12 @@ func TestSilentReconnectsInARowBackOff(t *testing.T) {
 	c := machine(t, f, P1)
 	o := fast(nil, nil)
 	o.PingEvery, o.Silence = 20*time.Millisecond, 40*time.Millisecond
-	o.Backoff = []time.Duration{200 * time.Millisecond}
+	// A loaded machine can keep a silent socket open past 2 × (PingEvery + Silence), which would count it healthy
+	// and reset the streak; this test is about the streak, so no socket here is ever healthy (the reset has its
+	// own test). The backoff is long enough that a reconnect at once, however slow the machine, is shorter.
+	o.Healthy = time.Hour
+	backoff := 600 * time.Millisecond
+	o.Backoff = []time.Duration{backoff}
 	o.SocketRetry = time.Hour
 	start(t, c, o)
 	eventually(t, "the fallback", func() bool { return f.count("sync.poll") > 0 })
@@ -1314,7 +1325,7 @@ func TestSilentReconnectsInARowBackOff(t *testing.T) {
 	}
 	for i := 1; i < len(hs); i++ {
 		gap := hs[i].At.Sub(hs[i-1].At)
-		if i < 3 && gap >= 200*time.Millisecond || i >= 3 && gap < 200*time.Millisecond {
+		if i < 3 && gap >= backoff || i >= 3 && gap < backoff {
 			t.Fatalf("socket %d opened %v after the one before", i, gap)
 		}
 	}
