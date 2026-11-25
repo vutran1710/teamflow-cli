@@ -49,6 +49,9 @@ type outboxServer struct {
 	forgot     string // a project key the server no longer knows (a restore, a member re-added): refused for the key
 	whole      bool   // with forgot: a batch under that key is refused whole (one error, not an array)
 	accepted   []string
+	slowKey    string // a project key whose every request waits slowFor
+	slowFor    time.Duration
+	slowHits   int
 	keyFetchN  int
 	maxIn      atomic.Int32
 	outboxN    int
@@ -77,6 +80,16 @@ func (s *outboxServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	outbox := outboxMethods[reqs[0].Method]
 	s.mu.Lock()
+	if s.slowKey != "" && r.Header.Get("Authorization") == "Bearer "+s.slowKey {
+		s.slowHits++
+		wait := s.slowFor
+		s.mu.Unlock()
+		select {
+		case <-time.After(wait):
+		case <-r.Context().Done():
+		}
+		s.mu.Lock()
+	}
 	if s.down {
 		s.mu.Unlock()
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -1142,5 +1155,45 @@ func TestOtherNotAllowedStillRejects(t *testing.T) {
 	}
 	if n := s.fetches(); n != 0 {
 		t.Fatalf("key.fetch %d times for an item's own refusal", n)
+	}
+}
+
+// A verdict syncs only its target's project, before and after it is sent: another project of this machine on a
+// slow server never holds the person's approve. Sad paths: a second project whose every request is slow; a
+// target the replica does not know yet (every project is synced to find it, as before).
+func TestVerdictSyncsOnlyItsProject(t *testing.T) {
+	ctx := context.Background()
+	s, srv := newOutboxServer(t)
+	c := outboxCore(t, srv.URL)
+	const P2 = "pj_00000000000000000000000002"
+	if err := c.St.PutProjectKey(mustBinding(t, c), P2, "tfk_p2", tM1, "og_x", "Ops", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.set(func() { s.slowKey, s.slowFor = "tfk_p2", 3*time.Second })
+	start := time.Now()
+	r, err := c.Verdict(ctx, "s1", tS1, protocol.SignalKindApprove, "")
+	if err != nil || !r.Accepted {
+		t.Fatalf("verdict: %+v %v", r, err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("the approve took %v behind another project's slow server", d)
+	}
+	s.mu.Lock()
+	hits := s.slowHits
+	s.mu.Unlock()
+	if hits != 0 {
+		t.Fatalf("the other project was synced %d times for this verdict", hits)
+	}
+	// A target not in the replica: every project is synced to find it (and it is then refused as unknown).
+	s.set(func() { s.slowFor = 50 * time.Millisecond })
+	if _, err := c.Verdict(ctx, "s1", "sg_00000000000000000000000099", protocol.SignalKindApprove, ""); err == nil ||
+		!strings.Contains(err.Error(), "no signal") {
+		t.Fatalf("unknown target: %v", err)
+	}
+	s.mu.Lock()
+	hits = s.slowHits
+	s.mu.Unlock()
+	if hits == 0 {
+		t.Fatal("an unknown target did not look in every project")
 	}
 }

@@ -39,10 +39,16 @@ func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.Si
 	if !c.SignedIn() {
 		return r, ErrNotSignedIn
 	}
-	online := c.Sync(ctx, DefaultTimeout, "")
+	// Only the target's project is synced (another project's slow server never holds the verdict); a target the
+	// replica does not know yet is looked for in every project.
+	only := ""
+	if known, ok, err := c.St.Signal(target); err == nil && ok {
+		only = known.Signal.Project
+	}
+	online := c.Sync(ctx, DefaultTimeout, only)
 	st, ok, err := c.St.Signal(target)
 	if err == nil && !ok && online { // a request just arrived may still be on its way over the live socket
-		c.PullNow(ctx, DefaultTimeout, "")
+		c.PullNow(ctx, DefaultTimeout, only)
 		st, ok, err = c.St.Signal(target)
 	}
 	if err != nil {
@@ -88,7 +94,7 @@ func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.Si
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return r, fmt.Errorf("signal.emit answer: %w", err)
 	}
-	c.Sync(ctx, DefaultTimeout, "")
+	c.Sync(ctx, DefaultTimeout, st.Signal.Project)
 	return r, nil
 }
 
