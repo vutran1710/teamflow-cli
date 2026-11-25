@@ -1,7 +1,8 @@
 # Hook fixtures
 
-Each `<event>.<case>.json` is one call of the Python Claude Code adapter (`tf_claude_code.hooks.handle`): the hook
-`event`, the `stdin` it was given, the `stdout` it answered, the `scenario` (the state it ran in) and its `layout`:
+Each `<event>.<case>.json` is one recorded call of Teamflow's Claude Code hook (recorded once from the reference
+implementation, then frozen): the hook `event`, the `stdin` it was given, the `stdout` it answered, the `scenario` (the
+state it ran in) and its `layout`:
 
 - `guard`: the folder layout in `scenario` ({root}, {home}; `env` gives TEAMFLOW_HOME and HOME). Replace {root} and
   {home} in `stdin` with the real folders before running the hook. No store is needed.
