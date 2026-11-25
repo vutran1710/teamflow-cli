@@ -376,8 +376,8 @@ func ReadText(p string) ([]byte, error) {
 	return b, nil
 }
 
-// open opens a file to read for publishing or measuring, after every check: never a file in the Teamflow home,
-// never a link from inside the project to outside it (when project is set), only a regular file (checked before
+// open opens a file to read for publishing or measuring, after every check: never a file in the Teamflow home
+// (by path, nor by identity: a hard link to one is refused), never a link from inside the project to outside it (when project is set), only a regular file (checked before
 // opening: a FIFO would block), and the file opened must be the file checked.
 func open(p, project, tfHome string) (*os.File, string, string, error) {
 	if p == "" {
@@ -419,6 +419,11 @@ func open(p, project, tfHome string) (*os.File, string, string, error) {
 	if fi, err := f.Stat(); err != nil || !os.SameFile(fi, checked) {
 		f.Close()
 		return nil, "", "", fmt.Errorf("%s changed while it was being read: try again", shown)
+	}
+	if homeFile(checked, tfHome) { // a hard link to a home file is that file, wherever it is and whatever its name
+		f.Close()
+		return nil, "", "", fmt.Errorf("%s is a hard link to one of Teamflow's own files in its home (your sign-in "+
+			"and keys): no command reads or writes a file there", shown)
 	}
 	return f, abs, shown, nil
 }

@@ -638,3 +638,41 @@ func TestPullNeverHangsOnAFIFO(t *testing.T) {
 		})
 	}
 }
+
+// A hard link to a file in the Teamflow home is that file: Prepare (artifact write, --file inputs), ReadText
+// (--plan-file and the like) and Link's local copy refuse it, wherever the link is and whatever its name. Sad
+// paths: a hard link outside the project, one inside the project, one to a file in a subfolder of the home, the
+// home given by TEAMFLOW_HOME (ReadText) or by Options; a plain copy of the same bytes is read (identity, not
+// content).
+func TestHardLinkToAHomeFileRefused(t *testing.T) {
+	root := real(t)
+	tf := filepath.Join(root, "tfhome")
+	t.Setenv("TEAMFLOW_HOME", tf)
+	cfg := write(t, filepath.Join(tf, "config.json"), []byte(`{"auth_key": "tfa_secret"}`))
+	deep := write(t, filepath.Join(tf, "live", "state.json"), []byte("STATE"))
+	project := filepath.Join(root, "proj")
+	must(t, os.MkdirAll(project, 0o755))
+	outside := filepath.Join(root, "notes.md")
+	inside := filepath.Join(project, "plan.md")
+	sub := filepath.Join(project, "state.md")
+	must(t, os.Link(cfg, outside))
+	must(t, os.Link(cfg, inside))
+	must(t, os.Link(deep, sub))
+	for _, p := range []string{outside, inside, sub} {
+		for _, o := range []Options{{Home: tf}, {Home: tf, Project: project}} {
+			if pr, err := Prepare(p, o); err == nil || !strings.Contains(err.Error(), "Teamflow's own") || pr.Data != nil {
+				t.Errorf("Prepare %s %+v: %v", p, o, err)
+			}
+		}
+		if b, err := ReadText(p); err == nil || !strings.Contains(err.Error(), "Teamflow's own") || b != nil {
+			t.Errorf("ReadText %s: %v", p, err)
+		}
+		if _, _, err := Link("https://x.test/a", "a.md", p, ""); err == nil || !strings.Contains(err.Error(), "Teamflow's own") {
+			t.Errorf("Link %s: %v", p, err)
+		}
+	}
+	copied := write(t, filepath.Join(project, "copy.md"), []byte(`{"auth_key": "tfa_secret"}`))
+	if _, err := ReadText(copied); err != nil {
+		t.Errorf("a copy is not the home's file: %v", err)
+	}
+}
