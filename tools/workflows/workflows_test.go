@@ -117,7 +117,7 @@ func TestReleaseKeepsTheKeyAwayFromWrites(t *testing.T) {
 	}
 }
 
-// The key is an environment secret of `release` (only v* tags deploy there, the owner approves): sign and publish
+// The key is an environment secret of `release` (only v* tags deploy there): sign and publish
 // declare that environment, build and verify do not, and no other workflow names the key at all. Signing and
 // checking pass the tag, so a signature names the release it was made for.
 func TestReleaseKeyLivesInTheReleaseEnvironment(t *testing.T) {

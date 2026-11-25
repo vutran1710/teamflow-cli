@@ -8,7 +8,7 @@ name: Release
 #   verify  (contents: read, no secret)  checks the signature with the stock minisign and the binary's version;
 #   publish (contents: write, no secret; environment release) checks again with tools/signsums -verify, then `gh release create`.
 # TEAMFLOW_SIGNING_KEY is a secret of the `release` environment, not of the repo: that environment takes only v* tags
-# and waits for the owner's approval (docs/VERIFY.md), and a ruleset limits who may create v* tags. The signature's
+# (docs/VERIFY.md), and a ruleset limits who may create v* tags; pushing the tag is the release. The signature's
 # trusted comment names the tag, and every checker requires it.
 # It fails closed: the placeholder public key, a missing secret, a key that is not the committed one, a changed
 # archive, or a signature that does not verify stops it before anything is published. The key is passed only to
@@ -68,7 +68,7 @@ jobs:
   sign:
     needs: build
     runs-on: ubuntu-latest
-    environment: release # the key is this environment's secret: only v* tags deploy here, after the owner approves
+    environment: release # the key is this environment's secret: only v* tags deploy here
     permissions:
       contents: read
     steps:
@@ -137,7 +137,7 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-latest
-    environment: release # the owner approves the publish too
+    environment: release # only v* tags may publish
     permissions:
       contents: write # to publish the release
     steps:

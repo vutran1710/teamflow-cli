@@ -54,16 +54,15 @@ library can check, so self-update needs nothing else.
 ## The release gate and the key (once, by the maintainer)
 
 The key is a secret of the GitHub **environment** `release`, not of the repo: only jobs that declare that
-environment (the release workflow's `sign` and `publish`) can read it, the environment takes only `v*` tags, and
-each run waits for the owner's approval. A tag ruleset lets only admins create, move or delete `v*` tags.
+environment (the release workflow's `sign` and `publish`) can read it, and the environment takes only `v*` tags. A
+tag ruleset lets only admins create, move or delete `v*` tags. Pushing a `v*` tag is the release: there is no
+manual approval step.
 
-1. The environment (the owner approves; only `v*` tags deploy to it):
+1. The environment (only `v*` tags deploy to it; no required reviewer):
 
    ```sh
    REPO=vutran1710/teamflow-cli
-   OWNER_ID="$(gh api users/vutran1710 --jq .id)"
-   printf '%s' '{"wait_timer": 0, "prevent_self_review": false,
-     "reviewers": [{"type": "User", "id": '"$OWNER_ID"'}],
+   printf '%s' '{"wait_timer": 0,
      "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}' |
      gh api -X PUT "repos/$REPO/environments/release" --input -
    gh api -X POST "repos/$REPO/environments/release/deployment-branch-policies" -f name='v*' -f type=tag
