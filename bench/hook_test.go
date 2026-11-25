@@ -10,6 +10,10 @@ package bench
 //   - the background sync is not running (a reboot, its quiet exit): the hook starts it (fork and exec, detached)
 //     and answers from the replica all the same. Each started copy is stopped before the next run, outside the time.
 //
+// The two timed tests run only with TEAMFLOW_BENCH=1, in a CI step of their own after the other tests: run beside
+// every other package's tests (go test ./... runs packages in parallel) they measure the runner's contention, not
+// the hook. The sad-path test runs always.
+//
 // The store is warm: signed in, a project with its key, topic, plan, people and 50 signals, the session shared and
 // caught up, and the project's live socket heard from just now (so the hook does not pull).
 
@@ -215,10 +219,16 @@ func report(t *testing.T, what string, ds []time.Duration) {
 	}
 }
 
-func TestPromptHookP95WithTheSyncRunning(t *testing.T) {
-	if testing.Short() {
-		t.Skip("200 hook processes")
+// timed skips a timed test unless TEAMFLOW_BENCH=1 (a quiet machine: CI's own step).
+func timed(t *testing.T) {
+	t.Helper()
+	if os.Getenv("TEAMFLOW_BENCH") != "1" {
+		t.Skip("timed: run with TEAMFLOW_BENCH=1, alone (CI's hook bench step)")
 	}
+}
+
+func TestPromptHookP95WithTheSyncRunning(t *testing.T) {
+	timed(t)
 	bin := build(t)
 	srv, calls := server(t)
 	dir := warm(t, bin, srv.URL)
@@ -243,9 +253,7 @@ func TestPromptHookP95WithTheSyncRunning(t *testing.T) {
 }
 
 func TestPromptHookP95StartingTheSync(t *testing.T) {
-	if testing.Short() {
-		t.Skip("200 hook processes, each starting the background sync")
-	}
+	timed(t)
 	bin := build(t)
 	srv, _ := server(t)
 	dir := warm(t, bin, srv.URL)
