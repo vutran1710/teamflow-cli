@@ -148,7 +148,8 @@ func (c *Core) API(ctx context.Context, project string, timeout time.Duration) (
 }
 
 // Sync pushes the spool and pulls the events of each project this machine has a key for (or only `only`), then
-// fetches the names of members the replica has none for. False when offline. A key the server no longer takes
+// fetches the names of members the replica has none for. False when offline: any project unreachable (the others
+// are synced all the same), or the caller's deadline spent. A key the server no longer takes
 // (NOT_ALLOWED, NOT_A_MEMBER) is dropped. A project the background sync is live on (heard within LiveFresh) is
 // not pulled: the replica is fresh; only its outbox is sent, when something waits in it.
 func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) bool {
@@ -178,7 +179,11 @@ func (c *Core) sync(ctx context.Context, timeout time.Duration, only string, for
 			}
 		}
 	}
+	online := true // one project offline or failing never keeps the others from their sync
 	for _, pid := range projects {
+		if ctx.Err() != nil { // the caller's deadline (a hook's budget) is spent: the rest wait for the next sync
+			return false
+		}
 		key, _, _, _, ok := c.St.ProjectKey(b, pid)
 		if !ok {
 			ob := store.OutboxOf(b, pid)
@@ -188,7 +193,8 @@ func (c *Core) sync(ctx context.Context, timeout time.Duration, only string, for
 			var err error
 			if key, err = c.ProjectKey(ctx, pid); err != nil {
 				if errors.Is(err, api.ErrOffline) {
-					return false
+					online = false
+					continue
 				}
 				_ = c.St.SetKeyFetchRefused(ob, c.Now().Add(KeyRetryAfter)) // not asked again on every command or hook
 				continue
@@ -202,7 +208,8 @@ func (c *Core) sync(ctx context.Context, timeout time.Duration, only string, for
 		}
 		err := c.syncOne(ctx, key, ob, pid, timeout)
 		if errors.Is(err, api.ErrOffline) {
-			return false
+			online = false
+			continue
 		}
 		var ae *api.APIError
 		if errors.As(err, &ae) && (ae.Reason == string(protocol.RejectReasonNotAllowed) ||
@@ -210,7 +217,7 @@ func (c *Core) sync(ctx context.Context, timeout time.Duration, only string, for
 			_ = c.St.DropProjectKey(b, pid)
 		}
 	}
-	return true
+	return online
 }
 
 // LiveFresh says whether the background sync heard from the project's live socket within LiveFresh (a time ahead of
