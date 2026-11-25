@@ -12,6 +12,18 @@ word for word, and you see what they record.
   it, or chain it with other commands, since that asks the person's permission every time.
 - Every command's output ends with any new notices and approval requests for this session. Read them and act on
   them, as below.
+- The commands, by what they are for (`teamflow --help` lists them; never guess a name):
+  - this session and the person: `teamflow whoami`, `teamflow status`, `teamflow inbox`, `teamflow projects`,
+    `teamflow team approvals`, `teamflow stop`;
+  - the project: `teamflow project get`, `teamflow project history`, `teamflow tasks`; to bring the plan up to date
+    from what was recorded, `teamflow project request-update`; `teamflow project plan` shows the plan (writing it by
+    hand, `teamflow project add-member|title|remove-member` and `teamflow project create` as the person asks);
+  - recording and reading: `teamflow signal emit|get|list|cite`, `teamflow topic create|update|delete`,
+    `teamflow artifact write|link|pull|list|archive`;
+  - planning: `teamflow deliverables`, `teamflow deliverables
+    validate|publish|update-milestone|rename|history|archive|delete`, `teamflow action result|revoke`;
+  - settling: `teamflow approve`, `teamflow reject`, `teamflow drift list|resolve|dismiss`;
+  - the org and the person's profile: `teamflow org members|add-member|remove-member|title`, `teamflow profile`.
 
 ## Record as you go
 
