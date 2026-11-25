@@ -23,32 +23,42 @@ import (
 // The downloaded binary leaves a mark if it is ever run: install.sh never runs what it downloads.
 const markScript = "#!/bin/sh\ntouch \"$MARK\"\necho \"teamflow 0.2.0\"\n"
 
+// shRelease stands in for https://github.com/<repo>/releases: /latest redirects to /tag/<tag>, and the files are
+// under /download/<tag>/.
 type shRelease struct {
 	srv      *httptest.Server
+	tag      string
 	files    map[string][]byte
+	noLatest bool
 	mu       sync.Mutex
 	requests int
 }
 
 func newShRelease(t *testing.T, sk minisign.SecretKey, osName, arch string) *shRelease {
 	t.Helper()
-	r := &shRelease{files: map[string][]byte{}}
+	r := &shRelease{tag: "v0.2.0", files: map[string][]byte{}}
 	name := AssetName(osName, arch)
 	r.files[name] = tarGz(t, map[string]string{"teamflow": markScript, "LICENSE": "MIT\n"})
 	h := sha256.Sum256(r.files[name])
 	sums := []byte(hex.EncodeToString(h[:]) + "  " + name + "\n" + strings.Repeat("0", 64) + "  teamflow_other.tar.gz\n")
 	r.files["checksums.txt"] = sums
-	r.files["checksums.txt.minisig"] = minisign.Sign(sk, sums, "timestamp:1\tfile:checksums.txt")
+	r.files["checksums.txt.minisig"] = minisign.Sign(sk, sums, signed(r.tag))
 	r.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
 		r.requests++
-		b, ok := r.files[strings.TrimPrefix(req.URL.Path, "/download/")]
+		noLatest := r.noLatest
+		b, ok := r.files[strings.TrimPrefix(req.URL.Path, "/download/"+r.tag+"/")]
 		r.mu.Unlock()
-		if !ok {
+		switch {
+		case req.URL.Path == "/latest" && !noLatest:
+			http.Redirect(w, req, "/tag/"+r.tag, http.StatusFound)
+		case req.URL.Path == "/tag/"+r.tag:
+			_, _ = w.Write([]byte("<html>release page</html>"))
+		case ok && strings.HasPrefix(req.URL.Path, "/download/"+r.tag+"/"):
+			_, _ = w.Write(b)
+		default:
 			http.NotFound(w, req)
-			return
 		}
-		_, _ = w.Write(b)
 	}))
 	t.Cleanup(r.srv.Close)
 	return r
@@ -83,7 +93,7 @@ func newShRun(t *testing.T, pub string, rel *shRelease) *shRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := strings.Replace(string(src), "\nPUBKEY=\""+PublicKey+"\"\n", "\nPUBKEY=\""+pub+"\"\n", 1)
+	text := strings.Replace(string(src), "\n\tPUBKEY=\""+PublicKey+"\"\n", "\n\tPUBKEY=\""+pub+"\"\n", 1)
 	root := t.TempDir()
 	s := &shRun{t: t, script: filepath.Join(root, "install.sh"), home: filepath.Join(root, "home"), tools: filepath.Join(root, "tools"), mark: filepath.Join(root, "ran"), release: rel}
 	if err := os.WriteFile(s.script, []byte(text), 0o644); err != nil {
@@ -120,7 +130,7 @@ func (s *shRun) fake(name, script string) {
 func (s *shRun) run(extra ...string) {
 	s.t.Helper()
 	cmd := exec.Command(filepath.Join(s.tools, "sh"), s.script)
-	cmd.Env = append([]string{"HOME=" + s.home, "PATH=" + s.tools, "MARK=" + s.mark, "TEAMFLOW_DOWNLOAD_URL=" + s.release.srv.URL + "/download"}, extra...)
+	cmd.Env = append([]string{"HOME=" + s.home, "PATH=" + s.tools, "MARK=" + s.mark, "TEAMFLOW_RELEASES_URL=" + s.release.srv.URL}, extra...)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err := cmd.Run()
@@ -195,10 +205,10 @@ func TestInstallShMinisign(t *testing.T) {
 	rel := newShRelease(t, sk, runtime.GOOS, runtime.GOARCH)
 	s := newShRun(t, pub, rel)
 	args := filepath.Join(t.TempDir(), "args")
-	s.fake("minisign", "#!/bin/sh\necho \"$@\" > "+args+"\nexit ${FAKE_MINISIGN_EXIT:-0}\n")
+	s.fake("minisign", fakeMinisign(args, signed("v0.2.0")))
 	s.run()
 	s.wantOK()
-	if b, _ := os.ReadFile(args); strings.TrimSpace(string(b)) != "-Vm checksums.txt -x checksums.txt.minisig -P "+pub {
+	if b, _ := os.ReadFile(args); strings.TrimSpace(string(b)) != "-Vm checksums.txt -x checksums.txt.minisig -P "+pub+" -Q" {
 		t.Fatalf("minisign args %q", b)
 	}
 	if strings.Contains(s.out, "only the checksum") || !strings.Contains(s.out, "signature verified") {
@@ -210,6 +220,18 @@ func TestInstallShMinisign(t *testing.T) {
 	s.run()
 	s.wantRefused("signature check failed")
 
+	// The signature is good but made for another release (an older one served as the latest), or names no tag.
+	for comment, want := range map[string]string{
+		signed("v0.1.0"):                  "signed for v0.1.0, not v0.2.0",
+		"timestamp:1\tfile:checksums.txt": "names no release tag",
+		signed("v0.2.0") + "\ttag:v0.1.0": "names more than one release tag",
+	} {
+		s = newShRun(t, pub, rel)
+		s.fake("minisign", fakeMinisign(args, comment))
+		s.run()
+		s.wantRefused(want)
+	}
+
 	delete(rel.files, "checksums.txt.minisig")
 	s = newShRun(t, pub, rel)
 	s.run()
@@ -218,6 +240,34 @@ func TestInstallShMinisign(t *testing.T) {
 	s.fake("minisign", "#!/bin/sh\nexit 0\n")
 	s.run()
 	s.wantRefused("checksums.txt.minisig")
+}
+
+// fakeMinisign records its arguments and, like `minisign -V -Q`, prints the trusted comment.
+func fakeMinisign(args, comment string) string {
+	return "#!/bin/sh\necho \"$@\" > " + args + "\nprintf '%s\\n' '" + comment + "'\n"
+}
+
+// The latest release is found from the /latest redirect (no API); the files come from that tag's folder. A
+// pinned TEAMFLOW_VERSION does not ask for the latest; no latest release is refused.
+func TestInstallShFindsTheTag(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newShRelease(t, sk, runtime.GOOS, runtime.GOARCH)
+	s := newShRun(t, pub, rel)
+	s.run()
+	s.wantOK()
+	if !strings.Contains(s.out, "teamflow v0.2.0") {
+		t.Fatalf("output does not name the release:\n%s", s.out)
+	}
+	rel.noLatest = true
+	s = newShRun(t, pub, rel)
+	s.run()
+	s.wantRefused("cannot find the latest release")
+	s = newShRun(t, pub, rel)
+	s.run("TEAMFLOW_VERSION=v0.2.0")
+	s.wantOK()
+	s = newShRun(t, pub, rel)
+	s.run("TEAMFLOW_VERSION=v0.1.0")
+	s.wantRefused("download failed")
 }
 
 // The real minisign tool (when installed, as in CI) checks a signature made by package minisign; a changed
@@ -239,13 +289,21 @@ func TestInstallShRealMinisign(t *testing.T) {
 		t.Fatalf("output:\n%s", s.out)
 	}
 	other, _ := throwawayKey(t)
-	rel.files["checksums.txt.minisig"] = minisign.Sign(other, rel.files["checksums.txt"], "timestamp:1\tfile:checksums.txt")
+	rel.files["checksums.txt.minisig"] = minisign.Sign(other, rel.files["checksums.txt"], signed("v0.2.0"))
 	s = newShRun(t, pub, rel)
 	if err := os.Symlink(real, filepath.Join(s.tools, "minisign")); err != nil {
 		t.Fatal(err)
 	}
 	s.run()
 	s.wantRefused("signature check failed")
+	// The real tool's -Q output is read for the tag: a good signature for an older release is refused.
+	rel.files["checksums.txt.minisig"] = minisign.Sign(sk, rel.files["checksums.txt"], signed("v0.1.0"))
+	s = newShRun(t, pub, rel)
+	if err := os.Symlink(real, filepath.Join(s.tools, "minisign")); err != nil {
+		t.Fatal(err)
+	}
+	s.run()
+	s.wantRefused("signed for v0.1.0, not v0.2.0")
 }
 
 // Sad paths: the archive does not match checksums.txt; checksums.txt has no line for this build; the archive is
@@ -294,6 +352,9 @@ func TestInstallShRefusesUnknownPlatform(t *testing.T) {
 	s := newShRun(t, pub, rel)
 	s.run("TEAMFLOW_VERSION=v1;rm")
 	s.wantRefused("TEAMFLOW_VERSION")
+	s = newShRun(t, pub, rel)
+	s.run("TEAMFLOW_RELEASES_URL=ftp://example.invalid")
+	s.wantRefused("TEAMFLOW_RELEASES_URL")
 	if rel.requests != 0 {
 		t.Fatalf("downloaded %d files", rel.requests)
 	}

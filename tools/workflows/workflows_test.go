@@ -10,6 +10,8 @@ import (
 	"testing"
 )
 
+var releaseEnv = regexp.MustCompile(`(?m)^    environment: release(\s+#.*)?$`)
+
 var pinned = regexp.MustCompile(`^\s*(- )?uses: [\w.-]+/[\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+\s*$`)
 
 func workflows(t *testing.T) map[string]string {
@@ -112,6 +114,33 @@ func TestReleaseKeepsTheKeyAwayFromWrites(t *testing.T) {
 	}
 	if strings.Count(text, "secrets.TEAMFLOW_SIGNING_KEY") == 0 {
 		t.Fatal("the release is never signed")
+	}
+}
+
+// The key is an environment secret of `release` (only v* tags deploy there, the owner approves): sign and publish
+// declare that environment, build and verify do not, and no other workflow names the key at all. Signing and
+// checking pass the tag, so a signature names the release it was made for.
+func TestReleaseKeyLivesInTheReleaseEnvironment(t *testing.T) {
+	all := workflows(t)
+	js := jobs(all["release.yml"])
+	for job, body := range js {
+		inEnv := releaseEnv.MatchString(body)
+		if inEnv != (job == "sign" || job == "publish") {
+			t.Errorf("job %s: environment release=%v", job, inEnv)
+		}
+	}
+	for name, text := range all {
+		if name != "release.yml" && strings.Contains(text, "TEAMFLOW_SIGNING_KEY") {
+			t.Errorf("%s names TEAMFLOW_SIGNING_KEY", name)
+		}
+	}
+	for job, body := range js {
+		if job != "sign" && strings.Contains(body, "TEAMFLOW_SIGNING_KEY") {
+			t.Errorf("job %s names TEAMFLOW_SIGNING_KEY", job)
+		}
+	}
+	if !strings.Contains(js["sign"], `-tag "$GITHUB_REF_NAME"`) || !strings.Contains(js["publish"], `-verify -tag "$GITHUB_REF_NAME"`) {
+		t.Error("sign and publish do not pass the tag to signsums")
 	}
 }
 

@@ -39,12 +39,12 @@ const (
 	// ReleasesPage is where a person downloads a release by hand.
 	ReleasesPage = "https://github.com/" + Repo + "/releases"
 
-	maxAPI      = 1 << 20
-	maxSums     = 64 << 10
-	maxSig      = 4 << 10
-	maxArchive  = 256 << 20
-	maxBinary   = 256 << 20
-	checkTimout = 10 * time.Second
+	maxAPI       = 1 << 20
+	maxSums      = 64 << 10
+	maxSig       = 4 << 10
+	maxArchive   = 256 << 20
+	maxBinary    = 256 << 20
+	checkTimeout = 10 * time.Second
 )
 
 // Updater is one self-update; the zero values of its fields are filled by Default.
@@ -103,6 +103,13 @@ func (u *Updater) Update(ctx context.Context, current string) error {
 		return fmt.Errorf("cannot write to %s (where teamflow is installed): %v; reinstall with install.sh, or run self-update as a user who can write there", dir, err)
 	}
 
+	client := http.Client{Timeout: 5 * time.Minute}
+	if u.Client != nil {
+		client = *u.Client
+	}
+	client.CheckRedirect = httpsOnly
+	u = &Updater{API: u.API, Client: &client, PublicKey: u.PublicKey, Exe: u.Exe, GOOS: u.GOOS, GOARCH: u.GOARCH, Out: u.Out}
+
 	rel, err := u.latest(ctx)
 	if err != nil {
 		return err
@@ -133,8 +140,12 @@ func (u *Updater) Update(ctx context.Context, current string) error {
 	if err != nil {
 		return err
 	}
-	if err := minisign.Verify(key, sums, sig); err != nil {
+	comment, err := minisign.VerifyComment(key, sums, sig)
+	if err != nil {
 		return fmt.Errorf("release %s's checksums.txt failed its signature check (%v); refusing it", rel.Tag, err)
+	}
+	if err := CheckSignedTag(comment, rel.Tag); err != nil {
+		return fmt.Errorf("release %s: %v; refusing it", rel.Tag, err)
 	}
 	want, err := checksumFor(sums, name)
 	if err != nil {
@@ -256,6 +267,36 @@ func (u *Updater) fetch(ctx context.Context, link string, limit int64) ([]byte, 
 	return b, nil
 }
 
+// SignedTag is the release tag a signature's trusted comment names (its one tab-separated "tag:" field; the
+// release workflow writes it, so a signature made for one release is not taken for another).
+func SignedTag(comment string) (string, error) {
+	tag, n := "", 0
+	for _, f := range strings.Split(comment, "\t") {
+		if v, ok := strings.CutPrefix(f, "tag:"); ok {
+			tag, n = v, n+1
+		}
+	}
+	switch n {
+	case 0:
+		return "", errors.New("the signature names no release tag")
+	case 1:
+		return tag, nil
+	}
+	return "", errors.New("the signature names more than one release tag")
+}
+
+// CheckSignedTag checks a trusted comment names exactly tag.
+func CheckSignedTag(comment, tag string) error {
+	got, err := SignedTag(comment)
+	if err != nil {
+		return err
+	}
+	if got != tag {
+		return fmt.Errorf("the signature was signed for %s, not %s", got, tag)
+	}
+	return nil
+}
+
 // checksumFor finds name's SHA-256 in a checksums.txt ("<hex>  <name>" lines).
 func checksumFor(sums []byte, name string) (string, error) {
 	for _, line := range strings.Split(string(sums), "\n") {
@@ -298,7 +339,7 @@ func extract(archive []byte) ([]byte, error) {
 
 // checkRuns runs the new binary's --version (it is verified by now): it must run on this machine and name tag.
 func checkRuns(ctx context.Context, path, tag string) error {
-	ctx, cancel := context.WithTimeout(ctx, checkTimout)
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, path, "--version").Output()
 	if err != nil {
@@ -356,6 +397,17 @@ func semver(v string) ([3]int, bool) {
 		out[i] = n
 	}
 	return out, true
+}
+
+// httpsOnly refuses a redirect to anything but https (GitHub sends downloads to its storage host over https).
+func httpsOnly(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("a redirect to %s is not https; refusing it", req.URL.Host)
+	}
+	if len(via) >= 10 {
+		return errors.New("too many redirects")
+	}
+	return nil
 }
 
 // unwrapURL drops net/url's "Get <url>:" prefix.

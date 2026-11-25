@@ -92,7 +92,11 @@ type release struct {
 	truncate   string            // asset served with half its bytes
 	lieLength  string            // asset whose connection is cut short of its Content-Length
 	plainURL   bool              // asset URLs given as http://
+	redirectTo string            // asset whose https link redirects to plain http
 }
+
+// signed is the trusted comment the release workflow writes (tools/signsums).
+func signed(tag string) string { return "timestamp:1\tfile:checksums.txt\ttag:" + tag }
 
 func asset() string { return "teamflow_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz" }
 
@@ -111,7 +115,7 @@ func newRelease(t *testing.T, sk minisign.SecretKey, tag, binary string) *releas
 	}
 	r.sums = []byte(sums.String())
 	r.assets["checksums.txt"] = r.sums
-	r.assets["checksums.txt.minisig"] = minisign.Sign(sk, r.sums, "timestamp:1\tfile:checksums.txt")
+	r.assets["checksums.txt.minisig"] = minisign.Sign(sk, r.sums, signed(tag))
 	r.srv = httptest.NewTLSServer(http.HandlerFunc(r.serve))
 	t.Cleanup(r.srv.Close)
 	return r
@@ -154,6 +158,10 @@ func (r *release) serve(w http.ResponseWriter, req *http.Request) {
 	body, ok := r.assets[name]
 	if !ok || !strings.HasPrefix(req.URL.Path, "/dl/") {
 		http.NotFound(w, req)
+		return
+	}
+	if name == r.redirectTo && req.URL.Query().Get("hop") == "" {
+		http.Redirect(w, req, strings.Replace(r.srv.URL, "https://", "http://", 1)+"/dl/"+name+"?hop=1", http.StatusFound)
 		return
 	}
 	switch name {
@@ -341,7 +349,7 @@ func TestSelfUpdateRefusesBadChecksum(t *testing.T) {
 	}
 	rel.sums = []byte(sums.String())
 	rel.assets["checksums.txt"] = rel.sums
-	rel.assets["checksums.txt.minisig"] = minisign.Sign(sk, rel.sums, "timestamp:1\tfile:checksums.txt")
+	rel.assets["checksums.txt.minisig"] = minisign.Sign(sk, rel.sums, signed("v0.2.0"))
 	u, exe, _ = rel.updater(t, pub)
 	wantRefusal(t, u.Update(context.Background(), "0.1.0"), "no checksum for "+asset())
 	untouched(t, exe)
@@ -386,7 +394,8 @@ func TestSelfUpdateKeepsOldBinaryOnFailure(t *testing.T) {
 			r.assets[asset()] = tarGz(t, map[string]string{"teamflow": "#!/bin/sh\necho \"teamflow 0.0.9\"\n"})
 			r.resign(sk)
 		}, "not v0.2.0"},
-		"plain http link": {func(r *release, _ *Updater) { r.plainURL = true }, "not https"},
+		"plain http link":  {func(r *release, _ *Updater) { r.plainURL = true }, "not https"},
+		"redirect to http": {func(r *release, _ *Updater) { r.redirectTo = asset() }, "not https"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -404,7 +413,7 @@ func (r *release) resign(sk minisign.SecretKey) {
 	h := sha256.Sum256(r.assets[asset()])
 	r.sums = []byte(hex.EncodeToString(h[:]) + "  " + asset() + "\n")
 	r.assets["checksums.txt"] = r.sums
-	r.assets["checksums.txt.minisig"] = minisign.Sign(sk, r.sums, "timestamp:1\tfile:checksums.txt")
+	r.assets["checksums.txt.minisig"] = minisign.Sign(sk, r.sums, signed(r.tag))
 }
 
 // The placeholder key (this build has no release key): refused before any network call, nothing changed.
@@ -482,7 +491,31 @@ func TestPublicKeyPlaceholderOrValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(sh), "\nPUBKEY=\""+PublicKey+"\"\n") {
+	if !strings.Contains(string(sh), "\n\tPUBKEY=\""+PublicKey+"\"\n") {
 		t.Fatalf("install.sh's PUBKEY is not pubkey.go's %q", PublicKey)
+	}
+}
+
+// The signed trusted comment names the release's tag; a signature made for another release (an older release's
+// checksums.txt and signature served as the latest: a rollback), one naming no tag, or one naming a longer tag is
+// refused before the archive is downloaded.
+func TestSelfUpdateRefusesSignatureForAnotherTag(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	for name, c := range map[string]struct{ comment, want string }{
+		"older release": {signed("v0.1.0"), "signed for v0.1.0, not v0.2.0"},
+		"no tag":        {"timestamp:1\tfile:checksums.txt", "names no release tag"},
+		"longer tag":    {signed("v0.2.0-evil"), "signed for v0.2.0-evil, not v0.2.0"},
+		"two tags":      {signed("v0.2.0") + "\ttag:v0.1.0", "names more than one release tag"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rel := newRelease(t, sk, "v0.2.0", newScript)
+			rel.assets["checksums.txt.minisig"] = minisign.Sign(sk, rel.sums, c.comment)
+			u, exe, _ := rel.updater(t, pub)
+			wantRefusal(t, u.Update(context.Background(), "0.1.0"), c.want)
+			untouched(t, exe)
+			if rel.fetched(asset()) {
+				t.Fatal("downloaded the archive")
+			}
+		})
 	}
 }

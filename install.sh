@@ -3,114 +3,151 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/vutran1710/teamflow-cli/main/install.sh | sh
 #
-# It downloads the archive for this machine, checksums.txt and checksums.txt.minisig into a temporary folder;
-# checks the signature of checksums.txt when minisign is installed (otherwise it says only the checksum was
-# checked, and how to check the signature by hand); checks the archive's SHA-256 against checksums.txt; and only
-# then copies the binary into ~/.local/bin (or $TEAMFLOW_BIN_DIR). It never runs anything it downloaded.
+# It finds the latest release's tag (from the Releases page's /latest redirect; no API), downloads that release's
+# archive for this machine, checksums.txt and checksums.txt.minisig into a temporary folder; checks the signature
+# of checksums.txt and that it was signed for this tag when minisign is installed (otherwise it says only the
+# checksum was checked, and how to check the signature by hand); checks the archive's SHA-256 against
+# checksums.txt; and only then copies the binary into ~/.local/bin (or $TEAMFLOW_BIN_DIR). It never runs anything
+# it downloaded.
 #
 #   TEAMFLOW_BIN_DIR       where the binary goes (default ~/.local/bin)
 #   TEAMFLOW_VERSION       a release tag such as v0.1.0 (default: the latest release)
-#   TEAMFLOW_DOWNLOAD_URL  where the release files are (default: the Releases page; for mirrors and tests)
-set -eu
+#   TEAMFLOW_RELEASES_URL  the Releases page (default https://github.com/vutran1710/teamflow-cli/releases; for
+#                          mirrors and tests: https, or http on localhost)
+#
+# The whole script is one function called on the last line, so a download cut short runs nothing.
 
-REPO="vutran1710/teamflow-cli"
-# The release key (minisign, ed25519): the same as internal/selfupdate/pubkey.go. Empty until the first release.
-PUBKEY=""
+main() {
+	set -eu
+
+	REPO="vutran1710/teamflow-cli"
+	# The release key (minisign, ed25519): the same as internal/selfupdate/pubkey.go. Empty until the first release.
+	PUBKEY=""
+
+	case "$(uname -s)" in
+	Darwin) os=darwin ;;
+	Linux) os=linux ;;
+	*) fail "this system ($(uname -s)) is not supported; teamflow runs on macOS and Linux" ;;
+	esac
+	case "$(uname -m)" in
+	x86_64 | amd64) arch=amd64 ;;
+	arm64 | aarch64) arch=arm64 ;;
+	*) fail "this architecture ($(uname -m)) is not supported; teamflow runs on amd64 and arm64" ;;
+	esac
+	asset="teamflow_${os}_${arch}.tar.gz"
+
+	releases="${TEAMFLOW_RELEASES_URL:-https://github.com/$REPO/releases}"
+	case "$releases" in
+	https://* | http://127.0.0.1:* | http://localhost:*) ;;
+	*) fail "TEAMFLOW_RELEASES_URL must be an https URL" ;;
+	esac
+	tag="${TEAMFLOW_VERSION:-}"
+	if [ -n "$tag" ]; then
+		is_tag "$tag" || fail "TEAMFLOW_VERSION must be a release tag such as v0.1.0"
+	fi
+	bindir="${TEAMFLOW_BIN_DIR:-$HOME/.local/bin}"
+
+	command -v curl >/dev/null 2>&1 || fail "curl is needed to download teamflow"
+	command -v tar >/dev/null 2>&1 || fail "tar is needed to unpack teamflow"
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256() { sha256sum "$1" | awk '{print $1}'; }
+	elif command -v shasum >/dev/null 2>&1; then
+		sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+	else
+		fail "sha256sum or shasum is needed to check the download"
+	fi
+
+	if [ -z "$tag" ]; then
+		latest="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$releases/latest" 2>/dev/null)" ||
+			fail "cannot find the latest release at $releases (offline, or none published yet)"
+		tag="${latest##*/tag/}"
+		is_tag "$tag" || fail "cannot find the latest release at $releases (offline, or none published yet)"
+	fi
+	base="$releases/download/$tag"
+
+	tmp="$(mktemp -d "${TMPDIR:-/tmp}/teamflow-install.XXXXXX")"
+	trap 'rm -rf "$tmp"' EXIT
+	trap 'exit 130' INT TERM
+
+	echo "Downloading teamflow $tag ($asset) ..."
+	fetch "$asset"
+	fetch checksums.txt
+	fetch checksums.txt.minisig
+
+	# The signature of checksums.txt, and the tag it was signed for.
+	if [ -z "$PUBKEY" ]; then
+		echo "Note: this install.sh carries no release key yet; only the checksum was checked."
+	elif command -v minisign >/dev/null 2>&1; then
+		comment="$(cd "$tmp" && minisign -Vm checksums.txt -x checksums.txt.minisig -P "$PUBKEY" -Q 2>/dev/null)" ||
+			fail "signature check failed for checksums.txt; refusing to install"
+		check_signed_tag "$comment" "$tag"
+		echo "The signature of checksums.txt is verified for $tag (signature verified)."
+	else
+		echo "Note: minisign is not installed, so only the checksum was checked; to verify the signature:"
+		echo "  download checksums.txt and checksums.txt.minisig from $base, then run"
+		echo "  minisign -Vm checksums.txt -x checksums.txt.minisig -P $PUBKEY"
+		echo "  (its trusted comment must name tag:$tag)"
+	fi
+
+	# The archive's checksum.
+	want="$(awk -v f="$asset" '$2 == f || $2 == "*" f {print $1; exit}' "$tmp/checksums.txt")"
+	[ -n "$want" ] || fail "checksums.txt has no checksum for $asset; refusing to install"
+	got="$(sha256 "$tmp/$asset")"
+	[ "$got" = "$want" ] || fail "checksum mismatch for $asset (a damaged or changed download); refusing to install"
+
+	# Unpack (verified by now) and copy into place: a temporary file in the folder, then a rename.
+	mkdir "$tmp/x"
+	tar -xzf "$tmp/$asset" -C "$tmp/x" || fail "$asset could not be unpacked"
+	[ -f "$tmp/x/teamflow" ] || fail "$asset holds no teamflow binary; refusing to install"
+	mkdir -p "$bindir" 2>/dev/null || fail "cannot write to $bindir; set TEAMFLOW_BIN_DIR to a folder you can write"
+	new="$(mktemp "$bindir/.teamflow-install.XXXXXX" 2>/dev/null)" ||
+		fail "cannot write to $bindir; set TEAMFLOW_BIN_DIR to a folder you can write"
+	if ! cp "$tmp/x/teamflow" "$new" 2>/dev/null || ! chmod 0755 "$new" || ! mv -f "$new" "$bindir/teamflow"; then
+		rm -f "$new"
+		fail "cannot write to $bindir; set TEAMFLOW_BIN_DIR to a folder you can write"
+	fi
+
+	echo "Installed teamflow $tag to $bindir/teamflow"
+	case ":$PATH:" in
+	*":$bindir:"*) ;;
+	*) echo "Note: $bindir is not on your PATH; add it, for example: export PATH=\"$bindir:\$PATH\"" ;;
+	esac
+	echo
+	echo "Next: teamflow install -a <agent> -e <email> [-s <server>]"
+	echo "  (agents: claude-code, cursor, antigravity, copilot; the server defaults to https://teamflow.vutr.io)"
+}
 
 fail() {
 	echo "teamflow install: $*" >&2
 	exit 1
 }
 
-case "$(uname -s)" in
-Darwin) os=darwin ;;
-Linux) os=linux ;;
-*) fail "this system ($(uname -s)) is not supported; teamflow runs on macOS and Linux" ;;
-esac
-case "$(uname -m)" in
-x86_64 | amd64) arch=amd64 ;;
-arm64 | aarch64) arch=arm64 ;;
-*) fail "this architecture ($(uname -m)) is not supported; teamflow runs on amd64 and arm64" ;;
-esac
-asset="teamflow_${os}_${arch}.tar.gz"
-
-version="${TEAMFLOW_VERSION:-}"
-case "$version" in
-"") base="https://github.com/$REPO/releases/latest/download" ;;
-v[0-9]*.[0-9]*.[0-9]*)
-	case "$version" in
-	*[!0-9A-Za-z.-]*) fail "TEAMFLOW_VERSION must be a release tag such as v0.1.0" ;;
+# is_tag: a release tag vX.Y.Z.
+is_tag() {
+	case "$1" in
+	v[0-9]*.[0-9]*.[0-9]*)
+		case "$1" in
+		*[!0-9v.]* | v*v* | *..* | *.) return 1 ;;
+		esac
+		return 0
+		;;
 	esac
-	base="https://github.com/$REPO/releases/download/$version"
-	;;
-*) fail "TEAMFLOW_VERSION must be a release tag such as v0.1.0" ;;
-esac
-base="${TEAMFLOW_DOWNLOAD_URL:-$base}"
-bindir="${TEAMFLOW_BIN_DIR:-$HOME/.local/bin}"
-
-command -v curl >/dev/null 2>&1 || fail "curl is needed to download teamflow"
-command -v tar >/dev/null 2>&1 || fail "tar is needed to unpack teamflow"
-if command -v sha256sum >/dev/null 2>&1; then
-	sha256() { sha256sum "$1" | awk '{print $1}'; }
-elif command -v shasum >/dev/null 2>&1; then
-	sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
-else
-	fail "sha256sum or shasum is needed to check the download"
-fi
-
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/teamflow-install.XXXXXX")"
-trap 'rm -rf "$tmp"' EXIT INT TERM
+	return 1
+}
 
 fetch() {
 	curl -fsSL --retry 2 -o "$tmp/$1" "$base/$1" || fail "download failed: $base/$1"
 }
 
-echo "Downloading $asset ..."
-fetch "$asset"
-fetch checksums.txt
-fetch checksums.txt.minisig
-
-# The signature of checksums.txt.
-verify_by_hand="minisign -Vm checksums.txt -x checksums.txt.minisig -P $PUBKEY"
-if [ -z "$PUBKEY" ]; then
-	echo "Note: this install.sh carries no release key yet; only the checksum was checked."
-elif command -v minisign >/dev/null 2>&1; then
-	(cd "$tmp" && minisign -Vm checksums.txt -x checksums.txt.minisig -P "$PUBKEY" >/dev/null 2>&1) ||
-		fail "signature check failed for checksums.txt; refusing to install"
-	echo "The signature of checksums.txt is verified (signature verified)."
-else
-	echo "Note: minisign is not installed, so only the checksum was checked; to verify the signature:"
-	echo "  download checksums.txt and checksums.txt.minisig from $base, then run"
-	echo "  $verify_by_hand"
-fi
-
-# The archive's checksum.
-want="$(awk -v f="$asset" '$2 == f || $2 == "*" f {print $1; exit}' "$tmp/checksums.txt")"
-[ -n "$want" ] || fail "checksums.txt has no checksum for $asset; refusing to install"
-got="$(sha256 "$tmp/$asset")"
-[ "$got" = "$want" ] || fail "checksum mismatch for $asset (a damaged or changed download); refusing to install"
-
-# Unpack (verified by now) and copy into place: a temporary name in the folder, then a rename.
-mkdir "$tmp/x"
-tar -xzf "$tmp/$asset" -C "$tmp/x" || fail "$asset could not be unpacked"
-[ -f "$tmp/x/teamflow" ] || fail "$asset holds no teamflow binary; refusing to install"
-mkdir -p "$bindir" 2>/dev/null || fail "cannot write to $bindir; set TEAMFLOW_BIN_DIR to a folder you can write"
-new="$bindir/.teamflow-install.$$"
-cp "$tmp/x/teamflow" "$new" 2>/dev/null || {
-	rm -f "$new" 2>/dev/null
-	fail "cannot write to $bindir; set TEAMFLOW_BIN_DIR to a folder you can write"
-}
-chmod 0755 "$new"
-mv -f "$new" "$bindir/teamflow" || {
-	rm -f "$new"
-	fail "cannot write to $bindir; set TEAMFLOW_BIN_DIR to a folder you can write"
+# check_signed_tag COMMENT TAG: the trusted comment's one tab-separated "tag:" field is TAG.
+check_signed_tag() {
+	found="$(printf '%s\n' "$1" | awk -F '\t' '{for (i = 1; i <= NF; i++) if (substr($i, 1, 4) == "tag:") {n++; t = substr($i, 5)}} END {print n + 0 " " t}')"
+	case "${found%% *}" in
+	0) fail "the signature names no release tag; refusing to install" ;;
+	1) ;;
+	*) fail "the signature names more than one release tag; refusing to install" ;;
+	esac
+	[ "${found#* }" = "$2" ] || fail "the signature was signed for ${found#* }, not $2; refusing to install"
 }
 
-echo "Installed teamflow to $bindir/teamflow"
-case ":$PATH:" in
-*":$bindir:"*) ;;
-*) echo "Note: $bindir is not on your PATH; add it, for example: export PATH=\"$bindir:\$PATH\"" ;;
-esac
-echo
-echo "Next: teamflow install -a <agent> -e <email> [-s <server>]"
-echo "  (agents: claude-code, cursor, antigravity, copilot; the server defaults to https://teamflow.vutr.io)"
+main "$@"

@@ -2,11 +2,14 @@ name: Release
 
 # A tag v* publishes a release in four jobs, each with the least it needs:
 #   build   (contents: read, no secret)  tests, GoReleaser --skip=publish: the four archives and checksums.txt;
-#   sign    (contents: read, the secret) checks the archives against checksums.txt, then signs it with
+#   sign    (contents: read, the secret; environment release) checks the archives against checksums.txt, then signs it with
 #                                        tools/signsums (this repo's code, standard library only; no third-party
 #                                        action and no minisign in this job);
 #   verify  (contents: read, no secret)  checks the signature with the stock minisign and the binary's version;
-#   publish (contents: write, no secret) checks again with tools/signsums -verify, then `gh release create`.
+#   publish (contents: write, no secret; environment release) checks again with tools/signsums -verify, then `gh release create`.
+# TEAMFLOW_SIGNING_KEY is a secret of the `release` environment, not of the repo: that environment takes only v* tags
+# and waits for the owner's approval (docs/VERIFY.md), and a ruleset limits who may create v* tags. The signature's
+# trusted comment names the tag, and every checker requires it.
 # It fails closed: the placeholder public key, a missing secret, a key that is not the committed one, a changed
 # archive, or a signature that does not verify stops it before anything is published. The key is passed only to
 # the signing step's environment and is never printed. Every action is pinned to a commit SHA (a test checks).
@@ -40,7 +43,7 @@ jobs:
           echo "$GITHUB_REF_NAME" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
       - name: The release key is committed
         run: |
-          pub="$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' install.sh)"
+          pub="$(sed -n 's/^[[:space:]]*PUBKEY="\(.*\)"$/\1/p' install.sh)"
           if [ -z "$pub" ] || grep -q '^const PublicKey = ""$' internal/selfupdate/pubkey.go; then
             echo "::error::no release key is committed (pubkey.go / install.sh hold the placeholder); see docs/VERIFY.md"
             exit 1
@@ -65,6 +68,7 @@ jobs:
   sign:
     needs: build
     runs-on: ubuntu-latest
+    environment: release # the key is this environment's secret: only v* tags deploy here, after the owner approves
     permissions:
       contents: read
     steps:
@@ -95,7 +99,7 @@ jobs:
             echo "::error::the TEAMFLOW_SIGNING_KEY secret is not set; refusing to publish an unsigned release"
             exit 1
           fi
-          go run ./tools/signsums -in dist/checksums.txt -out dist/checksums.txt.minisig
+          go run ./tools/signsums -tag "$GITHUB_REF_NAME" -in dist/checksums.txt -out dist/checksums.txt.minisig
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signature
@@ -123,8 +127,9 @@ jobs:
       - name: The stock minisign checks the signature; the binary names the tag
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign
-          pub="$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' install.sh)"
-          (cd dist && minisign -Vm checksums.txt -x checksums.txt.minisig -P "$pub")
+          pub="$(sed -n 's/^[[:space:]]*PUBKEY="\(.*\)"$/\1/p' install.sh)"
+          comment="$(cd dist && minisign -Vm checksums.txt -x checksums.txt.minisig -P "$pub" -Q)"
+          printf '%s\n' "$comment" | tr '\t' '\n' | grep -qx "tag:$GITHUB_REF_NAME" || { echo "::error::the signature does not name $GITHUB_REF_NAME"; exit 1; }
           (cd dist && sha256sum --strict -c checksums.txt)
           mkdir -p "$RUNNER_TEMP/check" && tar -xzf dist/teamflow_linux_amd64.tar.gz -C "$RUNNER_TEMP/check" teamflow
           "$RUNNER_TEMP/check/teamflow" --version | grep -qx "teamflow ${GITHUB_REF_NAME#v}"
@@ -132,6 +137,7 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-latest
+    environment: release # the owner approves the publish too
     permissions:
       contents: write # to publish the release
     steps:
@@ -154,7 +160,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          go run ./tools/signsums -verify -in dist/checksums.txt -out dist/checksums.txt.minisig
+          go run ./tools/signsums -verify -tag "$GITHUB_REF_NAME" -in dist/checksums.txt -out dist/checksums.txt.minisig
           (cd dist && sha256sum --strict -c checksums.txt)
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
             dist/teamflow_darwin_amd64.tar.gz dist/teamflow_darwin_arm64.tar.gz \

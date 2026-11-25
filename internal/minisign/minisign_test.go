@@ -49,6 +49,12 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	if err := Verify(pk, msg, sig); err != nil {
 		t.Fatalf("verify: %v\n%s", err, sig)
 	}
+	if c, err := VerifyComment(pk, msg, sig); err != nil || c != "timestamp:1\tfile:checksums.txt" {
+		t.Fatalf("trusted comment %q %v", c, err)
+	}
+	if _, err := VerifyComment(pk, []byte("x"), sig); err == nil {
+		t.Fatal("VerifyComment took a changed message")
+	}
 	if !strings.HasPrefix(string(sig), "untrusted comment: ") || !strings.Contains(string(sig), "\ntrusted comment: timestamp:1\tfile:checksums.txt\n") {
 		t.Fatalf("not minisign's layout:\n%s", sig)
 	}

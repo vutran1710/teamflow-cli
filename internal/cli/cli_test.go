@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +32,7 @@ import (
 
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
+	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 	"github.com/vutran1710/teamflow-cli/internal/syncer"
 )

@@ -45,7 +45,7 @@ func TestSignsWithTheReleaseKey(t *testing.T) {
 	sec, pub := throwawaySecret(t, "\x00\x00")
 	in, out := sums(t)
 	var log bytes.Buffer
-	if err := run(in, out, sec, pub, &log); err != nil {
+	if err := run(in, out, sec, pub, "v1.2.3", &log); err != nil {
 		t.Fatal(err)
 	}
 	msg, _ := os.ReadFile(in)
@@ -54,7 +54,7 @@ func TestSignsWithTheReleaseKey(t *testing.T) {
 	if err := minisign.Verify(pk, msg, sig); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(sig), "\tfile:checksums.txt\n") {
+	if !strings.Contains(string(sig), "\tfile:checksums.txt\ttag:v1.2.3\n") {
 		t.Fatalf("trusted comment:\n%s", sig)
 	}
 	if strings.Contains(log.String(), strings.Split(sec, "\n")[1]) {
@@ -71,14 +71,18 @@ func TestRefusesAndNeverPrintsTheKey(t *testing.T) {
 	cases := map[string]struct {
 		sec, pub, want string
 		noInput        bool
+		tag            string
 	}{
-		"no secret":     {"", pub, "TEAMFLOW_SIGNING_KEY is empty", false},
-		"blank secret":  {"  \n", pub, "TEAMFLOW_SIGNING_KEY is empty", false},
-		"placeholder":   {sec, "", "no release key is committed", false},
-		"another key":   {otherSec, pub, "not the committed release key", false},
-		"encrypted key": {encSec, encPub, "minisign -G -W", false},
-		"garbled key":   {"untrusted comment: x\n" + strings.Repeat("Q", 40) + "$\n", pub, "not base64", false},
-		"no input":      {sec, pub, "checksums.txt", true},
+		"no secret":     {"", pub, "TEAMFLOW_SIGNING_KEY is empty", false, "v1.2.3"},
+		"blank secret":  {"  \n", pub, "TEAMFLOW_SIGNING_KEY is empty", false, "v1.2.3"},
+		"placeholder":   {sec, "", "no release key is committed", false, "v1.2.3"},
+		"another key":   {otherSec, pub, "not the committed release key", false, "v1.2.3"},
+		"encrypted key": {encSec, encPub, "minisign -G -W", false, "v1.2.3"},
+		"garbled key":   {"untrusted comment: x\n" + strings.Repeat("Q", 40) + "$\n", pub, "not base64", false, "v1.2.3"},
+		"no input":      {sec, pub, "checksums.txt", true, "v1.2.3"},
+		"no tag":        {sec, pub, "-tag", false, ""},
+		"bad tag":       {sec, pub, "-tag", false, "v1.2.3\tfile:x"},
+		"branch tag":    {sec, pub, "-tag", false, "main"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -87,7 +91,7 @@ func TestRefusesAndNeverPrintsTheKey(t *testing.T) {
 				_ = os.Remove(in)
 			}
 			var log bytes.Buffer
-			err := run(in, out, c.sec, c.pub, &log)
+			err := run(in, out, c.sec, c.pub, c.tag, &log)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err %v, want %q", err, c.want)
 			}
@@ -109,25 +113,27 @@ func TestVerifyMode(t *testing.T) {
 	sec, pub := throwawaySecret(t, "\x00\x00")
 	_, otherPub := throwawaySecret(t, "\x00\x00")
 	in, out := sums(t)
-	if err := run(in, out, sec, pub, &bytes.Buffer{}); err != nil {
+	if err := run(in, out, sec, pub, "v1.2.3", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := verify(in, out, pub); err != nil {
+	if err := verify(in, out, pub, "v1.2.3"); err != nil {
 		t.Fatal(err)
 	}
-	for name, c := range map[string]struct{ pub, sig, want string }{
-		"another key":  {otherPub, out, "another key"},
-		"placeholder":  {"", out, "no release key is committed"},
-		"no signature": {pub, out + ".gone", "cannot read"},
+	for name, c := range map[string]struct{ pub, sig, tag, want string }{
+		"another key":  {otherPub, out, "v1.2.3", "another key"},
+		"placeholder":  {"", out, "v1.2.3", "no release key is committed"},
+		"no signature": {pub, out + ".gone", "v1.2.3", "cannot read"},
+		"another tag":  {pub, out, "v1.2.4", "signed for v1.2.3, not v1.2.4"},
+		"no tag":       {pub, out, "", "-tag"},
 	} {
-		if err := verify(in, c.sig, c.pub); err == nil || !strings.Contains(err.Error(), c.want) {
+		if err := verify(in, c.sig, c.pub, c.tag); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
 	if err := os.WriteFile(in, []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := verify(in, out, pub); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if err := verify(in, out, pub, "v1.2.3"); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("changed file: %v", err)
 	}
 }

@@ -122,46 +122,52 @@ func Sign(s SecretKey, msg []byte, trustedComment string) []byte {
 
 // Verify checks a minisign signature file over msg: the signature itself and the signed trusted comment.
 func Verify(p PublicKey, msg, sigFile []byte) error {
+	_, err := VerifyComment(p, msg, sigFile)
+	return err
+}
+
+// VerifyComment is Verify, returning the trusted comment (only once it is checked).
+func VerifyComment(p PublicKey, msg, sigFile []byte) (string, error) {
 	lines := strings.Split(strings.ReplaceAll(string(sigFile), "\r\n", "\n"), "\n")
 	if len(lines) < 4 {
-		return errors.New("minisign: the signature file is not four lines")
+		return "", errors.New("minisign: the signature file is not four lines")
 	}
-	if !strings.HasPrefix(lines[0], untrustedPrefix) && !strings.HasPrefix(lines[0], "untrusted comment:") {
-		return errors.New("minisign: the signature file does not start with an untrusted comment")
+	if !strings.HasPrefix(lines[0], "untrusted comment:") {
+		return "", errors.New("minisign: the signature file does not start with an untrusted comment")
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(lines[1]))
 	if err != nil {
-		return errors.New("minisign: the signature is not base64")
+		return "", errors.New("minisign: the signature is not base64")
 	}
 	if len(raw) != sigLen {
-		return fmt.Errorf("minisign: the signature is %d bytes, not %d", len(raw), sigLen)
+		return "", fmt.Errorf("minisign: the signature is %d bytes, not %d", len(raw), sigLen)
 	}
 	switch [2]byte(raw[:2]) {
 	case algEd:
 	case [2]byte{'E', 'D'}:
-		return errors.New("minisign: a prehashed (ED) signature cannot be checked here; sign with the legacy form")
+		return "", errors.New("minisign: a prehashed (ED) signature cannot be checked here; sign with the legacy form")
 	default:
-		return errors.New("minisign: the signature is not an ed25519 signature")
+		return "", errors.New("minisign: the signature is not an ed25519 signature")
 	}
 	if [keyIDLen]byte(raw[2:2+keyIDLen]) != p.ID {
-		return errors.New("minisign: the file was signed by another key")
+		return "", errors.New("minisign: the file was signed by another key")
 	}
 	sig := raw[2+keyIDLen:]
 	if !ed25519.Verify(p.Key, msg, sig) {
-		return errors.New("minisign: the signature does not match the file")
+		return "", errors.New("minisign: the signature does not match the file")
 	}
 	if !strings.HasPrefix(lines[2], trustedPrefix) {
-		return errors.New("minisign: the signature file has no trusted comment")
+		return "", errors.New("minisign: the signature file has no trusted comment")
 	}
 	comment := strings.TrimPrefix(lines[2], trustedPrefix)
 	global, err := base64.StdEncoding.DecodeString(strings.TrimSpace(lines[3]))
 	if err != nil || len(global) != ed25519.SignatureSize {
-		return errors.New("minisign: the trusted comment's signature is malformed")
+		return "", errors.New("minisign: the trusted comment's signature is malformed")
 	}
 	if !ed25519.Verify(p.Key, append(bytes.Clone(sig), comment...), global) {
-		return errors.New("minisign: the trusted comment's signature does not match")
+		return "", errors.New("minisign: the trusted comment's signature does not match")
 	}
-	return nil
+	return comment, nil
 }
 
 // lastLine is the last non-blank line: the key itself in a key file.
