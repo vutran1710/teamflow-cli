@@ -550,7 +550,7 @@ func signalGet(k *Call, in signalGetIn) (any, error) {
 		return nil, err
 	}
 	if !ok && k.c.SignedIn() {
-		k.c.Sync(k.ctx, core.DefaultTimeout, "")
+		k.c.PullNow(k.ctx, core.DefaultTimeout, "") // a miss: pull even while the background sync is live
 		st, ok, err = k.c.St.Signal(in.Signal)
 		if err != nil {
 			return nil, err

@@ -149,6 +149,16 @@ func (c *Core) API(ctx context.Context, project string, timeout time.Duration) (
 // (NOT_ALLOWED, NOT_A_MEMBER) is dropped. A project the background sync is live on (heard within LiveFresh) is
 // not pulled: the replica is fresh; only its outbox is sent, when something waits in it.
 func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) bool {
+	return c.sync(ctx, timeout, only, false)
+}
+
+// PullNow is Sync that pulls even the projects the background sync is live on: for a lookup the replica missed
+// (something just written or just arrived is still on its way over the live socket).
+func (c *Core) PullNow(ctx context.Context, timeout time.Duration, only string) bool {
+	return c.sync(ctx, timeout, only, true)
+}
+
+func (c *Core) sync(ctx context.Context, timeout time.Duration, only string, force bool) bool {
 	b, err := c.binding()
 	if err != nil { // not signed in: no key to sync with
 		return true
@@ -182,7 +192,7 @@ func (c *Core) Sync(ctx context.Context, timeout time.Duration, only string) boo
 			}
 		}
 		ob := store.OutboxOf(b, pid)
-		if c.LiveFresh(pid) {
+		if !force && c.LiveFresh(pid) {
 			if n, err := c.St.Waiting(ob); err == nil && n == 0 {
 				continue
 			}

@@ -41,6 +41,10 @@ func (c *Core) Verdict(ctx context.Context, sid, target string, kind protocol.Si
 	}
 	c.Sync(ctx, DefaultTimeout, "")
 	st, ok, err := c.St.Signal(target)
+	if err == nil && !ok { // a request just arrived may still be on its way over the live socket
+		c.PullNow(ctx, DefaultTimeout, "")
+		st, ok, err = c.St.Signal(target)
+	}
 	if err != nil {
 		return r, err
 	}
@@ -410,7 +414,7 @@ func (c *Core) signalOf(ctx context.Context, ident string) (protocol.StoredSigna
 	if !c.SignedIn() {
 		return st, false, ErrNotSignedIn
 	}
-	c.Sync(ctx, HookTimeout, "")
+	c.PullNow(ctx, HookTimeout, "") // a miss: pull even a project the background sync is live on
 	return c.St.Signal(ident)
 }
 

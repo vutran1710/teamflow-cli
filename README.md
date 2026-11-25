@@ -174,7 +174,9 @@ Teamflow home. `sync` is a setup command: an agent never runs it without your sa
   approval request reaches your session at its next step within seconds. An event already applied (a command's
   pull brought it first, or it is sent again) is not applied twice; gaps in the event numbers are normal.
 - **Freshness.** While a project's socket is live (something heard from it, a pong or an event, within 15 seconds),
-  hooks and commands do not pull it over the network; when it is not, they pull as before (`HOOK_TIMEOUT`, 4 s).
+  hooks and commands do not pull it over the network, except a command looking up a signal or artifact the local
+  copy does not have yet (just written, or still on its way over the socket), which pulls for it; when it is not
+  live, they pull as before (`HOOK_TIMEOUT`, 4 s).
   Only what is heard moves that time, and it is cleared the moment a socket ends, so a socket that stops answering
   is never trusted longer than 15 seconds.
 - **Reconnecting.** Once live it pings every 10 seconds (the server answers without waking); nothing heard within 5

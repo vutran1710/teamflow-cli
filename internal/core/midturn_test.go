@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/config"
+	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
@@ -183,5 +184,38 @@ func TestMidTurnSadPaths(t *testing.T) {
 	out := open(t, nil)
 	if got := out.MidTurn(ctx, "s1"); got != "" {
 		t.Fatal(got)
+	}
+}
+
+// A command looking up a signal or artifact the replica does not have yet (just written, still on its way over the
+// live socket) pulls for it even while the background sync is live; one the replica has costs no network.
+func TestALookupMissPullsEvenWhileLive(t *testing.T) {
+	ctx := context.Background()
+	srv, calls := countingServer(t)
+	c, now := midTurnCore(t, srv.URL)
+	if err := c.St.SetLiveAt(P, *now); err != nil {
+		t.Fatal(err)
+	}
+	accept(t, c, tS1, "Known", 1, protocol.SignalStateInForce, "", "")
+	if _, ok, err := c.signalOf(ctx, tS1); err != nil || !ok || calls.Load() != 0 {
+		t.Fatalf("a known signal: ok %v, err %v, %d network calls", ok, err, calls.Load())
+	}
+	missing := "sg_01MISSING0000000000000000"
+	if _, ok, err := c.signalOf(ctx, missing); err != nil || ok {
+		t.Fatalf("a missing signal: ok %v, err %v", ok, err)
+	}
+	if calls.Load() == 0 {
+		t.Fatal("a lookup miss trusted the live replica and never pulled")
+	}
+	before := calls.Load()
+	if _, err := c.ArtifactArchive(ctx, missing, true, "x"); err == nil || !strings.Contains(err.Error(), "no artifact") {
+		t.Fatalf("archive of a missing artifact: %v", err)
+	}
+	if _, err := c.Verdict(ctx, "s1", missing, protocol.SignalKindApprove, ""); err == nil ||
+		!strings.Contains(err.Error(), "no signal") {
+		t.Fatalf("a verdict on a missing signal: %v", err)
+	}
+	if calls.Load() < before+2 {
+		t.Fatalf("archive and verdict on a miss pulled %d times, want a pull each", calls.Load()-before)
 	}
 }
