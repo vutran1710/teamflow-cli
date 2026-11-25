@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -674,5 +675,48 @@ func TestHardLinkToAHomeFileRefused(t *testing.T) {
 	copied := write(t, filepath.Join(project, "copy.md"), []byte(`{"auth_key": "tfa_secret"}`))
 	if _, err := ReadText(copied); err != nil {
 		t.Errorf("a copy is not the home's file: %v", err)
+	}
+}
+
+// The Teamflow home reached through a symlink (TEAMFLOW_HOME, or ~/.teamflow, a link to the real folder): a hard
+// link to one of its files is still refused, on read (Prepare, ReadText, Link) and on write (Pull -o), and the home
+// file is left as it was. Sad paths: a symlinked home given by TEAMFLOW_HOME and by Options, a link to a file in a
+// subfolder of the home, read and write.
+func TestHardLinkRefusedThroughASymlinkedHome(t *testing.T) {
+	root := real(t)
+	realHome := filepath.Join(root, "real-tf")
+	cfg := write(t, filepath.Join(realHome, "config.json"), []byte(`{"auth_key": "tfa_secret"}`))
+	deep := write(t, filepath.Join(realHome, "live", "state.json"), []byte("STATE"))
+	linked := filepath.Join(root, "dot-teamflow")
+	must(t, os.Symlink(realHome, linked))
+	t.Setenv("TEAMFLOW_HOME", linked)
+	work := filepath.Join(root, "work")
+	must(t, os.MkdirAll(work, 0o755))
+	for i, target := range []string{cfg, deep} {
+		hard := filepath.Join(work, fmt.Sprintf("notes%d.md", i))
+		must(t, os.Link(target, hard))
+		if pr, err := Prepare(hard, Options{Home: linked}); err == nil || !strings.Contains(err.Error(), "Teamflow's own") || pr.Data != nil {
+			t.Errorf("Prepare %s: %v", hard, err)
+		}
+		if _, err := Prepare(hard, Options{}); err == nil || !strings.Contains(err.Error(), "Teamflow's own") {
+			t.Errorf("Prepare (TEAMFLOW_HOME) %s: %v", hard, err)
+		}
+		if b, err := ReadText(hard); err == nil || b != nil {
+			t.Errorf("ReadText %s: %v", hard, err)
+		}
+		if _, _, err := Link("https://x.test/a", "a.md", hard, ""); err == nil {
+			t.Errorf("Link %s: %v", hard, err)
+		}
+	}
+	// Write: pull -o onto a hard link to the home's config.json.
+	data := []byte("# Spec\n")
+	ref := &protocol.StoredRef{Key: "k", Sha256: sum(data), MediaType: "text/markdown", Size: int64(len(data))}
+	hard := filepath.Join(work, "hard.json")
+	must(t, os.Link(cfg, hard))
+	if _, err := Pull(content("spec.md", data, ref, nil), hard, true); err == nil {
+		t.Fatal("pull replaced a hard link to a file of a symlinked home")
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != `{"auth_key": "tfa_secret"}` {
+		t.Fatalf("the home's config.json changed: %q", b)
 	}
 }

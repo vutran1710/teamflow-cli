@@ -629,8 +629,13 @@ func writeOutsideHome(target string, data []byte, replace, mkdir bool) error {
 	return f.Close()
 }
 
-// homeFile says whether fi is one of the files in the Teamflow home (by identity: a hard link to it is it).
+// homeFile says whether fi is one of the files in the Teamflow home (by identity: a hard link to it is it). A home
+// reached through a symlink (TEAMFLOW_HOME, ~/.teamflow) is walked at its real folder: WalkDir never follows a
+// symlinked root.
 func homeFile(fi os.FileInfo, dir string) bool {
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
 	found := false
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || found {
