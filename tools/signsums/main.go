@@ -3,6 +3,7 @@
 // uses the standard library only, so the runner needs no minisign.
 //
 //	TEAMFLOW_SIGNING_KEY=<minisign secret key> go run ./tools/signsums -in dist/checksums.txt
+//	go run ./tools/signsums -verify -in dist/checksums.txt   # checks the signature with the committed key; no secret
 //
 // The secret key comes only from the environment variable (an unencrypted key, `minisign -G -W`; the whole file or
 // its base64 line). It fails closed: no key, no committed public key (the placeholder), a key that is not the
@@ -27,9 +28,18 @@ import (
 func main() {
 	in := flag.String("in", filepath.Join("dist", "checksums.txt"), "the file to sign")
 	out := flag.String("out", "", "the signature file (default: <in>.minisig)")
+	check := flag.Bool("verify", false, "check the signature with the committed key instead of signing")
 	flag.Parse()
 	if *out == "" {
 		*out = *in + ".minisig"
+	}
+	if *check {
+		if err := verify(*in, *out, selfupdate.PublicKey); err != nil {
+			fmt.Fprintln(os.Stderr, "signsums:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s: the signature is good (the committed release key)\n", filepath.Base(*in))
+		return
 	}
 	secret := os.Getenv("TEAMFLOW_SIGNING_KEY")
 	if err := run(*in, *out, secret, selfupdate.PublicKey, os.Stdout); err != nil {
@@ -73,4 +83,24 @@ func run(in, out, secret, committed string, log io.Writer) error {
 	}
 	fmt.Fprintf(log, "signed %s with the release key %X -> %s\n", filepath.Base(in), id, filepath.Base(out))
 	return nil
+}
+
+// verify checks sigFile over in with the committed key.
+func verify(in, sigFile, committed string) error {
+	if strings.TrimSpace(committed) == "" {
+		return errors.New("no release key is committed (internal/selfupdate/pubkey.go is the placeholder)")
+	}
+	pub, err := minisign.ParsePublicKey(committed)
+	if err != nil {
+		return fmt.Errorf("the committed public key: %v", err)
+	}
+	msg, err := os.ReadFile(in)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %v", in, err)
+	}
+	sig, err := os.ReadFile(sigFile)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %v", sigFile, err)
+	}
+	return minisign.Verify(pub, msg, sig)
 }

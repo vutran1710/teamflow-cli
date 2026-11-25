@@ -61,3 +61,9 @@ to sign. A tag is pushed only after the key is committed, so the release's binar
 Signing is done by `tools/signsums` in the release workflow (standard library only, no minisign on the runner): it
 refuses an empty secret, an encrypted key, a key that is not the committed one, and a signature that does not
 verify; the workflow then checks the signature with the stock minisign before publishing.
+
+The release workflow runs in four jobs with the least each needs: `build` (read-only, no secret: tests and
+GoReleaser), `sign` (read-only, the only job given the secret, runs only this repo's code after checking the
+archives against `checksums.txt`), `verify` (read-only, no secret: the stock minisign and the binary's version)
+and `publish` (the only job that can write, no secret). Every action in every workflow is pinned to a commit SHA,
+and every workflow starts from `permissions: {}`; `tools/workflows` tests both.

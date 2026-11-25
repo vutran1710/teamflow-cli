@@ -1,41 +1,43 @@
 name: Release
 
-# A tag v* builds the four archives (GoReleaser), signs checksums.txt with the release key (minisign format,
-# ed25519, by tools/signsums: standard library only, no minisign needed to sign), checks the signature with the
-# stock minisign tool and the committed public key, and only then publishes the GitHub release.
-# It fails closed: no secret, the placeholder public key, a key that is not the committed one, or a signature that
-# does not verify stops it before anything is published. The key is passed only to the signing step, in its
-# environment, and is never printed.
+# A tag v* publishes a release in four jobs, each with the least it needs:
+#   build   (contents: read, no secret)  tests, GoReleaser --skip=publish: the four archives and checksums.txt;
+#   sign    (contents: read, the secret) checks the archives against checksums.txt, then signs it with
+#                                        tools/signsums (this repo's code, standard library only; no third-party
+#                                        action and no minisign in this job);
+#   verify  (contents: read, no secret)  checks the signature with the stock minisign and the binary's version;
+#   publish (contents: write, no secret) checks again with tools/signsums -verify, then `gh release create`.
+# It fails closed: the placeholder public key, a missing secret, a key that is not the committed one, a changed
+# archive, or a signature that does not verify stops it before anything is published. The key is passed only to
+# the signing step's environment and is never printed. Every action is pinned to a commit SHA (a test checks).
 
 on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # to publish the release
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v7
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-          cache: true
-
+          cache: false
       - name: The tag is a release version
         run: |
           echo "$GITHUB_REF_NAME" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
-
       - name: The release key is committed
         run: |
           pub="$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' install.sh)"
@@ -44,8 +46,48 @@ jobs:
             exit 1
           fi
           grep -q "^const PublicKey = \"$pub\"$" internal/selfupdate/pubkey.go || { echo "::error::install.sh and pubkey.go carry different keys"; exit 1; }
+      - name: Tests
+        run: go test -count=1 ./...
+      - name: Build the archives and checksums.txt (no publish)
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: v2.20.3
+          args: release --clean --skip=publish
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: |
+            dist/teamflow_*.tar.gz
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 5
 
-      - name: The signing secret is set
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - name: The archives match checksums.txt (all four, nothing else)
+        run: |
+          cd dist
+          test "$(wc -l < checksums.txt)" -eq 4 || { echo "::error::checksums.txt does not list exactly four archives"; exit 1; }
+          for t in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+            grep -Eq "^[0-9a-f]{64}  teamflow_${t}\.tar\.gz$" checksums.txt || { echo "::error::no checksum for teamflow_$t.tar.gz"; exit 1; }
+          done
+          sha256sum --strict -c checksums.txt
+      - name: Sign checksums.txt (fails closed without the secret)
         env:
           TEAMFLOW_SIGNING_KEY: ${{ secrets.TEAMFLOW_SIGNING_KEY }}
         run: |
@@ -53,37 +95,68 @@ jobs:
             echo "::error::the TEAMFLOW_SIGNING_KEY secret is not set; refusing to publish an unsigned release"
             exit 1
           fi
-
-      - name: Tests
-        run: go test -count=1 ./...
-
-      - name: Build the archives and checksums.txt (no publish)
-        uses: goreleaser/goreleaser-action@v7
+          go run ./tools/signsums -in dist/checksums.txt -out dist/checksums.txt.minisig
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          version: v2.20.3
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+          name: signature
+          path: dist/checksums.txt.minisig
+          if-no-files-found: error
+          retention-days: 5
 
-      - name: Sign checksums.txt
-        env:
-          TEAMFLOW_SIGNING_KEY: ${{ secrets.TEAMFLOW_SIGNING_KEY }}
-        run: go run ./tools/signsums -in dist/checksums.txt -out dist/checksums.txt.minisig
-
-      - name: Check the signature with minisign and the release binary's version
+  verify:
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signature
+          path: dist
+      - name: The stock minisign checks the signature; the binary names the tag
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign
           pub="$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' install.sh)"
           (cd dist && minisign -Vm checksums.txt -x checksums.txt.minisig -P "$pub")
-          (cd dist && sha256sum -c checksums.txt)
-          mkdir -p /tmp/check && tar -xzf dist/teamflow_linux_amd64.tar.gz -C /tmp/check teamflow
-          /tmp/check/teamflow --version | grep -qx "teamflow ${GITHUB_REF_NAME#v}"
+          (cd dist && sha256sum --strict -c checksums.txt)
+          mkdir -p "$RUNNER_TEMP/check" && tar -xzf dist/teamflow_linux_amd64.tar.gz -C "$RUNNER_TEMP/check" teamflow
+          "$RUNNER_TEMP/check/teamflow" --version | grep -qx "teamflow ${GITHUB_REF_NAME#v}"
 
-      - name: Publish
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to publish the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signature
+          path: dist
+      - name: Check once more (this repo's code), then publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
+          go run ./tools/signsums -verify -in dist/checksums.txt -out dist/checksums.txt.minisig
+          (cd dist && sha256sum --strict -c checksums.txt)
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
             dist/teamflow_darwin_amd64.tar.gz dist/teamflow_darwin_arm64.tar.gz \
             dist/teamflow_linux_amd64.tar.gz dist/teamflow_linux_arm64.tar.gz \
             dist/checksums.txt dist/checksums.txt.minisig

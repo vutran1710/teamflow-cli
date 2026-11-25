@@ -102,3 +102,32 @@ func TestRefusesAndNeverPrintsTheKey(t *testing.T) {
 		})
 	}
 }
+
+// -verify (no secret): a good signature passes; a changed file, another key, a missing signature and the
+// placeholder key fail.
+func TestVerifyMode(t *testing.T) {
+	sec, pub := throwawaySecret(t, "\x00\x00")
+	_, otherPub := throwawaySecret(t, "\x00\x00")
+	in, out := sums(t)
+	if err := run(in, out, sec, pub, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := verify(in, out, pub); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct{ pub, sig, want string }{
+		"another key":  {otherPub, out, "another key"},
+		"placeholder":  {"", out, "no release key is committed"},
+		"no signature": {pub, out + ".gone", "cannot read"},
+	} {
+		if err := verify(in, c.sig, c.pub); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if err := os.WriteFile(in, []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verify(in, out, pub); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("changed file: %v", err)
+	}
+}
