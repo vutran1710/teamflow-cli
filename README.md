@@ -6,13 +6,26 @@ agent session what changed since its last step.
 
 **Status: early.** This repo holds the wire protocol (Go types generated from the schema the Teamflow server
 exports, checked against golden messages), the local store and sync, the background sync, the command line and
-the agent adapters (Claude Code, Cursor CLI, Antigravity CLI, Copilot CLI). Self-update lands here as it is built. The first release is tagged once the client passes the server's
+the agent adapters (Claude Code, Cursor CLI, Antigravity CLI, Copilot CLI). Releases, `install.sh` and `self-update` are in place; the first release is tagged once the client passes the server's
 end-to-end suite.
 
 ## Install
 
-Releases are not published yet. When they are, each release on this repo's Releases page carries a binary for
-macOS and Linux (amd64 and arm64), a SHA-256 checksum file, and a minisign (ed25519) signature of that file.
+macOS and Linux (amd64 and arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vutran1710/teamflow-cli/main/install.sh | sh
+teamflow install -a <agent> -e <email> [-s <server>]
+```
+
+`install.sh` puts `teamflow` in `~/.local/bin` (or `$TEAMFLOW_BIN_DIR`; `TEAMFLOW_VERSION=v0.1.0` pins a release).
+It checks the archive's SHA-256 against the release's `checksums.txt`, and that file's minisign (ed25519) signature
+when `minisign` is installed; otherwise it says only the checksum was checked and how to check the signature by
+hand. You can also download a release from this repo's Releases page directly. There is no Homebrew formula.
+
+`teamflow self-update` replaces the binary with the newest release, always checking the signature (with the key
+compiled into the binary) and the checksum first; on any failure the old binary stays. See
+[docs/VERIFY.md](docs/VERIFY.md). The first release is not published yet.
 
 To build from source (Go 1.26 or later):
 

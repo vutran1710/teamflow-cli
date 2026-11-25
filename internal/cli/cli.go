@@ -23,6 +23,7 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/ops"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
+	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
@@ -261,7 +262,7 @@ func init() {
 		teamCmd, topicCmd, artifactCmd, deliverablesCmd, driftCmd, projectCmd, orgCmd, profileCmd, tasksCmd, logCmd, outboxCmd,
 		{name: "hook", hidden: true, raw: true, run: runHook},
 		syncCmd,
-		{name: "self-update", help: "Update teamflow to the newest release.", raw: true, run: later("self-update")},
+		{name: "self-update", help: "Update teamflow to the newest release (its signature and checksum are checked first).", raw: true, run: runSelfUpdate},
 		{name: "debug", hidden: true, raw: true},
 	}
 	commands = append(commands, agentOnly...)
@@ -269,9 +270,17 @@ func init() {
 	bindAgentCommands()
 }
 
-// later is a command that arrives in a later build.
-func later(what string) func(*inv, *parsed) int {
-	return func(r *inv, _ *parsed) int { return r.fail(what + " is not available in this build yet") }
+// runSelfUpdate replaces this binary with the newest signed release (package selfupdate). A setup command: an
+// agent never runs it without the person's say.
+func runSelfUpdate(r *inv, a *parsed) int {
+	if len(a.pos) > 0 {
+		fmt.Fprintln(r.errw, "usage: teamflow self-update\n\nError: self-update takes no arguments.")
+		return 2
+	}
+	if err := selfupdate.Default(r.out).Update(context.Background(), api.Version); err != nil {
+		return r.fail("self-update refused: " + err.Error())
+	}
+	return 0
 }
 
 func find(cs []*command, name string) *command {

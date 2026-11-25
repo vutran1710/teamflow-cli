@@ -1,0 +1,49 @@
+# GoReleaser builds the release archives and checksums.txt. It does not publish: the release workflow
+# (.github/workflows/release.yml) signs checksums.txt with the release key first, then publishes, so no release
+# ever goes out unsigned.
+#
+#   goreleaser release --snapshot --clean   # local and CI check: builds all four targets into dist/
+version: 2
+
+project_name: teamflow
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: teamflow
+    main: ./cmd/teamflow
+    binary: teamflow
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: teamflow
+    ids: [teamflow]
+    formats: [tar.gz]
+    # No version in the name, so install.sh can use releases/latest/download/<name>.
+    name_template: "teamflow_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  disable: true
+
+release:
+  disable: true

@@ -1,0 +1,368 @@
+// Package selfupdate replaces the running teamflow binary with the newest signed release from GitHub.
+//
+// Order: find the binary and check its folder is writable; ask GitHub for the latest release; download
+// checksums.txt and its minisign signature and check the signature with the compiled-in key; download this
+// platform's archive and check its SHA-256 against the signed list; take the binary out of the archive into a
+// temporary file beside the old one; check it runs and names the release's version; rename it over the old one
+// (atomic in one folder). Any failure refuses and leaves the old binary as it was.
+//
+// A binary reached through a symlink: the file the link resolves to is replaced, and the link is left alone.
+package selfupdate
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/vutran1710/teamflow-cli/internal/minisign"
+)
+
+const (
+	// Repo is where releases are published.
+	Repo = "vutran1710/teamflow-cli"
+	// ReleasesPage is where a person downloads a release by hand.
+	ReleasesPage = "https://github.com/" + Repo + "/releases"
+
+	maxAPI      = 1 << 20
+	maxSums     = 64 << 10
+	maxSig      = 4 << 10
+	maxArchive  = 256 << 20
+	maxBinary   = 256 << 20
+	checkTimout = 10 * time.Second
+)
+
+// Updater is one self-update; the zero values of its fields are filled by Default.
+type Updater struct {
+	API       string       // GitHub's API root
+	Client    *http.Client // for the API and the downloads
+	PublicKey string       // the release key (minisign, one line)
+	Exe       string       // the running binary
+	GOOS      string
+	GOARCH    string
+	Out       io.Writer // what is said on success
+}
+
+// Default is the updater for the running binary.
+func Default(out io.Writer) *Updater {
+	exe, _ := os.Executable()
+	return &Updater{
+		API:       "https://api.github.com",
+		Client:    &http.Client{Timeout: 5 * time.Minute},
+		PublicKey: PublicKey,
+		Exe:       exe,
+		GOOS:      runtime.GOOS,
+		GOARCH:    runtime.GOARCH,
+		Out:       out,
+	}
+}
+
+// Run updates the running binary (built as version current) to the latest release.
+func Run(ctx context.Context, current string) error {
+	return Default(os.Stdout).Update(ctx, current)
+}
+
+// AssetName is a platform's archive in a release.
+func AssetName(goos, goarch string) string { return "teamflow_" + goos + "_" + goarch + ".tar.gz" }
+
+type ghRelease struct {
+	Tag    string `json:"tag_name"`
+	Assets []struct {
+		Name string `json:"name"`
+		URL  string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// Update replaces u.Exe with the latest release, or refuses and leaves it as it was.
+func (u *Updater) Update(ctx context.Context, current string) error {
+	key, err := minisign.ParsePublicKey(u.PublicKey)
+	if strings.TrimSpace(u.PublicKey) == "" || err != nil {
+		return fmt.Errorf("this build has no release key, so it cannot check a release's signature; download the new release from %s", ReleasesPage)
+	}
+	exe, err := filepath.EvalSymlinks(u.Exe)
+	if err != nil || u.Exe == "" {
+		return errors.New("cannot find the running binary on disk; download the new release from " + ReleasesPage)
+	}
+	dir := filepath.Dir(exe)
+	if err := writable(dir); err != nil {
+		return fmt.Errorf("cannot write to %s (where teamflow is installed): %v; reinstall with install.sh, or run self-update as a user who can write there", dir, err)
+	}
+
+	rel, err := u.latest(ctx)
+	if err != nil {
+		return err
+	}
+	if !newer(rel.Tag, current) {
+		fmt.Fprintf(u.Out, "teamflow %s is the latest release (%s); nothing to update\n", current, rel.Tag)
+		return nil
+	}
+	urls := map[string]string{}
+	for _, a := range rel.Assets {
+		urls[a.Name] = a.URL
+	}
+	name := AssetName(u.GOOS, u.GOARCH)
+	if urls[name] == "" {
+		return fmt.Errorf("release %s has no build for %s/%s", rel.Tag, u.GOOS, u.GOARCH)
+	}
+	for _, need := range []string{"checksums.txt", "checksums.txt.minisig"} {
+		if urls[need] == "" {
+			return fmt.Errorf("release %s has no %s; refusing an unsigned release", rel.Tag, need)
+		}
+	}
+
+	sums, err := u.fetch(ctx, urls["checksums.txt"], maxSums)
+	if err != nil {
+		return err
+	}
+	sig, err := u.fetch(ctx, urls["checksums.txt.minisig"], maxSig)
+	if err != nil {
+		return err
+	}
+	if err := minisign.Verify(key, sums, sig); err != nil {
+		return fmt.Errorf("release %s's checksums.txt failed its signature check (%v); refusing it", rel.Tag, err)
+	}
+	want, err := checksumFor(sums, name)
+	if err != nil {
+		return err
+	}
+
+	archive, err := u.fetch(ctx, urls[name], maxArchive)
+	if err != nil {
+		return err
+	}
+	got := sha256.Sum256(archive)
+	if hex.EncodeToString(got[:]) != want {
+		return fmt.Errorf("%s does not match its signed checksum (a damaged or changed download); refusing it", name)
+	}
+	binary, err := extract(archive)
+	if err != nil {
+		return fmt.Errorf("%s: %v", name, err)
+	}
+
+	mode := os.FileMode(0o755)
+	if fi, err := os.Stat(exe); err == nil {
+		mode = fi.Mode().Perm() | 0o100
+	}
+	tmp, err := os.CreateTemp(dir, ".teamflow-update-*")
+	if err != nil {
+		return fmt.Errorf("cannot write to %s: %v", dir, err)
+	}
+	tmpName := tmp.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(binary); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("cannot write the new binary: %v", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("cannot write the new binary: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("cannot write the new binary: %v", err)
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return fmt.Errorf("cannot write the new binary: %v", err)
+	}
+	if err := checkRuns(ctx, tmpName, rel.Tag); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, exe); err != nil {
+		return fmt.Errorf("cannot replace %s: %v", exe, err)
+	}
+	keep = true
+	fmt.Fprintf(u.Out, "teamflow updated: %s -> %s (%s)\n", current, strings.TrimPrefix(rel.Tag, "v"), exe)
+	return nil
+}
+
+// latest asks GitHub for the newest release.
+func (u *Updater) latest(ctx context.Context) (ghRelease, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(u.API, "/")+"/repos/"+Repo+"/releases/latest", nil)
+	if err != nil {
+		return ghRelease{}, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "teamflow-self-update")
+	resp, err := u.Client.Do(req)
+	if err != nil {
+		return ghRelease{}, fmt.Errorf("cannot reach GitHub to find the latest release (offline?): %v", unwrapURL(err))
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests,
+		resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
+		when := "later"
+		if s, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+			when = "after " + time.Unix(s, 0).Format(time.Kitchen)
+		}
+		return ghRelease{}, fmt.Errorf("GitHub's API rate limit is reached for this network; try again %s, or download the new release from %s", when, ReleasesPage)
+	case resp.StatusCode == http.StatusNotFound:
+		return ghRelease{}, errors.New("no release is published yet")
+	case resp.StatusCode != http.StatusOK:
+		return ghRelease{}, fmt.Errorf("GitHub answered %s when asked for the latest release; try again later", resp.Status)
+	}
+	var rel ghRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPI)).Decode(&rel); err != nil || rel.Tag == "" {
+		return ghRelease{}, errors.New("GitHub's answer about the latest release could not be read; try again later")
+	}
+	return rel, nil
+}
+
+// fetch downloads one release file over https, at most limit bytes.
+func (u *Updater) fetch(ctx context.Context, link string, limit int64) ([]byte, error) {
+	name := filepath.Base(link)
+	if p, err := url.Parse(link); err != nil || p.Scheme != "https" {
+		return nil, fmt.Errorf("the link for %s is not https; refusing it", name)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "teamflow-self-update")
+	resp, err := u.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download of %s failed: %v", name, unwrapURL(err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download of %s failed: %s", name, resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("download of %s failed: %v", name, err)
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("download of %s is larger than %d bytes; refusing it", name, limit)
+	}
+	return b, nil
+}
+
+// checksumFor finds name's SHA-256 in a checksums.txt ("<hex>  <name>" lines).
+func checksumFor(sums []byte, name string) (string, error) {
+	for _, line := range strings.Split(string(sums), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name && len(f[0]) == 64 {
+			return strings.ToLower(f[0]), nil
+		}
+	}
+	return "", fmt.Errorf("the signed checksums.txt has no checksum for %s; refusing it", name)
+}
+
+// extract takes the teamflow binary out of a release archive.
+func extract(archive []byte) ([]byte, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return nil, errors.New("not a gzip archive")
+	}
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return nil, errors.New("the archive holds no teamflow binary")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("the archive is damaged: %v", err)
+		}
+		if h.Typeflag != tar.TypeReg || filepath.Base(h.Name) != "teamflow" {
+			continue
+		}
+		b, err := io.ReadAll(io.LimitReader(tr, maxBinary+1))
+		if err != nil {
+			return nil, fmt.Errorf("the archive is damaged: %v", err)
+		}
+		if len(b) > maxBinary {
+			return nil, errors.New("the binary in the archive is too large")
+		}
+		return b, nil
+	}
+}
+
+// checkRuns runs the new binary's --version (it is verified by now): it must run on this machine and name tag.
+func checkRuns(ctx context.Context, path, tag string) error {
+	ctx, cancel := context.WithTimeout(ctx, checkTimout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil {
+		return fmt.Errorf("the new binary does not run on this machine (%v); refusing it", err)
+	}
+	want := "teamflow " + strings.TrimPrefix(tag, "v")
+	if strings.TrimSpace(string(out)) != want {
+		return fmt.Errorf("the new binary says %q, not %s; refusing it", strings.TrimSpace(string(out)), tag)
+	}
+	return nil
+}
+
+// writable checks a new file can be made in dir (and removes it).
+func writable(dir string) error {
+	f, err := os.CreateTemp(dir, ".teamflow-update-*")
+	if err != nil {
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			return pe.Err
+		}
+		return err
+	}
+	name := f.Name()
+	_ = f.Close()
+	return os.Remove(name)
+}
+
+// newer says whether tag is a newer release than current. A build that is not a release version (dev, a commit)
+// is always updated; the same or a newer version is not.
+func newer(tag, current string) bool {
+	t, ok1 := semver(tag)
+	c, ok2 := semver(current)
+	if !ok1 || !ok2 {
+		return strings.TrimPrefix(tag, "v") != strings.TrimPrefix(current, "v")
+	}
+	for i := range t {
+		if t[i] != c[i] {
+			return t[i] > c[i]
+		}
+	}
+	return false
+}
+
+func semver(v string) ([3]int, bool) {
+	var out [3]int
+	parts := strings.SplitN(strings.TrimPrefix(v, "v"), ".", 3)
+	if len(parts) != 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
+// unwrapURL drops net/url's "Get <url>:" prefix.
+func unwrapURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
+}

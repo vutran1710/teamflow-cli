@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -929,11 +930,18 @@ func TestHiddenAndLaterCommands(t *testing.T) {
 	if r.out != "" || r.err != "" {
 		t.Fatalf("hook said something: %s", r)
 	}
-	for _, args := range [][]string{{"self-update"}} {
-		r := m.run("", args...)
+	// self-update: with the placeholder release key it refuses before any network call; it takes no arguments.
+	if selfupdate.PublicKey == "" {
+		r = m.run("", "self-update")
 		wantCode(t, r, 1)
-		contains(t, "stderr", r.err, "not available in this build yet")
+		contains(t, "stderr", r.err, "this build has no release key")
 	}
+	r = m.run("", "self-update", "now")
+	wantCode(t, r, 2)
+	contains(t, "stderr", r.err, "self-update takes no arguments")
+	r = m.run("", "self-update", "--help")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "signature")
 	r = m.run("", "debug", "state", "--json")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, `"sessions"`)

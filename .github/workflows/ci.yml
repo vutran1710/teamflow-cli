@@ -30,6 +30,12 @@ jobs:
           go run ./tools/gen
           git diff --exit-code -- internal/protocol
           test -z "$(git status --porcelain -- internal/protocol)"
+      - name: minisign (Linux), so install.sh's signature check runs against the real tool
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+      - name: shellcheck install.sh (Linux)
+        if: runner.os == 'Linux'
+        run: shellcheck install.sh
       - name: Tests
         run: go test -race -count=1 ./...
       - name: Hook p95 bench (alone, under 30 ms over 200 runs; gated on Linux, reported on macOS)
@@ -41,3 +47,33 @@ jobs:
         run: |
           go build -ldflags "-X main.version=ci-${GITHUB_SHA::7}" -o teamflow ./cmd/teamflow
           ./teamflow --version | grep -qx "teamflow ci-${GITHUB_SHA::7}"
+
+  # The release build (GoReleaser snapshot: all four archives and checksums.txt), never published.
+  release-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.20.3
+          args: check
+      - name: goreleaser release --snapshot --clean
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.20.3
+          args: release --snapshot --clean
+      - name: All four archives and checksums.txt
+        run: |
+          for t in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+            test -f "dist/teamflow_$t.tar.gz" || { echo "::error::missing teamflow_$t.tar.gz"; exit 1; }
+          done
+          (cd dist && sha256sum -c checksums.txt)
+          tar -xzf dist/teamflow_linux_amd64.tar.gz -C dist teamflow
+          ./dist/teamflow --version | grep -q '^teamflow .*-snapshot-'

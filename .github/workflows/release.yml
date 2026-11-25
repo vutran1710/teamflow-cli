@@ -1,0 +1,89 @@
+name: Release
+
+# A tag v* builds the four archives (GoReleaser), signs checksums.txt with the release key (minisign format,
+# ed25519, by tools/signsums: standard library only, no minisign needed to sign), checks the signature with the
+# stock minisign tool and the committed public key, and only then publishes the GitHub release.
+# It fails closed: no secret, the placeholder public key, a key that is not the committed one, or a signature that
+# does not verify stops it before anything is published. The key is passed only to the signing step, in its
+# environment, and is never printed.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to publish the release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: The tag is a release version
+        run: |
+          echo "$GITHUB_REF_NAME" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
+
+      - name: The release key is committed
+        run: |
+          pub="$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' install.sh)"
+          if [ -z "$pub" ] || grep -q '^const PublicKey = ""$' internal/selfupdate/pubkey.go; then
+            echo "::error::no release key is committed (pubkey.go / install.sh hold the placeholder); see docs/VERIFY.md"
+            exit 1
+          fi
+          grep -q "^const PublicKey = \"$pub\"$" internal/selfupdate/pubkey.go || { echo "::error::install.sh and pubkey.go carry different keys"; exit 1; }
+
+      - name: The signing secret is set
+        env:
+          TEAMFLOW_SIGNING_KEY: ${{ secrets.TEAMFLOW_SIGNING_KEY }}
+        run: |
+          if [ -z "$TEAMFLOW_SIGNING_KEY" ]; then
+            echo "::error::the TEAMFLOW_SIGNING_KEY secret is not set; refusing to publish an unsigned release"
+            exit 1
+          fi
+
+      - name: Tests
+        run: go test -count=1 ./...
+
+      - name: Build the archives and checksums.txt (no publish)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.20.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Sign checksums.txt
+        env:
+          TEAMFLOW_SIGNING_KEY: ${{ secrets.TEAMFLOW_SIGNING_KEY }}
+        run: go run ./tools/signsums -in dist/checksums.txt -out dist/checksums.txt.minisig
+
+      - name: Check the signature with minisign and the release binary's version
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          pub="$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' install.sh)"
+          (cd dist && minisign -Vm checksums.txt -x checksums.txt.minisig -P "$pub")
+          (cd dist && sha256sum -c checksums.txt)
+          mkdir -p /tmp/check && tar -xzf dist/teamflow_linux_amd64.tar.gz -C /tmp/check teamflow
+          /tmp/check/teamflow --version | grep -qx "teamflow ${GITHUB_REF_NAME#v}"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
+            dist/teamflow_darwin_amd64.tar.gz dist/teamflow_darwin_arm64.tar.gz \
+            dist/teamflow_linux_amd64.tar.gz dist/teamflow_linux_arm64.tar.gz \
+            dist/checksums.txt dist/checksums.txt.minisig
