@@ -112,7 +112,7 @@ func (c *Core) Prompt(ctx context.Context, sid, agent string, pid int, cwd, type
 	if sess.LastSeq == 0 && sess.StateVersion == 0 {
 		return c.Full(ctx, sid)
 	}
-	online := c.Sync(ctx, HookTimeout, sess.Project)
+	online := c.hookSync(ctx, sess.Project)
 	text, err := c.Delta(sid)
 	if err != nil {
 		return "", err
@@ -134,7 +134,7 @@ func (c *Core) End(ctx context.Context, sid string) error {
 	if n, err := c.St.SpoolSize(); err != nil || n == 0 {
 		return err
 	}
-	c.Sync(ctx, HookTimeout, "")
+	c.hookSync(ctx, "")
 	return nil
 }
 
@@ -162,6 +162,15 @@ func (c *Core) MidTurn(ctx context.Context, sid string) string {
 	}
 	c.midTurnSync(ctx, sess.Project)
 	return c.raiseNew(sid)
+}
+
+// hookSync is Sync for a hook the agent waits on (the prompt hooks, the turn's end, the full context, session
+// end): the whole sync (push, every page of the pull, names, a key fetched), not each request, is bounded by
+// HookTimeout; past it the hook answers from the replica.
+func (c *Core) hookSync(ctx context.Context, project string) bool {
+	sctx, cancel := context.WithTimeout(ctx, hookDeadline)
+	defer cancel()
+	return c.Sync(sctx, hookDeadline, project)
 }
 
 // midTurnSync syncs the project for a hook inside the agent's turn: not when the background sync is live, at most
@@ -214,7 +223,7 @@ func (c *Core) BeforePrompt(ctx context.Context, sid, agent string, pid int, cwd
 	if err != nil || sess.Project == "" || !c.SignedIn() {
 		return err
 	}
-	c.Sync(ctx, HookTimeout, sess.Project)
+	c.hookSync(ctx, sess.Project)
 	return nil
 }
 
@@ -238,7 +247,7 @@ func (c *Core) Full(ctx context.Context, sid string) (string, error) {
 	if err != nil || !ok || sess.Project == "" {
 		return "", err
 	}
-	return c.full(sid, c.Sync(ctx, HookTimeout, sess.Project))
+	return c.full(sid, c.hookSync(ctx, sess.Project))
 }
 
 // full is Full after its sync (online: the sync reached the server).

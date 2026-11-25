@@ -317,7 +317,7 @@ func (c *Core) AfterTurn(ctx context.Context, sid string) string {
 	if err != nil || !ok || sess.Project == "" || !c.SignedIn() {
 		return ""
 	}
-	c.Sync(ctx, HookTimeout, sess.Project)
+	c.hookSync(ctx, sess.Project)
 	return c.raiseNew(sid)
 }
 

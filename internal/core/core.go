@@ -27,6 +27,9 @@ import (
 // replica (HOOK_TIMEOUT).
 const HookTimeout = time.Duration(protocol.HookTimeout * float64(time.Second))
 
+// hookDeadline bounds a hook's whole sync (HookTimeout; a test shortens it).
+var hookDeadline = HookTimeout
+
 // DefaultTimeout bounds an ordinary call.
 const DefaultTimeout = 10 * time.Second
 
