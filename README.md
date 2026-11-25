@@ -6,7 +6,7 @@ agent session what changed since its last step.
 
 **Status: early.** This repo holds the wire protocol (Go types generated from the schema the Teamflow server
 exports, checked against golden messages), the local store and sync, the background sync, the command line and
-the agent adapters (Claude Code, Cursor CLI, Antigravity CLI, Copilot CLI). Releases, `install.sh` and `self-update` are in place; the first release is tagged once the client passes the server's
+the agent adapters (Claude Code, Copilot CLI; Cursor CLI and Antigravity CLI experimental). Releases, `install.sh` and `self-update` are in place; the first release is tagged once the client passes the server's
 end-to-end suite.
 
 ## Install
@@ -122,6 +122,10 @@ themselves. For a hard boundary use Claude Code's sandbox. The instruction text 
 not theirs.
 
 ## Copilot CLI, Cursor CLI and Antigravity CLI
+
+**Cursor CLI and Antigravity CLI are experimental:** not yet verified on a real install. `teamflow install -a all`
+and the list of agents found on the machine leave them out; `-a cursor` or `-a antigravity` sets one up, with a
+warning saying so. Claude Code and Copilot CLI are set up by `-a all` when found.
 
 These agents use the `teamflow` commands; no MCP server is registered for them. Each install writes only Teamflow's
 own entries or files, records what it added in `.teamflow-install.json` beside them (with a copy of each file it

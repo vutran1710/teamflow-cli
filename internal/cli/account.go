@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -197,7 +198,9 @@ func runStatus(r *inv, _ *parsed) int {
 // ------------------------------------------------------------------ install, uninstall
 
 var agentFlag = flagSpec{name: "agent", short: "a", kind: list,
-	help: "An agent to set up: " + strings.Join(adapters.Supported, ", ") + ", or all (those found here); repeatable"}
+	help: "An agent to set up: " + strings.Join(adapters.Supported, ", ") + ", or all (those found here, except " +
+		strings.Join(adapters.Experimental, " and ") + ", which are experimental, not yet verified on a real install, " +
+		"and set up only when named); repeatable"}
 
 var installCmd = &command{
 	name: "install", help: "Sign in, set Teamflow up in your agents, and start the background sync.",
@@ -217,10 +220,15 @@ func (r *inv) chooseAgents(named []string, verb string) ([]adapters.Adapter, int
 			out = append(out, a)
 		}
 	}
+	var leftOut []string // experimental agents found by -a all: set up only when named
 	for _, n := range named {
 		if n == "all" {
 			for _, a := range adapters.All() {
-				if a.Detect() {
+				switch {
+				case !a.Detect():
+				case adapters.IsExperimental(a.Name()):
+					leftOut = append(leftOut, a.Name())
+				default:
 					add(a)
 				}
 			}
@@ -233,7 +241,15 @@ func (r *inv) chooseAgents(named []string, verb string) ([]adapters.Adapter, int
 		if !ok {
 			return nil, r.fail(n + " is not available in this build yet")
 		}
+		if adapters.IsExperimental(n) && !seen[n] {
+			fmt.Fprintf(r.errw, "%s: %s\n", n, adapters.ExperimentalNote)
+		}
 		add(a)
+	}
+	leftOut = slices.DeleteFunc(leftOut, func(n string) bool { return seen[n] })
+	if len(leftOut) > 0 {
+		fmt.Fprintf(r.errw, "not set up by -a all: %s (%s; name it with -a %s)\n", strings.Join(leftOut, ", "),
+			adapters.ExperimentalNote, leftOut[0])
 	}
 	if len(named) > 0 {
 		if len(out) == 0 {
@@ -242,10 +258,19 @@ func (r *inv) chooseAgents(named []string, verb string) ([]adapters.Adapter, int
 		return out, 0
 	}
 	var found []adapters.Adapter
+	var experimental []string
 	for _, a := range adapters.All() {
-		if a.Detect() {
+		switch {
+		case !a.Detect():
+		case adapters.IsExperimental(a.Name()): // an experimental agent only when named
+			experimental = append(experimental, a.Name())
+		default:
 			found = append(found, a)
 		}
+	}
+	if len(found) == 0 && len(experimental) > 0 {
+		return nil, r.fail("only experimental agents were found on this machine (" + strings.Join(experimental, ", ") +
+			": " + adapters.ExperimentalNote + "); to set one up anyway, name it: -a " + experimental[0])
 	}
 	if len(found) == 0 {
 		return nil, r.fail("no supported agent was found on this machine (supported: " + strings.Join(adapters.Supported, ", ") + ")")

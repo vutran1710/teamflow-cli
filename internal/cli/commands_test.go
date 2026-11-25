@@ -960,6 +960,9 @@ func TestInstallSignsInThenSetsUpEachAgent(t *testing.T) {
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "signed in as lan <lan@acme.test>", "claude-code:\n  wrote ~/.claude-code/settings",
 		"cursor:\n  wrote ~/.cursor/settings", "Done.")
+	// Named, an experimental agent is set up, with a warning.
+	contains(t, "stderr", r.err, "cursor: experimental: not yet verified on a real install")
+	lacks(t, "stderr", r.err, "claude-code: experimental")
 	if !cc.installed || !cu.installed || ag.installed || !filepath.IsAbs(cc.binary) {
 		t.Fatalf("installed: %v %v %v (binary %q)", cc.installed, cu.installed, ag.installed, cc.binary)
 	}
@@ -970,28 +973,33 @@ func TestInstallSignsInThenSetsUpEachAgent(t *testing.T) {
 	wantCode(t, r, 0)
 	onlyCall(t, m.srv, "auth.login")
 
-	// -a all: every supported agent found on this machine.
+	// -a all: every supported agent found on this machine, except the experimental ones (named only).
 	cc.installed, cu.installed = false, false
 	r = m.run("", "install", "-a", "all", "-e", "lan@acme.test")
 	wantCode(t, r, 0)
-	if !cc.installed || !cu.installed || ag.installed {
-		t.Fatal("-a all installs the detected agents only")
+	if !cc.installed || cu.installed || ag.installed {
+		t.Fatal("-a all installs the detected agents that are not experimental only")
 	}
+	contains(t, "stderr", r.err, "not set up by -a all: cursor (experimental: not yet verified on a real install; name it with -a cursor)")
 
 	// No -a and no terminal to ask on: refused, never a silent guess.
 	r = m.run("", "install", "-e", "lan@acme.test")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "-a")
 
-	// A terminal: the detected agents are offered, and the answer picks.
+	// A terminal: the detected agents are offered (never an experimental one), and the answer picks.
 	cc.installed, cu.installed = false, false
 	terminal(t, true, "")
-	r = m.run("2\n", "install", "-e", "lan@acme.test")
+	r = m.run("1\n", "install", "-e", "lan@acme.test")
 	wantCode(t, r, 0)
-	contains(t, "stderr", r.err, "1) claude-code", "2) cursor")
-	if cc.installed || !cu.installed {
-		t.Fatal("the person chose cursor")
+	contains(t, "stderr", r.err, "1) claude-code")
+	lacks(t, "stderr", r.err, "2) cursor")
+	if !cc.installed || cu.installed {
+		t.Fatal("the person chose claude-code; cursor is never offered")
 	}
+	r = m.run("9\n", "install", "-e", "lan@acme.test")
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "not an agent number: 9")
 
 	// uninstall: one, then all that are installed.
 	cc.installed, cu.installed = true, true
@@ -1194,8 +1202,19 @@ func TestInstallAllAgents(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(user, ".cursor", "mcp.json"), []byte(`{"mcpServers": {"mine": {"command": "x"}}}`), 0o644))
 	before := treeOf(t, user)
 
+	// -a all leaves out the experimental agents, even found.
 	r := m.run("", "install", "-a", "all", "-e", "lan@acme.test", "-s", m.srv.URL())
 	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, "claude-code:\n", "copilot:\n")
+	lacks(t, "stdout", r.out, "cursor:\n", "antigravity:\n")
+	contains(t, "stderr", r.err, "not set up by -a all: cursor, antigravity (experimental")
+	r = m.run("", "uninstall")
+	wantCode(t, r, 0)
+	// Named with all, they are set up too.
+	r = m.run("", "install", "-a", "all", "-a", "cursor", "-a", "antigravity", "-e", "lan@acme.test", "-s", m.srv.URL())
+	wantCode(t, r, 0)
+	contains(t, "stderr", r.err, "cursor: experimental: not yet verified on a real install",
+		"antigravity: experimental: not yet verified on a real install")
 	contains(t, "stdout", r.out, "claude-code:\n", "cursor:\n", "antigravity:\n", "copilot:\n",
 		"an allow rule for teamflow commands and deny rules for the Teamflow home in ~/.cursor/cli-config.json",
 		"hook 'teamflow' (SessionStart, PreInvocation, Stop) in ~/.gemini/config/hooks.json",
@@ -1236,7 +1255,7 @@ func TestInstallAllAgents(t *testing.T) {
 	old := adapters.StartSync
 	adapters.StartSync = func() error { started++; return nil }
 	defer func() { adapters.StartSync = old }()
-	r = m.run("", "install", "-a", "all", "-e", "lan@acme.test", "-s", m.srv.URL())
+	r = m.run("", "install", "-a", "all", "-a", "cursor", "-a", "antigravity", "-e", "lan@acme.test", "-s", m.srv.URL())
 	wantCode(t, r, 1)
 	if started != 1 {
 		t.Fatalf("the background sync started %d times for the agents set up", started)
@@ -1348,4 +1367,25 @@ func TestNoticesOutsideASessionReachThePerson(t *testing.T) {
 	contains(t, "stdout", r.out, "Your drift resolve of dr_1 was rejected after it was queued: NOT_ALLOWED")
 	r = m.run("", "approve", S9)
 	lacks(t, "stdout", r.out, "was rejected after it was queued")
+}
+
+// Only an experimental agent found: no -a is refused with how to name it; -a all sets up nothing and says why.
+// Sad paths: nothing verified on the machine, -a all with only experimental agents.
+func TestInstallOnlyExperimentalFound(t *testing.T) {
+	adapters.Reset()
+	cu := &fakeAdapter{name: "cursor", detected: true}
+	adapters.Register(cu)
+	t.Cleanup(resetAdapters)
+	m := newMachine(t, true)
+	m.srv.on("account.me", lanMe)
+	terminal(t, true, "")
+	r := m.run("", "install", "-e", "lan@acme.test")
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "only experimental agents were found on this machine (cursor: experimental: not yet verified on a real install); to set one up anyway, name it: -a cursor")
+	r = m.run("", "install", "-a", "all", "-e", "lan@acme.test")
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "not set up by -a all: cursor", "no supported agent was found")
+	if cu.installed {
+		t.Fatal("an experimental agent was set up unnamed")
+	}
 }

@@ -47,6 +47,16 @@ var Supported = []string{"claude-code", "cursor", "antigravity", "copilot"}
 // IsSupported says whether name is a supported agent.
 func IsSupported(name string) bool { return slices.Contains(Supported, name) }
 
+// Experimental are the supported agents not yet verified on a real install: set up only when named (`-a cursor`),
+// with a warning; never by `-a all` or picked from the agents found on the machine.
+var Experimental = []string{"cursor", "antigravity"}
+
+// ExperimentalNote is what is said about an experimental agent.
+const ExperimentalNote = "experimental: not yet verified on a real install"
+
+// IsExperimental says whether name is an experimental agent.
+func IsExperimental(name string) bool { return slices.Contains(Experimental, name) }
+
 var (
 	mu       sync.Mutex
 	registry = map[string]Adapter{}
