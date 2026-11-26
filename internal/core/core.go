@@ -237,6 +237,7 @@ func (c *Core) syncOne(ctx context.Context, key string, ob store.Outbox, pid str
 	if _, err := syncer.Pull(ctx, c.St, a, timeout); err != nil {
 		return err
 	}
+	_ = c.St.SetSyncedAt(pid, c.Now()) // the dashboard's "as of", when it is next drawn offline
 	return c.refreshNames(ctx, a, pid)
 }
 
@@ -335,7 +336,11 @@ func (c *Core) Projects(ctx context.Context) (protocol.AccountProjects, error) {
 	if err != nil {
 		return out, err
 	}
-	return out, a.Call(ctx, "account.projects", nil, &out)
+	if err := a.Call(ctx, "account.projects", nil, &out); err != nil {
+		return out, err
+	}
+	_ = c.St.PutOrgNames(out.Orgs) // the dashboard names the org, offline too
+	return out, nil
 }
 
 // ------------------------------------------------------------------ sessions

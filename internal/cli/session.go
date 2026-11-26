@@ -97,13 +97,16 @@ func (r *inv) verdict(kind protocol.SignalKind, signal, note string) int {
 // ------------------------------------------------------------------ team: behind the /teamf command
 
 var teamCmd = &command{
-	name: "team", args: "project [<project> [topic …]] | stop | status | approvals [--all] | approve <sg_id> [note] | reject <sg_id> <note>",
-	help: "Behind an agent's Teamflow command (/teamf): choose the session's project and topics, stop, status, " +
-		"approval requests, approve or reject.",
+	name: "team", args: teamArgs,
+	help: "Behind an agent's Teamflow command (/teamf): choose the session's project and topics, stop, status (the " +
+		"project at a glance), approval requests, approve or reject, upgrade teamflow (update is the same).",
 	raw: true, run: runTeam,
 }
 
-const teamUsage = "usage: project [<project> [topic …]] | stop | status | approvals [--all] | approve <sg_id> [note] | reject <sg_id> <note>"
+const (
+	teamArgs  = "project [<project> [topic …]] | stop | status | approvals [--all] | approve <sg_id> [note] | reject <sg_id> <note> | upgrade"
+	teamUsage = "usage: " + teamArgs
+)
 
 func runTeam(r *inv, a *parsed) int {
 	args := a.pos
@@ -146,7 +149,9 @@ func (r *inv) team(sub string, rest []string) int {
 	case sub == "stop" && len(rest) == 0:
 		return runStop(r, nil)
 	case sub == "status" && len(rest) == 0:
-		return runStatus(r, nil)
+		return r.teamStatus()
+	case (sub == "upgrade" || sub == "update") && len(rest) == 0: // update: the same, for those who type it
+		return r.teamUpgrade()
 	case sub == "approvals" && onlyAll(rest):
 		return r.approvals(len(rest) > 0)
 	case sub == "approve" && len(rest) >= 1:
@@ -184,7 +189,9 @@ func (r *inv) teamJSON(sub string, rest []string) int {
 	case sub == "stop" && len(rest) == 0:
 		out, err = jsonStop(r, nil)
 	case sub == "status" && len(rest) == 0:
-		out, err = jsonStatus(r, nil)
+		out, err = r.teamStatusJSON()
+	case (sub == "upgrade" || sub == "update") && len(rest) == 0:
+		out, err = r.teamUpgradeJSON()
 	case sub == "approve" && len(rest) >= 1:
 		out, err = jsonVerdict(protocol.SignalKindApprove)(r, &parsed{pos: rest})
 	case sub == "reject" && len(rest) >= 2:

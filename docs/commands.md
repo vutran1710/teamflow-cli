@@ -6,8 +6,12 @@ teamflow logout | status | whoami | inbox | projects
 teamflow install [-e EMAIL] [-a AGENT…] [-s SERVER]      sign in and set Teamflow up in your agents (asks what's missing)
 teamflow uninstall [-a AGENT…] [--purge]
 teamflow stop                                            stop sharing the current agent session
+teamflow project status [--project P]                    the project at a glance (what /teamf status shows)
 teamflow approve SG_ID [NOTE] | reject SG_ID NOTE        your verdict on an approval request
-teamflow team …                                          behind the agent's /teamf command
+teamflow team …                                          behind the agent's /teamf command: project, stop,
+                                                         status, approvals, approve, reject, upgrade (or update)
+teamflow self-update                                     update to the newest signed release (as /teamf upgrade)
+teamflow config auto-update [on|off]                     whether the background sync updates teamflow itself
 teamflow signal emit --file F | get SG_ID | list [--topic T …] | cite SG_ID…
 teamflow project get | create --file F | add-member M… | title M T | remove-member M | plan … | history | request-update
 teamflow topic create T --description D | update T [--name …] [--close|--reopen] | delete T [--yes]

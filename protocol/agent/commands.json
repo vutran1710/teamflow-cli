@@ -70,6 +70,15 @@
       "new": false
     },
     {
+      "name": "project status",
+      "usage": "teamflow project status [--project <id>]",
+      "description": "The project at a glance: progress, the milestones, actions by status, what needs the person, what is due soon, the approvals waiting and the open drifts. When the person asks how the project stands, show its output to them as it is, in a code block.",
+      "consequential": false,
+      "input": null,
+      "help": null,
+      "new": false
+    },
+    {
       "name": "project get",
       "usage": "teamflow project get [--project <id>]",
       "description": "The project: topics, members, the current plan and instruction. Read it before you record.",

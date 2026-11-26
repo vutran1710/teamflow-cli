@@ -166,8 +166,17 @@ func (c *Core) myVerdict(target protocol.StoredSignal, me string) (string, error
 // answered by them, oldest first; only in the session's topics unless allTopics.
 func (c *Core) Approvals(sid string, allTopics bool) ([]protocol.StoredSignal, error) {
 	sess, ok, err := c.St.Session(sid)
-	if err != nil || !ok || sess.Project == "" || sess.Member == "" {
+	if err != nil || !ok {
 		return nil, err
+	}
+	return c.approvalsOf(sess, allTopics)
+}
+
+// approvalsOf are the approval requests waiting for sess's member in its project (see Approvals); none when it
+// works on no project or as no member.
+func (c *Core) approvalsOf(sess store.Session, allTopics bool) ([]protocol.StoredSignal, error) {
+	if sess.Project == "" || sess.Member == "" {
+		return nil, nil
 	}
 	system := c.SystemTopics(sess.Project)
 	all, err := c.St.SignalsAfter(sess.Project, 0)

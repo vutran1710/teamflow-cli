@@ -1,0 +1,24 @@
+iHertz (1FlowCorp)
+================================================================
+Plan v3 | Deliverables v2 | updated 2026-11-26 15:28 by Lan
+Progress  [#####---------------]  25%   1 of 4 milestones done
+
+Milestones                     due          actions   state
+  [!] Store listing            2026-11-25   0/1       LATE
+  [x] Rounding v1              2026-12-10   2/2       done
+  [>] Release iHertz           2026-12-20   1/4       due in 23 days
+  [ ] Onboard first users      2027-01-15   0/3
+
+Actions        total   done   open   blocked
+  everyone        10      3      6         1
+
+Nothing needs you right now.
+
+Due soon (next 7 days, yours first)
+  - Submit store listing  unowned 2026-11-25  LATE
+  - Write release notes   Vu Tran 2026-11-28
+  - Store screenshots     Huy     2026-11-30
+  - Review round_price    Vu Tran 2026-12-01
+
+Waiting for your approval: 1    Open drifts: 2
+This session: topics Development, Plan (built-in, always followed)

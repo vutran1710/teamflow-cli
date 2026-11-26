@@ -20,7 +20,7 @@ CLI and Antigravity CLI are experimental) and signs you in. Your own agent setti
 
 Later, or for another agent: `teamflow install`. To take it out: `teamflow uninstall`.
 More options, scripted installs and building from source: [docs/install.md](docs/install.md).
-In a session, `/teamf project <name>` chooses the project the agent works on.
+In a session, `/teamf project <name>` chooses the project the agent works on, and `/teamf status` shows it at a glance.
 
 ## Important commands
 
@@ -28,6 +28,7 @@ In a session, `/teamf project <name>` chooses the project the agent works on.
 | --- | --- |
 | `teamflow status` | Server, sign-in, outbox, sessions and agents on this machine |
 | `teamflow projects` | Every project you are in, across your orgs |
+| `teamflow project status` | The project at a glance: progress, milestones, what needs you, what is due soon |
 | `teamflow project get` | The project: topics, members, plan and instruction |
 | `/teamf project <name> [topic …]` | In an agent session: share it with a project (`teamflow team project`) |
 | `teamflow team approvals` | The approval requests waiting for you |
@@ -41,7 +42,8 @@ In a session, `/teamf project <name>` chooses the project the agent works on.
 | `teamflow artifact write <file>` / `artifact pull <id>` | Publish a file teammates rely on / save one |
 | `teamflow outbox` | What waits to be sent, in order |
 | `teamflow sync --status` | The background sync (`--stop` stops it) |
-| `teamflow self-update` | Update to the newest release (signature checked first) |
+| `teamflow self-update` | Update to the newest release (signature checked first); `/teamf upgrade` in a session |
+| `teamflow config auto-update off` | Stop the background sync installing new releases on its own (`on` again) |
 
 Every command takes `--json`; `teamflow <command> --help` gives the details. The full list: [docs/commands.md](docs/commands.md).
 

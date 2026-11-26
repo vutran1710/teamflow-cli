@@ -52,6 +52,9 @@ func approvalReplica(t *testing.T, m *machine) {
 	m.srv.on("member.me", huyMember)
 }
 
+// dashboardNoDeliverables is the dashboard's line for a project with no Deliverables yet.
+const dashboardNoDeliverables = "No Deliverables yet: ask your agent to publish them from the plan."
+
 const accepted = `{"result": {"signal": "sg_00000000000000000000000077", "accepted": true, "reason": null, "message": "", "seq": 9, "received_at": "2026-01-15T09:00:01Z", "state": "IN_FORCE"}}`
 
 func TestApprove(t *testing.T) {
@@ -332,11 +335,14 @@ func TestFindSessionLogsAStoreErrorOnce(t *testing.T) {
 
 func TestTeamStatusAndStop(t *testing.T) {
 	m := newMachine(t, true)
+	m.key()
+	m.project()
 	m.srv.on("account.me", lanMe)
+	m.srv.on("account.projects", "account.projects")
 	m.inSession("s1", P, nil)
 	r := m.run("", "team", "--relay")
 	wantCode(t, r, 0)
-	contains(t, "stdout", r.out, "this session: s1 (shared with "+P+")")
+	contains(t, "stdout", r.out, "this session: s1 (shared with "+P+")", "\n\nPricing (Acme)", dashboardNoDeliverables)
 	r = m.run("", "team", "--relay", "stop")
 	contains(t, "stdout", r.out, "This session is no longer shared.")
 }

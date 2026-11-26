@@ -1,0 +1,153 @@
+{
+  "project": {
+    "id": "pj_00000000000000000000000001",
+    "name": "iHertz",
+    "org": "1FlowCorp"
+  },
+  "you": "Vu Tran",
+  "today": "2026-11-27",
+  "plan_version": 3,
+  "deliverables": {
+    "version": 2,
+    "archived": false,
+    "updated_at": "2026-11-26T15:28:00+07:00",
+    "updated_by": "Lan"
+  },
+  "progress": {
+    "done": 1,
+    "total": 4,
+    "percent": 25
+  },
+  "milestones": [
+    {
+      "id": "ms_1",
+      "name": "Store listing",
+      "due": "2026-11-25",
+      "days": -2,
+      "done": 0,
+      "total": 1,
+      "state": "late"
+    },
+    {
+      "id": "ms_2",
+      "name": "Rounding v1",
+      "due": "2026-12-10",
+      "days": 13,
+      "done": 2,
+      "total": 2,
+      "state": "done"
+    },
+    {
+      "id": "ms_3",
+      "name": "Release iHertz",
+      "due": "2026-12-20",
+      "days": 23,
+      "done": 1,
+      "total": 4,
+      "state": "current"
+    },
+    {
+      "id": "ms_4",
+      "name": "Onboard first users",
+      "due": "2027-01-15",
+      "days": 49,
+      "done": 0,
+      "total": 3,
+      "state": "upcoming"
+    }
+  ],
+  "counts": {
+    "everyone": {
+      "total": 10,
+      "done": 3,
+      "open": 6,
+      "blocked": 1
+    },
+    "you": {
+      "total": 4,
+      "done": 2,
+      "open": 2,
+      "blocked": 0
+    }
+  },
+  "needs_you": [
+    {
+      "id": "ai_05",
+      "name": "Write release notes",
+      "milestone": "Release iHertz",
+      "due": "2026-11-28",
+      "days": 1,
+      "status": "NOT_STARTED",
+      "late": false,
+      "urgent": true
+    },
+    {
+      "id": "ai_04",
+      "name": "Review round_price",
+      "milestone": "Release iHertz",
+      "due": "2026-12-01",
+      "days": 4,
+      "status": "IN_PROGRESS",
+      "late": false,
+      "urgent": false
+    }
+  ],
+  "due_soon": [
+    {
+      "id": "ai_05",
+      "name": "Write release notes",
+      "milestone": "Release iHertz",
+      "due": "2026-11-28",
+      "days": 1,
+      "status": "NOT_STARTED",
+      "owner": "you",
+      "yours": true,
+      "late": false,
+      "urgent": true
+    },
+    {
+      "id": "ai_04",
+      "name": "Review round_price",
+      "milestone": "Release iHertz",
+      "due": "2026-12-01",
+      "days": 4,
+      "status": "IN_PROGRESS",
+      "owner": "you",
+      "yours": true,
+      "late": false,
+      "urgent": false
+    },
+    {
+      "id": "ai_10",
+      "name": "Submit store listing",
+      "milestone": "Store listing",
+      "due": "2026-11-25",
+      "days": -2,
+      "status": "NOT_STARTED",
+      "owner": "unowned",
+      "yours": false,
+      "late": true,
+      "urgent": true
+    },
+    {
+      "id": "ai_06",
+      "name": "Store screenshots",
+      "milestone": "Release iHertz",
+      "due": "2026-11-30",
+      "days": 3,
+      "status": "NOT_STARTED",
+      "owner": "Huy",
+      "yours": false,
+      "late": false,
+      "urgent": false
+    }
+  ],
+  "approvals": 1,
+  "drifts": 2,
+  "session": "topics Development, Plan (built-in, always followed)",
+  "offline": true,
+  "synced_at": "2026-11-27T09:12:30+07:00",
+  "auto_update": true,
+  "updated_to": null,
+  "text": "(offline: as of 2026-11-27 09:12)\niHertz (1FlowCorp)                                  you: Vu Tran\n================================================================\nPlan v3 | Deliverables v2 | updated 2026-11-26 15:28 by Lan\nProgress  [#####---------------]  25%   1 of 4 milestones done\n\nMilestones                     due          actions   state\n  [!] Store listing            2026-11-25   0/1       LATE\n  [x] Rounding v1              2026-12-10   2/2       done\n  [>] Release iHertz           2026-12-20   1/4       due in 23 days\n  [ ] Onboard first users      2027-01-15   0/3\n\nActions        total   done   open   blocked\n  everyone        10      3      6         1\n  you              4      2      2         0\n\nNeeds you (2)\n  - Write release notes           due 2026-11-28  (tomorrow)  !\n  - Review round_price            due 2026-12-01  (in 4 days)\n\nDue soon (next 7 days, yours first)\n  - Write release notes   you     2026-11-28\n  - Review round_price    you     2026-12-01\n  - Submit store listing  unowned 2026-11-25  LATE\n  - Store screenshots     Huy     2026-11-30\n\nWaiting for your approval: 1    Open drifts: 2\nThis session: topics Development, Plan (built-in, always followed)\n"
+}

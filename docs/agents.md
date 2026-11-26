@@ -17,7 +17,7 @@ instructions. Each command reads the sign-in and keys from disk and finds the ag
 - `settings.json`: hooks for SessionStart, UserPromptSubmit, PreToolUse, Stop and SessionEnd,
   `permissions.allow` rules `Bash(teamflow <command>:*)` for each work command (the same by the binary's path), and
   `permissions.deny` rules for the Teamflow home (backed up once as `settings.json.teamflow-backup`). Setup commands
-  (login, logout, install, uninstall, self-update, sync) keep Claude Code's prompt;
+  (login, logout, install, uninstall, self-update, sync, outbox, config) keep Claude Code's prompt;
 - `CLAUDE.md`: the instruction text, word for word, between `<!-- teamflow:begin … -->` and `<!-- teamflow:end -->`;
 - `commands/teamf.md`: the `/teamf` command;
 - `.teamflow-install.json`: what install added, so `teamflow uninstall` takes out exactly that.
@@ -57,8 +57,8 @@ shaped file before writing anything, and never fails your agent's step.
   `skills/teamf/SKILL.md` (`/teamf`, `allowed-tools: shell(teamflow:*)`). Copilot keeps no allow or deny rules in
   your config, so the preToolUse hook answers, without opening the Teamflow home: it refuses tool calls that name
   the home; allows one plain `teamflow <work command>` with no prompt; and answers "ask" for any other teamflow
-  command (setup: install, uninstall, login, logout, self-update, hook, sync, outbox; or anything chained, piped,
-  redirected, substituted or expanded: `; & | < > $ ` ( ) \ * ? [ ] { } ~`). Copilot's prompt hook cannot add
+  command (setup: install, uninstall, login, logout, self-update, hook, sync, outbox, config; or anything chained,
+  piped, redirected, substituted or expanded: `; & | < > $ ` ( ) \ * ? [ ] { } ~`). Copilot's prompt hook cannot add
   context, so news arrives at session start, after each tool, and at the turn's end.
 - **Cursor CLI** (`~/.cursor`): `hooks.json` (sessionStart, beforeSubmitPrompt, beforeShellExecution, postToolUse,
   stop, sessionEnd, beside your own hooks), `cli-config.json` (`permissions.allow`: `Shell(teamflow)` and

@@ -20,12 +20,10 @@ import (
 	_ "github.com/vutran1710/teamflow-cli/internal/adapters/cursor"      // the Cursor CLI adapter
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/core"
-	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/live"
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/ops"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
-	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
@@ -265,19 +263,12 @@ func init() {
 		{name: "hook", hidden: true, raw: true, run: runHook},
 		syncCmd,
 		{name: "self-update", help: "Update teamflow to the newest release (its signature and checksum are checked first).", raw: true, run: runSelfUpdate},
+		configCmd,
 		{name: "debug", hidden: true, raw: true},
 	}
 	commands = append(commands, agentOnly...)
 	bindJSON()
 	bindAgentCommands()
-}
-
-// update is self-update's update of the running binary; replaced is called once the new binary is in place
-// (replaced in tests).
-var update = func(ctx context.Context, out io.Writer, replaced func()) error {
-	u := selfupdate.Default(out)
-	u.Replaced = replaced
-	return u.Update(ctx, api.Version)
 }
 
 // stopSync stops the running background sync of the Teamflow home dir (replaced in tests).
@@ -290,20 +281,19 @@ func runSelfUpdate(r *inv, a *parsed) int {
 		fmt.Fprintln(r.errw, "usage: teamflow self-update\n\nError: self-update takes no arguments.")
 		return 2
 	}
-	replaced := false
-	if err := update(context.Background(), r.out, func() { replaced = true }); err != nil {
+	u, err := upgrade(r.ctx, r.out)
+	if err != nil {
 		return r.fail("self-update refused: " + err.Error())
 	}
-	if !replaced {
+	if !u.Updated {
 		return 0
 	}
 	// The running background sync is the old binary: stopped, so the next agent hook starts the new one's.
-	stopped, err := stopSync(home.Dir())
 	switch {
-	case err != nil:
+	case u.stopErr != nil:
 		fmt.Fprintf(r.errw, "the background sync could not be stopped (%v); run `teamflow sync --stop`, and the "+
-			"next agent hook starts the new version's\n", err)
-	case stopped:
+			"next agent hook starts the new version's\n", u.stopErr)
+	case u.stopped:
 		r.println("the background sync (the old version) was stopped; the next agent hook starts the new one")
 	}
 	return 0

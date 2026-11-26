@@ -1,0 +1,22 @@
+Pricing (Acme)                                          you: huy
+================================================================
+Plan v1 | Deliverables v1 | updated 2026-01-15 16:00 by huy
+Progress  [--------------------]   0%   0 of 2 milestones done
+
+Milestones                     due          actions   state
+  [>] Design                   2026-01-25   0/2       due tomorrow
+  [ ] Ship                     2026-02-04   0/1
+
+Actions        total   done   open   blocked
+  everyone         3      0      3         0
+  you              1      0      1         0
+
+Needs you (1)
+  - Implement rounding            due 2026-01-30  (in 6 days)
+
+Due soon (next 7 days, yours first)
+  - Implement rounding    you     2026-01-30
+  - Draft rounding rules  lan     2026-01-20  LATE
+  - List currencies       unowned 2026-01-23  LATE
+
+Waiting for your approval: 1    Open drifts: 1

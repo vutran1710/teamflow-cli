@@ -1,0 +1,37 @@
+{
+  "project": {
+    "id": "pj_00000000000000000000000001",
+    "name": "iHertz",
+    "org": "1FlowCorp"
+  },
+  "you": "Vu Tran",
+  "today": "2026-11-27",
+  "plan_version": 3,
+  "deliverables": null,
+  "progress": null,
+  "milestones": [],
+  "counts": {
+    "everyone": {
+      "total": 0,
+      "done": 0,
+      "open": 0,
+      "blocked": 0
+    },
+    "you": {
+      "total": 0,
+      "done": 0,
+      "open": 0,
+      "blocked": 0
+    }
+  },
+  "needs_you": [],
+  "due_soon": [],
+  "approvals": 1,
+  "drifts": 2,
+  "session": "topics Development, Plan (built-in, always followed)",
+  "offline": false,
+  "synced_at": null,
+  "auto_update": true,
+  "updated_to": null,
+  "text": "iHertz (1FlowCorp)                                  you: Vu Tran\n================================================================\nPlan v3\n\nNo Deliverables yet: ask your agent to publish them from the plan.\n\nWaiting for your approval: 1    Open drifts: 2\nThis session: topics Development, Plan (built-in, always followed)\n"
+}

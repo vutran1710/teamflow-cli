@@ -224,6 +224,7 @@ func newMachine(t *testing.T, signedIn bool) *machine {
 	t.Setenv("HOME", filepath.Join(filepath.Dir(dir), "user"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(filepath.Dir(dir), "user", ".claude"))
 	t.Setenv("COPILOT_HOME", "")
+	t.Setenv(config.AutoUpdateEnv, "") // auto-update as config.json says, whatever the shell running the tests says
 	m := &machine{t: t, dir: dir, srv: newServer(t)}
 	if signedIn {
 		if err := config.Save(dir, config.Config{Server: m.srv.URL(), AuthKey: auth, Email: "lan@acme.test"}); err != nil {
@@ -995,15 +996,16 @@ func fakeUpdate(t *testing.T, replace bool, refuse error, stopErr error) *int {
 	t.Helper()
 	stops := 0
 	oldU, oldS := update, stopSync
-	update = func(_ context.Context, out io.Writer, replaced func()) error {
+	update = func(_ context.Context, out io.Writer) (selfupdate.Result, error) {
+		res := selfupdate.Result{Current: "0.1.0", Latest: "v0.2.0"}
 		if refuse != nil {
-			return refuse
+			return res, refuse
 		}
 		if replace {
 			fmt.Fprintln(out, "teamflow updated: 0.1.0 -> 0.2.0")
-			replaced()
+			res.Updated = true
 		}
-		return nil
+		return res, nil
 	}
 	stopSync = func(string) (bool, error) { stops++; return stopErr == nil, stopErr }
 	t.Cleanup(func() { update, stopSync = oldU, oldS })

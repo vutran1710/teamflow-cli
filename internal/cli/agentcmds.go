@@ -61,6 +61,8 @@ var agentOnly = []*command{
 // The subcommands added to the groups that had commands already.
 func init() {
 	projectCmd.sub = append(projectCmd.sub,
+		&command{name: "status", help: "The project at a glance: progress, milestones, actions, what needs you, what is due soon.",
+			flags: []flagSpec{projectFlag}, nargs: exactly(0), run: runProjectStatus, jsonRun: jsonProjectStatus},
 		&command{name: "get", help: "The project: topics, members, the plan and instruction.", flags: []flagSpec{projectFlag},
 			nargs: exactly(0), jsonRun: act("project_get", projectOnly)},
 		&command{name: "create", help: "Create a project (JSON from --file).", flags: []flagSpec{fileFlag},

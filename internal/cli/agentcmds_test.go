@@ -165,6 +165,7 @@ var agentRuns = map[string]struct {
 	"inbox":          {[]string{"inbox"}, nil},
 	"stop":           {[]string{"stop"}, nil},
 	"projects":       {[]string{"projects"}, nil},
+	"project status": {[]string{"project", "status"}, withDeliverables},
 	"project get":    {[]string{"project", "get"}, nil},
 	"project create": {[]string{"project", "create", "--file", "p.json"}, func(m *machine) {
 		writeFile(m.t, "p.json", `{"name": "Billing", "topics": [{"name": "Tax", "description": "VAT"}], "members": ["huy"]}`)
