@@ -48,7 +48,10 @@ minutes with no active agent session, and when you sign out.
 - `teamflow sync --status`: whether it runs, and which projects are live.
 - `teamflow sync --stop`: stop it.
 
-It also sends whatever is still waiting in the outbox.
+It also sends whatever is still waiting in the outbox, and keeps `teamflow` up to date: about once a day it asks
+GitHub whether a newer release exists and, if so, installs it after checking its signature (never an older one or a
+pre-release), then restarts on it and tells your sessions. `teamflow config auto-update off` stops that;
+`/teamf upgrade` or `teamflow self-update` then updates by hand.
 
 ## Offline
 
@@ -58,7 +61,11 @@ the server is back; nothing is lost (`teamflow outbox` shows what waits).
 ## What is sent, and where
 
 Only to the Teamflow server you sign in to, over HTTPS and a WebSocket. Nothing goes to anyone else: no
-telemetry, no analytics, no crash reports.
+telemetry, no analytics, no crash reports. The one exception is GitHub, for updates: about once a day the background
+sync asks GitHub's API for teamflow's latest release and downloads it when it is newer (as `/teamf upgrade` and
+`teamflow self-update` do when you run them). That request carries nothing about you or your projects: only the
+address every client asks and a fixed user agent (GitHub sees your network's address, as with any download).
+`teamflow config auto-update off` stops it.
 
 - **Signing in:** your email and password, once; the server answers with a key.
 - **Every call:** that key, and this client's name, version and protocol number.
