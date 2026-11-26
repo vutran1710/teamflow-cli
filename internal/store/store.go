@@ -996,9 +996,83 @@ func (o ops) SetLiveAt(project string, t time.Time) error {
 	return err
 }
 
-// ClearLiveAt forgets when the project's live socket was heard from (it ended): hooks pull again.
+// ClearLiveAt forgets when the project's live socket was heard from (it ended): hooks pull again. When it was last
+// heard stays as the project's last sync (SyncedAt).
 func (o ops) ClearLiveAt(project string) error {
+	if _, err := o.exec("INSERT INTO meta (name, value) SELECT ?, at FROM live WHERE project = ? "+
+		"ON CONFLICT(name) DO UPDATE SET value = MAX(meta.value, excluded.value)", "synced_at:"+project, project); err != nil {
+		return wrap(err)
+	}
 	_, err := o.exec("DELETE FROM live WHERE project = ?", project)
+	return wrap(err)
+}
+
+// SetSyncedAt records that the project was synced at t (a pull answered); a later time already kept stays.
+func (o ops) SetSyncedAt(project string, t time.Time) error {
+	_, err := o.exec("INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET "+
+		"value = MAX(meta.value, excluded.value)", "synced_at:"+project, ts(t))
+	return wrap(err)
+}
+
+// SyncedAt is when the project was last synced: a pull answered, or its live socket heard (zero: never).
+func (o ops) SyncedAt(project string) time.Time {
+	at := parseTS(o.meta("synced_at:" + project))
+	if live := o.LiveAt(project); live.After(at) {
+		return live
+	}
+	return at
+}
+
+// PutOrgNames records org names by id, as account.projects gives them (the dashboard names the org offline too).
+func (o ops) PutOrgNames(names map[string]string) error {
+	for id, name := range names {
+		if id == "" || name == "" || o.meta("org_name:"+id) == name {
+			continue
+		}
+		if err := o.setMeta("org_name:"+id, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// OrgName is an org's name as last seen ("" when unknown).
+func (o ops) OrgName(id string) string { return o.meta("org_name:" + id) }
+
+// UpdateCheckedAt is when the background sync last checked for a newer release (zero: never).
+func (o ops) UpdateCheckedAt() time.Time { return parseTS(o.meta("self_update_checked_at")) }
+
+// SetUpdateCheckedAt records a check for a newer release, whatever came of it.
+func (o ops) SetUpdateCheckedAt(t time.Time) error { return o.setMeta("self_update_checked_at", ts(t)) }
+
+// FirstNoticeOf records that the person was told of release version (a new one they must install themselves):
+// true the first time for that version, false after (one notice per version, however often it is checked).
+func (o ops) FirstNoticeOf(version string) (bool, error) {
+	res, err := o.exec("INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value "+
+		"WHERE meta.value != excluded.value", "self_update_noticed", version)
+	if err != nil {
+		return false, wrap(err)
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetUpdatedTo records the release the background sync updated teamflow to, for the dashboard to tell once.
+func (o ops) SetUpdatedTo(version string) error { return o.setMeta("self_update_updated_to", version) }
+
+// TakeUpdatedTo is the release the background sync updated teamflow to, taken (told once): "" when none.
+func (o ops) TakeUpdatedTo() (string, error) {
+	var v string
+	ok, err := o.one("DELETE FROM meta WHERE name = ? RETURNING value", []any{"self_update_updated_to"}, &v)
+	if !ok || err != nil {
+		return "", wrap(err)
+	}
+	return v, nil
+}
+
+func (o ops) setMeta(name, value string) error {
+	_, err := o.exec("INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+		name, value)
 	return wrap(err)
 }
 

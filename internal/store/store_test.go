@@ -866,6 +866,95 @@ func TestLiveAt(t *testing.T) {
 	}
 }
 
+// The last sync: a pull, or the live socket heard; kept when the socket ends (ClearLiveAt), never moved back by
+// an older time, kept across a restart; zero when never synced, and on a store that can't answer.
+func TestSyncedAt(t *testing.T) {
+	dir := t.TempDir()
+	st := open(t, dir)
+	if !st.SyncedAt("pj_a").IsZero() {
+		t.Fatal("synced before any sync")
+	}
+	must(t, st.SetSyncedAt("pj_a", t0))
+	must(t, st.SetSyncedAt("pj_a", t0.Add(-time.Hour))) // an older pull never moves it back
+	if got := st.SyncedAt("pj_a"); !got.Equal(t0) {
+		t.Fatalf("SyncedAt %v, want %v", got, t0)
+	}
+	must(t, st.SetLiveAt("pj_a", t0.Add(time.Minute)))
+	if got := st.SyncedAt("pj_a"); !got.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("live heard: SyncedAt %v", got)
+	}
+	must(t, st.ClearLiveAt("pj_a"))
+	if !st.LiveAt("pj_a").IsZero() || !st.SyncedAt("pj_a").Equal(t0.Add(time.Minute)) {
+		t.Fatalf("after the socket ended: live %v synced %v", st.LiveAt("pj_a"), st.SyncedAt("pj_a"))
+	}
+	must(t, st.ClearLiveAt("pj_b")) // no socket: nothing recorded
+	if !st.SyncedAt("pj_b").IsZero() {
+		t.Fatal("a project never synced has a sync time")
+	}
+	st.Close()
+	st = open(t, dir)
+	if !st.SyncedAt("pj_a").Equal(t0.Add(time.Minute)) {
+		t.Fatal("the last sync was lost on restart")
+	}
+	st.Close()
+	if !st.SyncedAt("pj_a").IsZero() {
+		t.Fatal("a closed store gave a sync time")
+	}
+}
+
+// Org names as last seen; an empty name or id is never recorded.
+func TestOrgNames(t *testing.T) {
+	st := open(t, t.TempDir())
+	if st.OrgName("og_1") != "" {
+		t.Fatal("a name before any was recorded")
+	}
+	must(t, st.PutOrgNames(map[string]string{"og_1": "Acme", "og_2": "", "": "Nobody"}))
+	must(t, st.PutOrgNames(map[string]string{"og_1": "Acme Corp"}))
+	if st.OrgName("og_1") != "Acme Corp" || st.OrgName("og_2") != "" || st.OrgName("") != "" {
+		t.Fatalf("names: %q %q %q", st.OrgName("og_1"), st.OrgName("og_2"), st.OrgName(""))
+	}
+}
+
+// The self-update's facts: the last check (kept across a restart), one notice per release, and the release
+// updated to, taken once.
+func TestSelfUpdateFacts(t *testing.T) {
+	dir := t.TempDir()
+	st := open(t, dir)
+	if !st.UpdateCheckedAt().IsZero() {
+		t.Fatal("checked before any check")
+	}
+	must(t, st.SetUpdateCheckedAt(t0))
+	for i, c := range []struct {
+		v     string
+		first bool
+	}{{"v0.1.2", true}, {"v0.1.2", false}, {"v0.1.2", false}, {"v0.1.3", true}, {"v0.1.3", false}} {
+		first, err := st.FirstNoticeOf(c.v)
+		must(t, err)
+		if first != c.first {
+			t.Fatalf("%d: FirstNoticeOf(%s) = %v", i, c.v, first)
+		}
+	}
+	if v, err := st.TakeUpdatedTo(); v != "" || err != nil {
+		t.Fatalf("taken before any update: %q %v", v, err)
+	}
+	must(t, st.SetUpdatedTo("v0.1.3"))
+	st.Close()
+	st = open(t, dir)
+	if !st.UpdateCheckedAt().Equal(t0) {
+		t.Fatal("the last check was lost on restart")
+	}
+	if v, err := st.TakeUpdatedTo(); v != "v0.1.3" || err != nil {
+		t.Fatalf("TakeUpdatedTo %q %v", v, err)
+	}
+	if v, _ := st.TakeUpdatedTo(); v != "" {
+		t.Fatalf("taken twice: %q", v)
+	}
+	st.Close()
+	if _, err := st.FirstNoticeOf("v9"); err == nil {
+		t.Fatal("a closed store recorded a notice")
+	}
+}
+
 func TestProtocolOK(t *testing.T) {
 	st := open(t, t.TempDir())
 	if ok, msg := st.ProtocolOK(); !ok || msg != "" {

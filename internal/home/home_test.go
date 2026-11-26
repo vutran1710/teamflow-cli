@@ -97,3 +97,21 @@ func TestHomeErrorHidesTheHomePath(t *testing.T) {
 		t.Fatalf("the message should name the folder as ~/.teamflow: %v", err)
 	}
 }
+
+// Mask writes the user's home folder as ~ wherever it appears; text without it, and a home of "/" (no user
+// folder), stay as they are.
+func TestMask(t *testing.T) {
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	if got := Mask("cannot write to " + h + "/.local/bin (where teamflow is installed): " + h); got !=
+		"cannot write to ~/.local/bin (where teamflow is installed): ~" {
+		t.Fatalf("%q", got)
+	}
+	if got := Mask("/opt/teamflow/bin"); got != "/opt/teamflow/bin" {
+		t.Fatalf("%q", got)
+	}
+	t.Setenv("HOME", "/")
+	if got := Mask("/opt/x"); got != "/opt/x" {
+		t.Fatalf("%q", got)
+	}
+}

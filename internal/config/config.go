@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/vutran1710/teamflow-cli/internal/api"
 )
@@ -24,6 +25,25 @@ type Config struct {
 	Server  string `json:"server"`
 	AuthKey string `json:"auth_key"` // tfa_…, from signing in; empty when signed out
 	Email   string `json:"email"`
+	// AutoUpdate: false turns off the background sync's scheduled self-update (nil: on). Set with
+	// `teamflow config auto-update off|on` (SetAutoUpdate); Save keeps it as it is in the file.
+	AutoUpdate *bool `json:"auto_update,omitempty"`
+}
+
+// AutoUpdateEnv set to 0 (or false, off, no) turns the scheduled self-update off, whatever config.json says.
+const AutoUpdateEnv = "TEAMFLOW_AUTO_UPDATE"
+
+// AutoUpdate says whether the background sync updates teamflow on its own; when it does not, why: the env, or the
+// config (c nil: no config yet, on).
+func AutoUpdate(c *Config) (on bool, why string) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(AutoUpdateEnv))) {
+	case "0", "false", "off", "no":
+		return false, AutoUpdateEnv + "=" + os.Getenv(AutoUpdateEnv)
+	}
+	if c != nil && c.AutoUpdate != nil && !*c.AutoUpdate {
+		return false, "turned off with `teamflow config auto-update off`"
+	}
+	return true, ""
 }
 
 // SignedIn says whether this machine holds an auth key.
@@ -66,7 +86,25 @@ func Load(dir string) (*Config, error) {
 		s, _ := m[k].(string)
 		return s
 	}
-	return &Config{Server: str("server"), AuthKey: str("auth_key"), Email: str("email")}, nil
+	cfg := &Config{Server: str("server"), AuthKey: str("auth_key"), Email: str("email")}
+	if on, ok := m["auto_update"].(bool); ok {
+		cfg.AutoUpdate = &on
+	}
+	return cfg, nil
+}
+
+// SetAutoUpdate turns the scheduled self-update on or off in dir/config.json, keeping everything else in it (a
+// config.json that can't be read is refused, never replaced: it holds the sign-in).
+func SetAutoUpdate(dir string, on bool) error {
+	m, err := read(dir)
+	if err != nil {
+		return err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	m["auto_update"] = on
+	return write(dir, m)
 }
 
 // Save writes cfg to dir/config.json with mode 0600 (tightened if it was open), keeping keys it does not know
@@ -81,6 +119,14 @@ func Save(dir string, cfg Config) error {
 	}
 	delete(m, "key")
 	m["server"], m["auth_key"], m["email"] = cfg.Server, cfg.AuthKey, cfg.Email
+	if cfg.AutoUpdate != nil {
+		m["auto_update"] = *cfg.AutoUpdate
+	}
+	return write(dir, m)
+}
+
+// write writes m to dir/config.json (0600), atomically.
+func write(dir string, m map[string]any) error {
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err

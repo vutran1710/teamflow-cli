@@ -48,6 +48,16 @@ func Ensure() (string, error) {
 	return d, nil
 }
 
+// Mask is text with the user's home folder written as ~ wherever it appears (a path in an error, for a log or a
+// notice): no username or home path is shown.
+func Mask(text string) string {
+	h, err := os.UserHomeDir()
+	if err != nil || h == "" || h == "/" {
+		return text
+	}
+	return strings.ReplaceAll(text, h, "~")
+}
+
 // Display names a path for messages: under the user's home it starts with ~, so no username or home path is shown.
 func Display(p string) string {
 	h, err := os.UserHomeDir()

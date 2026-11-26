@@ -150,3 +150,74 @@ func TestInterruptedSaveLeavesTheLastGoodConfig(t *testing.T) {
 		t.Fatalf("the next save: %v", cfg)
 	}
 }
+
+// The scheduled self-update is on by default; `auto_update: false` or the env turns it off. SetAutoUpdate keeps
+// the sign-in and every other key; a login (Save) keeps the setting; a broken config.json is refused, never
+// replaced. Sad paths: an env set to an unknown word (on), a config with auto_update not a boolean (on).
+func TestAutoUpdate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(AutoUpdateEnv, "")
+	if on, why := AutoUpdate(nil); !on || why != "" {
+		t.Fatalf("no config: %v %q", on, why)
+	}
+	if err := Save(dir, Config{Server: "https://tf.example", AuthKey: "tfa_secret", Email: "lan@acme.test"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := Load(dir)
+	if on, _ := AutoUpdate(cfg); !on || cfg.AutoUpdate != nil {
+		t.Fatalf("default: %v %v", on, cfg.AutoUpdate)
+	}
+	if err := SetAutoUpdate(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = Load(dir)
+	if on, why := AutoUpdate(cfg); on || !strings.Contains(why, "teamflow config auto-update off") || cfg.AuthKey != "tfa_secret" {
+		t.Fatalf("off: %v %q %+v", on, why, cfg)
+	}
+	// A new sign-in keeps the setting.
+	if err := Save(dir, Config{Server: "https://tf.example", AuthKey: "tfa_other", Email: "lan@acme.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ = Load(dir); cfg.AutoUpdate == nil || *cfg.AutoUpdate {
+		t.Fatalf("a login dropped auto_update: %+v", cfg)
+	}
+	if err := SetAutoUpdate(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = Load(dir)
+	if on, _ := AutoUpdate(cfg); !on {
+		t.Fatal("on again")
+	}
+	for _, v := range []string{"0", "false", "OFF", " no "} {
+		t.Setenv(AutoUpdateEnv, v)
+		if on, why := AutoUpdate(cfg); on || !strings.HasPrefix(why, AutoUpdateEnv+"=") {
+			t.Fatalf("env %q: %v %q", v, on, why)
+		}
+	}
+	t.Setenv(AutoUpdateEnv, "1")
+	if on, _ := AutoUpdate(cfg); !on {
+		t.Fatal("env 1 turned it off")
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"auth_key": "tfa_x", "auto_update": "no"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ = Load(dir); cfg.AutoUpdate != nil {
+		t.Fatalf("a non-boolean auto_update was read: %v", *cfg.AutoUpdate)
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{broken`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAutoUpdate(dir, false); err == nil {
+		t.Fatal("a broken config.json was replaced")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, FileName)); string(b) != `{broken` {
+		t.Fatalf("config.json changed: %s", b)
+	}
+	fresh := t.TempDir()
+	if err := SetAutoUpdate(fresh, false); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(filepath.Join(fresh, FileName)); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %o", fi.Mode().Perm())
+	}
+}
