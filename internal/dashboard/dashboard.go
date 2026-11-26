@@ -1,7 +1,9 @@
 // Package dashboard is the project at a glance, as `teamflow project status` and /teamf status show it: the plan
 // and Deliverables versions, progress, the milestones, the actions by status, what needs you, what is due soon,
-// the approvals waiting for you and the open drifts. Plain ASCII, 64 columns: names are cut with "..." to fit their
-// column, and columns are aligned with spaces.
+// the approvals waiting for you and the open drifts. Plain ASCII, and every line fits 64 columns: names are cut
+// with "..." to fit their column; columns are aligned with spaces; a wide milestone state takes room from the name
+// column (every row alike), then is cut; a line of text too long (the session's topics, an empty state) breaks after
+// its "head:" onto indented lines.
 //
 // It is built from the replica's data and a clock (Build), so the same inputs give the same bytes. Dates are the
 // clock's local dates: "in N days", "tomorrow", "today" and LATE count from the clock's day, and a time is shown
@@ -293,6 +295,49 @@ func pad(s string, n int) string {
 	return s
 }
 
+// The milestones table: the name column is milestoneName wide (the name and two spaces) when the states fit in
+// stateRoom; it gives way to a wider state down to minName.
+const (
+	milestoneName = 25
+	stateRoom     = Width - 6 - milestoneName - 13 - 10
+	minName       = 12
+)
+
+// fitted is a line of text in lines that fit Width: as it is when it fits; otherwise broken after its "head:" with
+// the rest on indented lines (wrapped at spaces), or wrapped at spaces when it has no head that fits.
+func fitted(text string) []string {
+	if utf8.RuneCountInString(text) <= Width {
+		return []string{text}
+	}
+	if head, rest, ok := strings.Cut(text, ": "); ok && utf8.RuneCountInString(head) < Width {
+		return append([]string{head + ":"}, wrap(rest, "  ", "  ")...)
+	}
+	return wrap(text, "", "  ")
+}
+
+// wrap breaks text at spaces into lines of at most Width: the first starts with first, the others with indent. A
+// word too long for a line is cut with "...".
+func wrap(text, first, indent string) []string {
+	var lines []string
+	cur, empty := first, true
+	for _, word := range strings.Fields(text) {
+		switch {
+		case empty:
+			cur, empty = cur+word, false
+		case utf8.RuneCountInString(cur)+1+utf8.RuneCountInString(word) <= Width:
+			cur += " " + word
+		default:
+			lines = append(lines, cur)
+			cur = indent + word
+		}
+	}
+	lines = append(lines, cur)
+	for i, l := range lines {
+		lines[i] = fit(l, Width)
+	}
+	return lines
+}
+
 // relative is how far a due date is: "today", "tomorrow", "in N days", or "LATE".
 func relative(days *int) string {
 	switch {
@@ -324,23 +369,28 @@ func (b Board) Text() string {
 	line(b.header())
 	line(strings.Repeat("=", Width))
 	line(b.versions())
+	say := func(text string) {
+		for _, l := range fitted(text) {
+			line(l)
+		}
+	}
 	switch {
 	case !b.HasDeliverables:
 		line("")
-		line(NoDeliverables)
+		say(NoDeliverables)
 	case b.Archived:
 		line("")
-		line(Archived)
+		say(Archived)
 	case len(b.Milestones) == 0:
 		line("")
-		line(NoMilestones)
+		say(NoMilestones)
 	default:
 		b.tables(line)
 	}
 	line("")
 	line(fmt.Sprintf("Waiting for your approval: %d    Open drifts: %d", b.Approvals, b.Drifts))
 	if b.Session != "" {
-		line("This session: " + b.Session)
+		say("This session: " + b.Session)
 	}
 	if !b.AutoUpdate {
 		line("auto-update: off")
@@ -378,38 +428,55 @@ func (b Board) versions() string {
 		}
 		parts = append(parts, v)
 		if b.UpdatedAt != "" {
-			by := ""
-			if b.UpdatedBy != "" {
-				by = " by " + fit(b.UpdatedBy, 20)
-			}
-			parts = append(parts, "updated "+b.UpdatedAt+by)
+			parts = append(parts, "updated "+b.UpdatedAt)
 		}
 	}
-	return fit(strings.Join(parts, " | "), Width)
+	text := strings.Join(parts, " | ")
+	// Who published gives way first: cut to the room left, or left out when there is too little.
+	if room := min(Width-utf8.RuneCountInString(text)-len(" by "), 20); b.HasDeliverables && b.UpdatedAt != "" &&
+		b.UpdatedBy != "" && room >= 4 {
+		text += " by " + fit(b.UpdatedBy, room)
+	}
+	return fit(text, Width)
 }
 
 func (b Board) tables(line func(string)) {
 	total := len(b.Milestones)
 	cells := 20 * b.MilestonesDone / total
-	line(fmt.Sprintf("Progress  [%s%s] %3d%%   %d of %d milestones done", strings.Repeat("#", cells),
-		strings.Repeat("-", 20-cells), 100*b.MilestonesDone/total, b.MilestonesDone, total))
+	progress := fmt.Sprintf("Progress  [%s%s] %3d%%   %d of %d", strings.Repeat("#", cells),
+		strings.Repeat("-", 20-cells), 100*b.MilestonesDone/total, b.MilestonesDone, total)
+	if len(progress)+len(" milestones done") <= Width {
+		progress += " milestones done"
+	} else {
+		progress += " done"
+	}
+	line(progress)
 	line("")
-	line(pad("Milestones", 31) + pad("due", 13) + pad("actions", 10) + "state")
-	for _, m := range b.Milestones {
-		mark, state := "[ ]", ""
+	marks, states := make([]string, total), make([]string, total)
+	widest := 0
+	for i, m := range b.Milestones {
+		marks[i] = "[ ]"
 		switch m.State {
 		case StateDone:
-			mark, state = "[x]", "done"
+			marks[i], states[i] = "[x]", "done"
 		case StateLate:
-			mark, state = "[!]", "LATE"
+			marks[i], states[i] = "[!]", "LATE"
 		case StateCurrent:
-			mark = "[>]"
+			marks[i] = "[>]"
 			if rel := relative(m.Days); rel != "" {
-				state = "due " + rel
+				states[i] = "due " + rel
 			}
 		}
-		line("  " + mark + " " + pad(fit(m.Name, 23), 25) + pad(fit(m.Due, 11), 13) +
-			pad(fmt.Sprintf("%d/%d", m.Done, m.Total), 10) + state)
+		widest = max(widest, utf8.RuneCountInString(states[i]))
+	}
+	// The name column gives way to the widest state (every row alike, so the columns stay aligned), down to
+	// minName; a state still too wide is cut.
+	nameCol := max(milestoneName-max(widest-stateRoom, 0), minName)
+	stateCol := Width - 6 - nameCol - 13 - 10
+	line(pad("Milestones", 6+nameCol) + pad("due", 13) + pad("actions", 10) + "state")
+	for i, m := range b.Milestones {
+		line("  " + marks[i] + " " + pad(fit(m.Name, nameCol-2), nameCol) + pad(fit(m.Due, 11), 13) +
+			pad(fit(fmt.Sprintf("%d/%d", m.Done, m.Total), 9), 10) + fit(states[i], stateCol))
 	}
 	line("")
 	line(fmt.Sprintf("%-15s%5s%7s%7s%10s", "Actions", "total", "done", "open", "blocked"))
@@ -426,14 +493,15 @@ func (b Board) tables(line func(string)) {
 	} else {
 		line(fmt.Sprintf("Needs you (%d)", len(b.NeedsYou)))
 		for _, it := range b.NeedsYou {
-			s := "  - " + pad(fit(it.Name, 28), 30) + "due " + fit(it.Due, 11)
+			tail := "due " + fit(it.Due, 11)
 			if rel := relative(it.Days); rel != "" {
-				s += "  (" + rel + ")"
+				tail += "  (" + rel + ")"
 			}
 			if it.Urgent {
-				s += "  !"
+				tail += "  !"
 			}
-			line(s)
+			col := max(min(30, Width-4-utf8.RuneCountInString(tail)), minName) // the name gives way to the date
+			line(fit("  - "+pad(fit(it.Name, col-2), col)+tail, Width))
 		}
 	}
 	line("")

@@ -3,11 +3,11 @@ iHertz (1FlowCorp)                                  you: Vu Tran
 Plan v3 | Deliverables v2
 Progress  [#####---------------]  25%   1 of 4 milestones done
 
-Milestones                     due          actions   state
-  [x] Rounding v1              2026-12-10   2/2       done
-  [>] Release iHertz           2026-12-20   1/4       due in 23 days
-  [ ] Onboard first users      2027-01-15   0/3
-  [ ] Store listing            someday      0/1
+Milestones                 due          actions   state
+  [x] Rounding v1          2026-12-10   2/2       done
+  [>] Release iHertz       2026-12-20   1/4       due in 23 days
+  [ ] Onboard first users  2027-01-15   0/3
+  [ ] Store listing        someday      0/1
 
 Actions        total   done   open   blocked
   everyone        10      3      6         1
@@ -22,4 +22,5 @@ Due soon (next 7 days, yours first)
   - Store screen [31m...  Huy     2026-11-30
 
 Waiting for your approval: 1    Open drifts: 2
-This session: topics Development, Plan (built-in, always followed)
+This session:
+  topics Development, Plan (built-in, always followed)

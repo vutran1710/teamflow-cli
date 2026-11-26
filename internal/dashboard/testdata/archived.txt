@@ -1,8 +1,10 @@
 iHertz (1FlowCorp)                                  you: Vu Tran
 ================================================================
-Plan v3 | Deliverables v2 (archived) | updated 2026-11-26 15:...
+Plan v3 | Deliverables v2 (archived) | updated 2026-11-26 15:28
 
-The Deliverables are archived: nothing changes in them until the initiator restores them.
+The Deliverables are archived:
+  nothing changes in them until the initiator restores them.
 
 Waiting for your approval: 1    Open drifts: 2
-This session: topics Development, Plan (built-in, always followed)
+This session:
+  topics Development, Plan (built-in, always followed)

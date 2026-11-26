@@ -27,4 +27,5 @@ Due soon (next 7 days, yours first)
   - Due in seven days     Lan     2026-12-04
 
 Waiting for your approval: 1    Open drifts: 2
-This session: topics Development, Plan (built-in, always followed)
+This session:
+  topics Development, Plan (built-in, always followed)

@@ -52,8 +52,8 @@ func approvalReplica(t *testing.T, m *machine) {
 	m.srv.on("member.me", huyMember)
 }
 
-// dashboardNoDeliverables is the dashboard's line for a project with no Deliverables yet.
-const dashboardNoDeliverables = "No Deliverables yet: ask your agent to publish them from the plan."
+// dashboardNoDeliverables is the dashboard's say for a project with no Deliverables yet (in 64 columns).
+const dashboardNoDeliverables = "No Deliverables yet:\n  ask your agent to publish them from the plan.\n"
 
 const accepted = `{"result": {"signal": "sg_00000000000000000000000077", "accepted": true, "reason": null, "message": "", "seq": 9, "received_at": "2026-01-15T09:00:01Z", "state": "IN_FORCE"}}`
 

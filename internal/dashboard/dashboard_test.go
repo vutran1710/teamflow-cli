@@ -13,6 +13,7 @@ package dashboard
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,9 +86,13 @@ func example() Input {
 	}
 }
 
-// golden compares got with testdata/name (rewriting it with -update, except the hand-written example).
+// golden compares got with testdata/name (rewriting it with -update, except the hand-written example). Every
+// line of a text golden fits Width.
 func golden(t *testing.T, name, got string) {
 	t.Helper()
+	if strings.HasSuffix(name, ".txt") {
+		fits(t, got)
+	}
 	path := filepath.Join("testdata", name)
 	if *update && name != "example.txt" {
 		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
@@ -100,6 +105,16 @@ func golden(t *testing.T, name, got string) {
 	}
 	if got != string(want) {
 		t.Fatalf("%s differs\n--- got\n%s--- want\n%s", name, got, want)
+	}
+}
+
+// fits fails when a line of text is wider than Width.
+func fits(t *testing.T, text string) {
+	t.Helper()
+	for i, l := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
+		if n := utf8.RuneCountInString(l); n > Width {
+			t.Errorf("line %d is %d wide (more than %d): %q", i+1, n, Width, l)
+		}
 	}
 }
 
@@ -235,7 +250,7 @@ func TestLongNamesTruncated(t *testing.T) {
 	golden(t, "long-names.txt", text)
 	for _, want := range []string{
 		"The project with a name far to...  you: Vu Tran Nguyen Minh H...\n",
-		"  [>] Release iHertz to th...  2026-12-20   1/4       due in 23 days\n",
+		"  [>] Release iHertz t...  2026-12-20   1/4       due in 23 days\n",
 		"  - Write the release notes f...  due 2026-11-28  (tomorrow)  !\n",
 		"  - Write the release...  you     2026-11-28\n",
 		"  - Store screenshots...  Huy ... 2026-11-30\n",
@@ -245,10 +260,58 @@ func TestLongNamesTruncated(t *testing.T) {
 			t.Fatalf("no %q in\n%s", want, text)
 		}
 	}
-	for _, l := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
-		if utf8.RuneCountInString(l) > Width && !strings.HasPrefix(l, "  [>] ") && !strings.HasPrefix(l, "This session: ") {
-			t.Errorf("wider than %d: %q", Width, l)
+}
+
+// Lines that would pass 64 columns: a long current-milestone state takes room from the name column (every row
+// alike, so the columns stay aligned), then is cut; the session's topics wrap onto indented lines (a topic name
+// too long for a line is cut); the progress line and Needs you's dates give way too. Every line fits 64.
+func TestEveryLineFits64(t *testing.T) {
+	in := example()
+	in.Session = "topics Development, Design, Marketing and launch, Customer support, Infrastructure, " +
+		"A-topic-name-with-no-space-in-it-that-is-far-too-long-for-any-line-of-the-dashboard, Plan (built-in, always followed)"
+	d := in.Deliverables
+	d.Milestones[2].Name = "Release iHertz to the whole wide world"
+	d.Milestones[2].Due = "2026-12-20"
+	back := time.Date(1999, 1, 1, 9, 0, 0, 0, ict) // a clock set back by decades: "due in 10215 days"
+	b := Build(in, back)
+	golden(t, "overflow.txt", b.Text())
+	text := b.Text()
+	for _, want := range []string{
+		"Milestones              due          actions   state\n",
+		"  [>] Store listing     2026-11-25   0/1       due in 10190 days\n", // the name column gave 7
+		"  [ ] Release iHert...  2026-12-20   1/4\n",
+		"  - Write release notes          due 2026-11-28  (in 10193 days)\n", // the name column gave 1
+		"\nThis session:\n  topics Development, Design, Marketing and launch, Customer\n  support, Infrastructure,\n",
+		"\n  A-topic-name-with-no-space-in-it-that-is-far-too-long-for-a...\n",
+		"\n  Plan (built-in, always followed)\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("no %q in\n%s", want, text)
 		}
+	}
+	// The widest state there can be (a clock so far back the days saturate) still fits; so does a progress line of
+	// a thousand milestones (its last word goes).
+	in = example()
+	in.Deliverables.Milestones = []protocol.Milestone{{ID: "ms_1", Name: "M", Due: "2026-12-01"}}
+	text = Build(in, time.Date(-200000, 1, 1, 0, 0, 0, 0, time.UTC)).Text()
+	fits(t, text)
+	if !strings.Contains(text, "  [>] M                2026-12-01   0/0       due in 106751 days\n") {
+		t.Fatalf("%s", text)
+	}
+	many := example()
+	var ms []protocol.Milestone
+	for i := range 1000 {
+		ms = append(ms, protocol.Milestone{ID: fmt.Sprintf("ms_%04d", i), Name: "M", Due: "2027-01-01",
+			Actions: []protocol.Action{action(fmt.Sprintf("%04d", i), "A", "2027-01-01", "")}})
+	}
+	many.Deliverables.Milestones, many.Statuses = ms, map[string]protocol.ActionStatus{}
+	for i := range 999 {
+		many.Statuses[fmt.Sprintf("ai_%04d", i)] = protocol.ActionStatusDone
+	}
+	text = Build(many, now).Text()
+	fits(t, text)
+	if !strings.Contains(text, "Progress  [###################-]  99%   999 of 1000 done\n") {
+		t.Fatalf("%s", strings.SplitN(text, "\n\n", 3)[0])
 	}
 }
 
@@ -296,8 +359,8 @@ func TestDateEdges(t *testing.T) {
 		in.Deliverables.Milestones[1].Actions[i].Due = "2026-11-28"
 	}
 	text = Build(in, now).Text()
-	for _, want := range []string{"  [!] Today                    2026-11-26   0/2       LATE",
-		"  [>] Later                    2026-11-28   0/5       due tomorrow"} {
+	for _, want := range []string{"  [!] Today                  2026-11-26   0/2       LATE", // "due tomorrow": the names give 2
+		"  [>] Later                  2026-11-28   0/5       due tomorrow"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("no %q in\n%s", want, text)
 		}
@@ -384,7 +447,7 @@ func TestBadData(t *testing.T) {
 	b := Build(in, now)
 	golden(t, "bad-data.txt", b.Text())
 	text := b.Text()
-	for _, want := range []string{"  [ ] Store listing            someday      0/1\n",
+	for _, want := range []string{"  [ ] Store listing        someday      0/1\n",
 		"  - Write release notes           due 2026-12-20  (in 23 days)\n", "  - Store screen [31m...  Huy     2026-11-30\n",
 		"Plan v3 | Deliverables v2\n"} {
 		if !strings.Contains(text, want) {

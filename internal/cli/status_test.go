@@ -245,7 +245,8 @@ func TestTeamStatusShowsTheProject(t *testing.T) {
 		t.Fatalf("no project after the status lines:\n%s", r.out)
 	}
 	contains(t, "status lines", status, "config: ", "this session: s1 (shared with "+P+")", "claude-code: ")
-	contains(t, "the project", board, "you: huy\n", "\nThis session: all topics: Rounding, Currency, Plan (built-in, always followed)\n")
+	contains(t, "the project", board, "you: huy\n", // the session's topics wrapped to 64 columns
+		"\nThis session:\n  all topics: Rounding, Currency, Plan (built-in, always\n  followed)\n")
 	lacks(t, "stdout", r.out, pickProject)
 	// The same through the plain team command, and as JSON (an agent's run).
 	contains(t, "stdout", m.run("", "team", "status").out, "Pricing (Acme)")

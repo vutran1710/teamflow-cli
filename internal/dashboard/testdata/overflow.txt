@@ -1,0 +1,27 @@
+iHertz (1FlowCorp)                                  you: Vu Tran
+================================================================
+Plan v3 | Deliverables v2 | updated 2026-11-26 15:28 by Lan
+Progress  [#####---------------]  25%   1 of 4 milestones done
+
+Milestones              due          actions   state
+  [>] Store listing     2026-11-25   0/1       due in 10190 days
+  [x] Rounding v1       2026-12-10   2/2       done
+  [ ] Release iHert...  2026-12-20   1/4
+  [ ] Onboard first...  2027-01-15   0/3
+
+Actions        total   done   open   blocked
+  everyone        10      3      6         1
+  you              4      2      2         0
+
+Needs you (2)
+  - Write release notes          due 2026-11-28  (in 10193 days)
+  - Review round_price           due 2026-12-01  (in 10196 days)
+
+Nothing is due in the next 7 days.
+
+Waiting for your approval: 1    Open drifts: 2
+This session:
+  topics Development, Design, Marketing and launch, Customer
+  support, Infrastructure,
+  A-topic-name-with-no-space-in-it-that-is-far-too-long-for-a...
+  Plan (built-in, always followed)
