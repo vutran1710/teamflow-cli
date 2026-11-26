@@ -46,6 +46,9 @@ library can check, so self-update needs nothing else.
   refused.
 - **A folder that cannot be written** (a read-only or system location): `self-update` refuses before it downloads
   anything, and says to reinstall with `install.sh` (or run it as a user who can write there).
+- **Two updates at once** (`self-update`, `/teamf upgrade`, a background sync's, from any Teamflow home): they take
+  turns on `.teamflow-update.lock` beside the binary (it stays there), and an update replaces the binary only if
+  the path still names the file it started from; otherwise it changes nothing.
 - **No build for this machine** (another OS or architecture): refused, nothing changed. `install.sh` refuses an
   unknown OS or architecture before it downloads anything.
 - **GitHub's API rate limit or no network:** `self-update` refuses with the reason and the Releases link.

@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -695,13 +697,14 @@ func TestNewerAndIsRelease(t *testing.T) {
 	}
 }
 
-// Updates of one binary take turns (a lock file): a second waits for the first, and refuses past its wait, nothing
-// changed.
+// Updates of one binary take turns (a lock file beside it): a second waits for the first and refuses past its wait,
+// nothing changed; then, its turn come, it finds the binary is no longer the one it expected. Without Lock, no lock
+// file is made. A crashed holder lets go at once (the kernel drops its flock).
 func TestInstallTakesTurns(t *testing.T) {
 	sk, pub := throwawayKey(t)
 	rel := newRelease(t, sk, "v0.2.0", newScript)
 	u, exe, _ := rel.updater(t, pub)
-	u.LockFile = filepath.Join(t.TempDir(), "update.lock")
+	u.Lock = true
 	held := make(chan struct{})
 	release := make(chan struct{})
 	u.Hold = func(context.Context) (func(), error) { close(held); <-release; return func() {}, nil }
@@ -714,13 +717,15 @@ func TestInstallTakesTurns(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the first update never reached its swap")
 	}
-	second, exe2, _ := rel.updater(t, pub)
-	second.LockFile, second.LockWait = u.LockFile, 100*time.Millisecond
+	second := &Updater{API: u.API, Client: u.Client, PublicKey: pub, Exe: exe, GOOS: u.GOOS, GOARCH: u.GOARCH,
+		Out: &bytes.Buffer{}, Lock: true, LockWait: 100 * time.Millisecond, Expect: ExpectVersion("0.1.0")}
 	_, err := second.Install(context.Background(), "0.1.0")
 	if err == nil || !strings.Contains(err.Error(), "another teamflow update is running") {
 		t.Fatalf("the second update did not wait its turn: %v", err)
 	}
-	untouched(t, exe2)
+	if b, _ := os.ReadFile(exe); string(b) != oldScript {
+		t.Fatal("the second update changed the binary")
+	}
 	close(release)
 	select {
 	case err := <-done:
@@ -733,10 +738,47 @@ func TestInstallTakesTurns(t *testing.T) {
 	if b, _ := os.ReadFile(exe); string(b) != newScript {
 		t.Fatal("the first update did not finish")
 	}
-	second.LockWait = 5 * time.Second // its turn now
-	if _, err := second.Install(context.Background(), "0.1.0"); err != nil {
+	leftovers(t, filepath.Dir(exe), LockName, "teamflow")
+	second.LockWait = 5 * time.Second // its turn now: the binary is no longer the 0.1.0 it expected
+	if _, err := second.Install(context.Background(), "0.1.0"); KindOf(err) != Changed {
+		t.Fatalf("%v", err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != newScript {
+		t.Fatal("the second update replaced the first's")
+	}
+
+	// A holder killed mid-update (a crash): the next update goes on at once.
+	rel = newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ = rel.updater(t, pub)
+	u.Lock, u.LockWait = true, 300*time.Millisecond
+	holder := exec.Command("/bin/sh", "-c", "exec /usr/bin/env perl -e 'use Fcntl qw(:flock); open(my $f, \">>\", $ARGV[0]) or die; flock($f, LOCK_EX) or die; print \"locked\\n\"; $|=1; sleep 100' "+filepath.Join(filepath.Dir(exe), LockName))
+	out, _ := holder.StdoutPipe()
+	if err := holder.Start(); err != nil {
+		t.Skip(err)
+	}
+	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "locked\n" {
+		_ = holder.Process.Kill()
+		t.Skipf("no perl to hold a lock here: %q", line)
+	}
+	if _, err := u.Install(context.Background(), "0.1.0"); err == nil {
+		t.Fatal("went on while another update held the lock")
+	}
+	_ = holder.Process.Kill()
+	_ = holder.Wait()
+	if _, err := u.Install(context.Background(), "0.1.0"); err != nil {
+		t.Fatalf("after the holder crashed: %v", err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != newScript {
+		t.Fatal("not updated after the crash")
+	}
+
+	// No Lock: no lock file beside the binary.
+	rel = newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ = rel.updater(t, pub)
+	if _, err := u.Install(context.Background(), "0.1.0"); err != nil {
 		t.Fatal(err)
 	}
+	leftovers(t, filepath.Dir(exe), "teamflow")
 }
 
 // The binary is put in place only if the file on disk is still the one the update started from (and what Expect

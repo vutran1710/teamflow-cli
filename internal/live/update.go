@@ -117,16 +117,25 @@ func newUpdater(a *AutoUpdate) *updater {
 	return u
 }
 
-// same says whether the binary on disk is still the one this sync started from: the same file, saying the same
-// version.
-func (u *updater) same(string) error {
+// same says whether what exe names now (a link resolved; "": the path the sync was started from) is still the
+// binary this sync started from: the same file, saying the same version. A link repointed, or a file renamed over
+// the link or its target, is another binary.
+func (u *updater) same(exe string) error {
 	if u.start == nil {
 		return errors.New("the binary this sync started from could not be read")
 	}
-	if now, err := os.Stat(u.exe); err != nil || !os.SameFile(u.start, now) {
-		return errors.New("the binary on disk is not the one this background sync started from")
+	if exe == "" {
+		exe = u.a.Updater.Exe
 	}
-	return selfupdate.ExpectVersion(u.a.Current)(u.exe)
+	changed := errors.New("the binary on disk is not the one this background sync started from")
+	p, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return changed
+	}
+	if now, err := os.Stat(p); err != nil || !os.SameFile(u.start, now) {
+		return changed
+	}
+	return selfupdate.ExpectVersion(u.a.Current)(p)
 }
 
 func (u *updater) draw() {
@@ -168,7 +177,7 @@ func (r *runner) selfUpdate(ctx context.Context) *Updated {
 		r.logOnce("auto-update dev", "teamflow sync: this build (%s) is not a release: no scheduled update", u.a.Current)
 		return nil
 	}
-	if err := u.same(""); err != nil { // another binary was put there since this sync started: it is not ours to replace
+	if err := u.same(u.a.Updater.Exe); err != nil { // another binary was put there since: not ours to replace
 		return r.restartOnDisk(err)
 	}
 	// Recorded first, whatever comes of it: nothing is tried again before the next check.
@@ -180,7 +189,7 @@ func (r *runner) selfUpdate(ctx context.Context) *Updated {
 	u.draw()
 	up := *u.a.Updater
 	up.Out, up.Replaced, up.Expect = io.Discard, nil, u.same
-	up.LockFile = filepath.Join(r.dir, "update.lock") // takes turns with self-update and /teamf upgrade
+	up.Lock = true // takes turns with self-update, /teamf upgrade and other homes' syncs (the lock is beside the binary)
 	up.Hold = func(ctx context.Context) (func(), error) { return r.holdSenders(ctx, u.a.LockWait) }
 	uctx, cancel := context.WithTimeout(ctx, updateTimeout)
 	defer cancel()

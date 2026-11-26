@@ -76,6 +76,19 @@ func binaryOf(t *testing.T, exe string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// besideBinary is what the binary's folder holds, but the update lock (it stays there, as an install's).
+func besideBinary(t *testing.T, exe string) []string {
+	t.Helper()
+	entries, _ := os.ReadDir(filepath.Dir(exe))
+	var out []string
+	for _, e := range entries {
+		if e.Name() != selfupdate.LockName {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
 func noticesOf(t *testing.T, c *core.Core, session string) []string {
 	t.Helper()
 	ns, err := c.St.Notices(session, false)
@@ -161,9 +174,8 @@ func TestScheduledUpdateBadSignatureRetriesNextCycle(t *testing.T) {
 	if rel.Asked() != 1 || binaryOf(t, exe) != "teamflow 0.1.0" || rel.Downloaded() {
 		t.Fatalf("asked %d", rel.Asked())
 	}
-	entries, _ := os.ReadDir(filepath.Dir(exe))
-	if len(entries) != 1 {
-		t.Fatalf("left beside the binary: %v", entries)
+	if left := besideBinary(t, exe); len(left) != 1 {
+		t.Fatalf("left beside the binary: %v", left)
 	}
 	clk.add(23 * time.Hour)
 	time.Sleep(10 * o.Rescan)
@@ -306,9 +318,8 @@ func TestScheduledUpdateWaitsForTheSenderLock(t *testing.T) {
 		if binaryOf(t, exe) != "teamflow 0.1.0" {
 			t.Fatal("swapped while a send was in flight")
 		}
-		entries, _ := os.ReadDir(filepath.Dir(exe))
-		if len(entries) != 1 {
-			t.Fatalf("left beside the binary: %v", entries)
+		if left := besideBinary(t, exe); len(left) != 1 {
+			t.Fatalf("left beside the binary: %v", left)
 		}
 		release()
 		clk.add(25 * time.Hour)
@@ -482,7 +493,7 @@ func TestManualAndScheduledUpdatesNeverDowngrade(t *testing.T) {
 		newer, older := selfupdatetest.New(t, "v0.1.2", ""), selfupdatetest.New(t, "v0.1.1", "")
 		c, _, exe, o, _ := updating(t, older)
 		manual := newer.Updater(exe, nil)
-		manual.LockFile, manual.Expect = filepath.Join(c.Dir, "update.lock"), selfupdate.ExpectVersion("0.1.0")
+		manual.Lock, manual.Expect = true, selfupdate.ExpectVersion("0.1.0")
 		inHold, let := make(chan struct{}), make(chan struct{})
 		manual.Hold = func(context.Context) (func(), error) { close(inHold); <-let; return func() {}, nil }
 		done := make(chan error, 1)
@@ -522,7 +533,7 @@ func TestManualAndScheduledUpdatesNeverDowngrade(t *testing.T) {
 			t.Fatalf("Run ended with %v", err)
 		}
 		manual := newer.Updater(exe, nil)
-		manual.LockFile, manual.Expect = filepath.Join(c.Dir, "update.lock"), selfupdate.ExpectVersion("0.1.0")
+		manual.Lock, manual.Expect = true, selfupdate.ExpectVersion("0.1.0")
 		if _, err := manual.Install(context.Background(), "0.1.0"); selfupdate.KindOf(err) != selfupdate.Changed {
 			t.Fatalf("a manual update started from 0.1.0 went on: %v", err)
 		}
@@ -530,4 +541,116 @@ func TestManualAndScheduledUpdatesNeverDowngrade(t *testing.T) {
 			t.Fatalf("%q", got)
 		}
 	})
+}
+
+// linkedUpdate: the sync was started through a symlink (os.Executable gives the link on macOS) to a stand-in
+// teamflow 0.1.0; after it starts, change repoints what the link names (it returns the binary the link names now);
+// then the check runs. That binary is never replaced, and the sync restarts onto it.
+func linkedUpdate(t *testing.T, change func(t *testing.T, link string) string) {
+	t.Helper()
+	rel := selfupdatetest.New(t, "v0.1.1", "")
+	c, _, target, o, l := updating(t, rel)
+	link := filepath.Join(t.TempDir(), "teamflow")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	o.AutoUpdate.Updater.Exe = link
+	o.AutoUpdate.First = 300 * time.Millisecond // the clock ticks a microsecond a read: never, unless moved
+	clk := c.Now
+	moved := false
+	var mu sync.Mutex
+	c.Now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		if moved {
+			return clk().Add(time.Hour)
+		}
+		return clk()
+	}
+	wait, _ := start(t, c, o)
+	eventually(t, "running", func() bool { _, ok := Status(c.Dir); return ok })
+	now := change(t, link)
+	mu.Lock()
+	moved = true
+	mu.Unlock()
+	err := wait()
+	if got := binaryOf(t, now); got != "teamflow dev" {
+		t.Fatalf("the binary another install put at %s was replaced: it says %q (log %s)", now, got, l)
+	}
+	var up *Updated
+	if !errors.As(err, &up) || up.Version != "" || up.Exe != link || rel.Asked() != 0 {
+		t.Fatalf("Run ended with %v; GitHub asked %d times", err, rel.Asked())
+	}
+}
+
+// The symlink is repointed at another binary (a developer's build, a package manager's newer version).
+func TestScheduledUpdateSymlinkRetargeted(t *testing.T) {
+	linkedUpdate(t, func(t *testing.T, link string) string {
+		dev := selfupdatetest.Installed(t, t.TempDir(), "dev")
+		tmp := link + ".new"
+		if err := os.Symlink(dev, tmp); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, link); err != nil {
+			t.Fatal(err)
+		}
+		return dev
+	})
+}
+
+// install.sh's `mv -f new $bindir/teamflow` (or `go build -o`) over a symlinked install: a regular file replaces the
+// link.
+func TestScheduledUpdateFileRenamedOverSymlink(t *testing.T) {
+	linkedUpdate(t, func(t *testing.T, link string) string {
+		tmp := link + ".new"
+		if err := os.WriteFile(tmp, []byte(selfupdatetest.Script("dev")), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, link); err != nil {
+			t.Fatal(err)
+		}
+		return link
+	})
+}
+
+// Two Teamflow homes (two people on one machine, TEAMFLOW_HOME) share one binary: their updates take turns too (the
+// update lock lives beside the binary). Home B's manual update to v0.1.2 holds it; home A's scheduled update (seeing
+// a lagging v0.1.1) waits, then finds the binary changed and restarts onto it: never a downgrade.
+func TestUpdatesOfTwoHomesSharingABinaryTakeTurns(t *testing.T) {
+	newer, older := selfupdatetest.New(t, "v0.1.2", ""), selfupdatetest.New(t, "v0.1.1", "")
+	c, _, exe, o, _ := updating(t, older) // home A
+	manual := newer.Updater(exe, nil)     // home B's: its own home, the same binary
+	manual.Lock, manual.Expect = true, selfupdate.ExpectVersion("0.1.0")
+	inHold, let := make(chan struct{}), make(chan struct{})
+	manual.Hold = func(context.Context) (func(), error) { close(inHold); <-let; return func() {}, nil }
+	done := make(chan error, 1)
+	go func() { _, err := manual.Install(context.Background(), "0.1.0"); done <- err }()
+	select {
+	case <-inHold:
+	case err := <-done:
+		t.Fatalf("home B's update ended before its swap: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("home B's update never reached its swap")
+	}
+	wait, _ := start(t, c, o)
+	time.Sleep(300 * time.Millisecond) // home A's check waits its turn meanwhile
+	if binaryOf(t, exe) != "teamflow 0.1.0" {
+		t.Fatal("home A's update did not wait its turn")
+	}
+	close(let)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("home B's update never finished")
+	}
+	var up *Updated
+	if err := wait(); !errors.As(err, &up) || up.Version != "" {
+		t.Fatalf("home A's sync ended with %v", err)
+	}
+	if got := binaryOf(t, exe); got != "teamflow 0.1.2" {
+		t.Fatalf("downgraded: %q", got)
+	}
 }

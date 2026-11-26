@@ -36,7 +36,6 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/minisign"
 )
 
@@ -67,14 +66,19 @@ type Updater struct {
 	// Hold, when set, is held while the new binary is renamed into place (the background sync takes the outbox's
 	// sender locks: never a swap in the middle of a send). An error refuses the update, nothing changed.
 	Hold func(ctx context.Context) (release func(), err error)
-	// Expect, when set, says what the binary on disk must still be: checked before anything is downloaded and
-	// again, under Hold, just before the new binary is renamed into place. An error refuses the update (Changed).
+	// Expect, when set, says what the binary on disk must still be (it is given Exe as set, a link unresolved):
+	// checked before anything is downloaded and again, under Hold, just before the new binary is renamed into
+	// place. An error refuses the update (Changed).
 	Expect func(exe string) error
-	// LockFile, when set, is held (flock) for the whole update, so two updates of the binary (self-update, /teamf
-	// upgrade, the background sync's) take turns; LockWait is how long one waits for another (2 min).
-	LockFile string
+	// Lock: hold an flock on LockName beside the binary for the whole update, so every update of that binary
+	// (self-update, /teamf upgrade, any home's background sync) takes its turn; LockWait is how long one waits for
+	// another (2 min).
+	Lock     bool
 	LockWait time.Duration
 }
+
+// LockName is the update lock's file, beside the binary.
+const LockName = ".teamflow-update.lock"
 
 // lockWait is how long an update waits for another one by default.
 const lockWait = 2 * time.Minute
@@ -126,7 +130,7 @@ func refuse(k Kind, err error) error { return &Error{Kind: k, Err: err} }
 func Default(out io.Writer) *Updater {
 	exe, _ := os.Executable()
 	return &Updater{
-		LockFile:  filepath.Join(home.Dir(), "update.lock"),
+		Lock:      true,
 		API:       "https://api.github.com",
 		Client:    &http.Client{Timeout: 5 * time.Minute},
 		PublicKey: PublicKey,
@@ -179,7 +183,7 @@ func (u *Updater) Install(ctx context.Context, current string) (Result, error) {
 		return res, refuse(NotWritable, fmt.Errorf("cannot write to %s (where teamflow is installed): %v; reinstall with install.sh, or run self-update as a user who can write there", dir, err))
 	}
 	sweep(dir)
-	unlock, err := u.takeTurn(ctx)
+	unlock, err := u.takeTurn(ctx, dir)
 	if err != nil {
 		return res, err
 	}
@@ -189,7 +193,7 @@ func (u *Updater) Install(ctx context.Context, current string) (Result, error) {
 		return res, refuse(Failed, fmt.Errorf("cannot read %s: %v", exe, err))
 	}
 	if u.Expect != nil {
-		if err := u.Expect(exe); err != nil {
+		if err := u.Expect(u.Exe); err != nil {
 			return res, refuse(Changed, err)
 		}
 	}
@@ -264,16 +268,13 @@ func (u *Updater) Install(ctx context.Context, current string) (Result, error) {
 	return res, nil
 }
 
-// takeTurn holds u.LockFile (flock), waiting up to u.LockWait for another update to finish; nothing to hold when
-// there is no LockFile.
-func (u *Updater) takeTurn(ctx context.Context) (func(), error) {
-	if u.LockFile == "" {
+// takeTurn holds the update lock beside the binary (dir/LockName, flock), waiting up to u.LockWait for another
+// update to finish; nothing to hold without u.Lock. A crashed holder lets go at once (the kernel drops its flock).
+func (u *Updater) takeTurn(ctx context.Context, dir string) (func(), error) {
+	if !u.Lock {
 		return func() {}, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(u.LockFile), 0o700); err != nil {
-		return nil, refuse(Failed, fmt.Errorf("update lock: %v", err))
-	}
-	f, err := os.OpenFile(u.LockFile, os.O_RDWR|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(filepath.Join(dir, LockName), os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, refuse(Failed, fmt.Errorf("update lock: %v", err))
 	}
@@ -388,13 +389,19 @@ func (u *Updater) swap(ctx context.Context, exe string, start os.FileInfo, binar
 		}
 		defer release()
 	}
-	if now, err := os.Stat(exe); err != nil || !os.SameFile(start, now) {
-		return refuse(Changed, fmt.Errorf("%s was replaced while this update ran (another install?); it stays as it is", exe))
-	}
 	if u.Expect != nil {
-		if err := u.Expect(exe); err != nil {
+		if err := u.Expect(u.Exe); err != nil {
 			return refuse(Changed, err)
 		}
+	}
+	// Last before the rename: the path still names the file this update started from (a link not repointed, no
+	// file renamed over it or over its target).
+	changed := fmt.Errorf("%s was replaced while this update ran (another install?); it stays as it is", u.Exe)
+	if p, err := filepath.EvalSymlinks(u.Exe); err != nil || p != exe {
+		return refuse(Changed, changed)
+	}
+	if now, err := os.Stat(exe); err != nil || !os.SameFile(start, now) {
+		return refuse(Changed, changed)
 	}
 	if err := os.Rename(tmpName, exe); err != nil {
 		return refuse(Failed, fmt.Errorf("cannot replace %s: %v", exe, err))
