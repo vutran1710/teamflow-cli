@@ -132,7 +132,7 @@ main() {
 	echo
 	echo "Next: teamflow install -a <agent> -e <email> [-s <server>]"
 	echo "  (agents: claude-code, copilot; experimental, not yet verified on a real install: cursor, antigravity;"
-	echo "  the server defaults to https://teamflow.vutr.io)"
+	echo "  the server defaults to https://teamflow.10l.ink)"
 }
 
 # path_warning says loudly that `teamflow` run by name is not the binary just installed, and how to fix it for zsh

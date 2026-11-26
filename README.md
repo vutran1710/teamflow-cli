@@ -77,7 +77,7 @@ Every action the Teamflow web app has is a command here. The server decides who 
 commands (delete, archive, remove a member, rewrite the plan, settle a drift) ask on the terminal, or take `--yes`.
 What a command records inside an agent session is the agent's (actor AGENT); outside one, yours.
 
-`SERVER` defaults to `https://teamflow.vutr.io`. A password is never a command-line argument. A verdict is always
+`SERVER` defaults to `https://teamflow.10l.ink`. A password is never a command-line argument. A verdict is always
 recorded as yours, whether you run it, the web app records it, or your agent records it on your explicit words.
 
 ## Agents use the command line

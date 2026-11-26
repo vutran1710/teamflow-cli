@@ -17,7 +17,7 @@ import (
 const FileName = "config.json"
 
 // DefaultServer is the server used when none is given and none is configured.
-const DefaultServer = "https://teamflow.vutr.io"
+const DefaultServer = "https://teamflow.10l.ink"
 
 // Config is what config.json holds.
 type Config struct {

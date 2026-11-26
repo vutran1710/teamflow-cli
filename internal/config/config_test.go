@@ -102,7 +102,7 @@ func TestStringMasksTheKey(t *testing.T) {
 }
 
 func TestDefaultServer(t *testing.T) {
-	if DefaultServer != "https://teamflow.vutr.io" {
+	if DefaultServer != "https://teamflow.10l.ink" {
 		t.Fatal(DefaultServer)
 	}
 }
