@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/config"
+	"github.com/vutran1710/teamflow-cli/internal/protocol"
 )
 
 // failingAdapter refuses its install (as a malformed config file of the agent's own would).
@@ -317,4 +319,47 @@ func TestInstallVerboseAndJSON(t *testing.T) {
 		t.Fatalf("answer %v", got)
 	}
 	contains(t, "stderr", r.err, "✓ Claude Code is ready")
+}
+
+// Ctrl-C is caught (the terminal put back, "nothing was set up") only while install asks: the catching stops
+// before the sign-in goes to the server, so an interrupt there never claims nothing was set up after a sign-in was
+// saved. The handler's text shows the cursor again (the agents list hides it).
+func TestInstallStopsCatchingCtrlCBeforeSigningIn(t *testing.T) {
+	promptAgents(t)
+	m := newMachine(t, false)
+	m.srv.on("auth.login", "auth.login")
+	terminal(t, true, "secret-pw")
+	caught, stoppedBeforeLogin := false, false
+	old := catchInterrupt
+	catchInterrupt = func(io.Writer) func() {
+		caught = true
+		return func() { stoppedBeforeLogin = len(m.srv.sent("auth.login")) == 0 }
+	}
+	t.Cleanup(func() { catchInterrupt = old })
+	r := m.run("lan@acme.test\n1\n", "install", "-s", m.srv.URL())
+	wantCode(t, r, 0)
+	if !caught || !stoppedBeforeLogin {
+		t.Fatalf("caught %v, stopped before the sign-in %v", caught, stoppedBeforeLogin)
+	}
+	var w strings.Builder
+	interrupted(&w)
+	if got := w.String(); got != "\x1b[?25h\n"+abortedMsg+"\n" {
+		t.Fatalf("the handler says %q", got)
+	}
+}
+
+// Names from the server are one line of plain text in the welcome: control characters (an escape sequence, a line
+// break, an RTL override) never reach the terminal.
+func TestInstallWelcomeSanitizesNames(t *testing.T) {
+	got := welcome(account{name: "Lan\x1b[31m red\r\nForged: line", orgs: []string{"Acme‮evil", "Beta\x07"}},
+		"https://tf.example", []string{"claude-code"}, nil)
+	if strings.ContainsAny(got, "\x1b\r\a‮") {
+		t.Fatalf("a control character got through: %q", got)
+	}
+	if !strings.Contains(got, "You're all set, Lan! Welcome to Acme evil and Beta.") {
+		t.Fatalf("%q", got)
+	}
+	if s := signedInAs(protocol.LoginResult{Account: protocol.Account{Name: "Lan\x1b]0;x\x07", Email: "lan@acme.test"}}); strings.ContainsAny(s, "\x1b\a") {
+		t.Fatalf("%q", s)
+	}
 }

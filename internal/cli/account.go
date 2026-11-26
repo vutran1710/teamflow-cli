@@ -13,6 +13,7 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/core"
+	"github.com/vutran1710/teamflow-cli/internal/dashboard"
 	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
@@ -78,22 +79,40 @@ func signedInAs(out protocol.LoginResult) string {
 	if len(until) >= 10 {
 		until = until[:10]
 	}
-	return fmt.Sprintf("signed in as %s <%s> until %s", out.Account.Name, out.Account.Email, until)
+	return fmt.Sprintf("signed in as %s <%s> until %s", dashboard.Clean(out.Account.Name),
+		dashboard.Clean(out.Account.Email), dashboard.Clean(until))
 }
 
 // login asks for the password and signs this machine in to server as email (saying nothing when it worked).
 func (r *inv) login(server, email string, fromStdin bool) (protocol.LoginResult, int) {
+	if _, err := r.core(); err != nil {
+		return protocol.LoginResult{}, r.failErr(err)
+	}
+	pw, code := r.askPassword(fromStdin)
+	if code != 0 {
+		return protocol.LoginResult{}, code
+	}
+	return r.loginWith(server, email, pw)
+}
+
+// askPassword is the password (see password), refused when there is none.
+func (r *inv) askPassword(fromStdin bool) (string, int) {
+	pw, err := r.password(fromStdin)
+	if err != nil {
+		return "", r.failErr(err)
+	}
+	if pw == "" {
+		return "", r.fail("not signed in: no password given")
+	}
+	return pw, 0
+}
+
+// loginWith signs this machine in to server as email with the password pw (saying nothing when it worked).
+func (r *inv) loginWith(server, email, pw string) (protocol.LoginResult, int) {
 	var none protocol.LoginResult
 	c, err := r.core()
 	if err != nil {
 		return none, r.failErr(err)
-	}
-	pw, err := r.password(fromStdin)
-	if err != nil {
-		return none, r.failErr(err)
-	}
-	if pw == "" {
-		return none, r.fail("not signed in: no password given")
 	}
 	out, err := c.Login(r.ctx, server, email, pw)
 	var ae *api.APIError
@@ -417,15 +436,38 @@ func install(r *inv, a *parsed) (int, ojson.Obj) {
 		}
 	}
 	verbose := a.has("verbose")
+	// Whether to sign in is read from config.json alone, so the password is asked (echo off) before anything else
+	// runs: keys typed meanwhile would be shown, and are thrown away.
+	cfg, err := config.Load(home.Dir())
+	if err != nil {
+		return r.failErr(err), nil
+	}
+	server := serverFor(a.get("server"), cfg)
+	signIn := !cfg.SignedIn() || !strings.EqualFold(cfg.Email, email) ||
+		(a.get("server") != "" && store.NormalizeServer(a.get("server")) != store.NormalizeServer(cfg.Server))
+	pw := ""
+	if signIn {
+		if !a.has("password-stdin") {
+			beforePassword()
+			r.clearTypeAhead()
+		}
+		var code int
+		if pw, code = r.askPassword(a.has("password-stdin")); code != 0 {
+			return code, nil
+		}
+	}
+	// Past the questions: an interrupt from here on ends teamflow as any command, never claiming that nothing was
+	// set up (the sign-in may be saved by then).
+	stop()
+	stop = func() {}
 	c, err := r.core()
 	if err != nil {
 		return r.failErr(err), nil
 	}
-	server := serverFor(a.get("server"), c.Cfg)
 	name := ""
 	switch {
-	case !c.SignedIn() || !strings.EqualFold(c.Cfg.Email, email) || (a.get("server") != "" && store.NormalizeServer(a.get("server")) != store.NormalizeServer(c.Cfg.Server)):
-		out, code := r.login(server, email, a.has("password-stdin"))
+	case signIn:
+		out, code := r.loginWith(server, email, pw)
 		if code != 0 {
 			return code, nil
 		}
@@ -436,8 +478,6 @@ func install(r *inv, a *parsed) (int, ojson.Obj) {
 	case verbose:
 		r.printf("signed in as %s\n", c.Cfg.Email)
 	}
-	stop()
-	stop = func() {}
 	bin := binary()
 	// Each agent on its own: one refusing (a malformed or read-only file of its own, checked before it writes
 	// anything) leaves it untouched and the others set up.
@@ -536,12 +576,18 @@ func andList(names []string) string {
 func welcome(who account, server string, done, failed []string) string {
 	var b strings.Builder
 	first := ""
-	if f := strings.Fields(who.name); len(f) > 0 {
+	if f := strings.Fields(dashboard.Clean(who.name)); len(f) > 0 { // names from the server: plain text only
 		first = ", " + f[0]
 	}
 	where := hostOf(server) // the org when known (the server is in the web app's link below)
-	if len(who.orgs) > 0 {
-		where = andList(who.orgs)
+	var orgs []string
+	for _, o := range who.orgs {
+		if o = dashboard.Clean(o); o != "" {
+			orgs = append(orgs, o)
+		}
+	}
+	if len(orgs) > 0 {
+		where = andList(orgs)
 	}
 	if len(failed) == 0 {
 		fmt.Fprintf(&b, "\nYou're all set%s! Welcome to %s.\n\n", first, where)

@@ -44,14 +44,32 @@ var (
 				if err == nil {
 					_ = term.Restore(fd, old)
 				}
-				fmt.Fprint(w, "\n"+abortedMsg+"\n")
+				interrupted(w)
 				os.Exit(130)
 			case <-done:
 			}
 		}()
 		return func() { signal.Stop(ch); close(done) }
 	}
+	// beforePassword runs just before install clears typed-ahead keys and asks for the password (a test holds it).
+	beforePassword = func() {}
 )
+
+// interrupted is what install says on Ctrl-C while it asks: the cursor shown again (the agents list hides it), and
+// that nothing was set up.
+func interrupted(w io.Writer) { fmt.Fprint(w, "\x1b[?25h\n"+abortedMsg+"\n") }
+
+// clearTypeAhead throws away keys typed before the password is asked for: they were shown as they were typed, so
+// they must never become (part of) the password. Both what was read ahead into r.in and what waits in the
+// terminal's queue go.
+func (r *inv) clearTypeAhead() {
+	if n := r.in.Buffered(); n > 0 {
+		_, _ = r.in.Discard(n)
+	}
+	if isTerminal() {
+		_ = flushTerminalInput(int(os.Stdin.Fd()))
+	}
+}
 
 // errAborted is the person stopping install's questions (Ctrl-C, or the end of input): nothing was set up.
 var errAborted = errors.New("aborted")

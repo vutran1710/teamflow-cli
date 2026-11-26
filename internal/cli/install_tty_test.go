@@ -174,3 +174,33 @@ func TestInstallOnARealTerminal(t *testing.T) {
 	}
 	nothingDone(t, m2, cc, co, cu)
 }
+
+// Keys typed ahead, before the password is asked (they were shown as typed), are thrown away: the password is what
+// is typed at its prompt, with nothing shown.
+func TestInstallPasswordIgnoresTypeAhead(t *testing.T) {
+	promptAgents(t)
+	m := newMachine(t, false)
+	m.srv.on("auth.login", "auth.login")
+	realTerminal(t)
+	ahead := make(chan struct{})
+	old := beforePassword
+	beforePassword = func() { <-ahead } // the moment between the agents list and the password prompt
+	t.Cleanup(func() { beforePassword = old })
+	r := startTTY(t, m, "install", "-s", m.srv.URL())
+	r.await("Email: ", "lan@acme.test\r")
+	r.await("enter confirm", "\r")
+	r.await(pickQuestion+" Claude Code", "typed-too-soon\r")
+	time.Sleep(100 * time.Millisecond) // the keys are in the terminal's queue
+	close(ahead)
+	r.await("Password: ", "secret-pw\r")
+	code, screen := r.wait()
+	if code != 0 {
+		t.Fatalf("exit %d\n%q\n%s", code, screen, r.out.String())
+	}
+	if p := params(t, onlyCall(t, m.srv, "auth.login")); p["password"] != "secret-pw" {
+		t.Fatalf("signed in with %q", p["password"])
+	}
+	if strings.Contains(screen, "secret-pw") {
+		t.Fatal("the password was echoed")
+	}
+}
