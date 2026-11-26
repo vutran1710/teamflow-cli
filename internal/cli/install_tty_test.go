@@ -102,10 +102,20 @@ func (r *ttyRun) wait() (int, string) {
 	if !reflect.DeepEqual(r.before, after) {
 		r.t.Fatal("the terminal was not put back as it was")
 	}
+	// What install wrote last may still be in the pty, not yet read off its other end: reading the screen as soon as
+	// install ends could miss its last line ("Aborted: …"). A marker written now comes out after all of it (a pty
+	// keeps order), so once the marker shows, the screen is complete.
+	if _, err := io.WriteString(r.tty, ttyEnd); err != nil {
+		r.t.Fatal(err)
+	}
+	r.await(ttyEnd, "")
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.code, r.screen.String()
+	return r.code, strings.Replace(r.screen.String(), ttyEnd, "", 1)
 }
+
+// ttyEnd marks the end of what install wrote on the terminal.
+const ttyEnd = "<end of the test's install run>"
 
 // realTerminal undoes newMachine's stand-ins: the questions see the real (pseudo-)terminal.
 func realTerminal(t *testing.T) {
