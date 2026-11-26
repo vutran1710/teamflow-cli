@@ -22,7 +22,7 @@ main() {
 
 	REPO="vutran1710/teamflow-cli"
 	# The release key (minisign, ed25519): the same as internal/selfupdate/pubkey.go. Empty until the first release.
-	PUBKEY=""
+	PUBKEY="RWRQtNXqbjLlVR4Zk925MGQ1hGBxx+7TI3ebJgFrY7oPQSLRwnbswr57"
 
 	case "$(uname -s)" in
 	Darwin) os=darwin ;;
