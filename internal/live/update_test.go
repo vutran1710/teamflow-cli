@@ -133,7 +133,7 @@ func TestScheduledUpdateDoesNothingWhenNotNewer(t *testing.T) {
 			rel := selfupdatetest.New(t, tag, "")
 			c, _, exe, o, l := updating(t, rel)
 			wait, stop := start(t, c, o)
-			eventually(t, "a check", func() bool { return rel.Asked() == 1 })
+			eventually(t, "a check", func() bool { return strings.Contains(l.String(), "is up to date") })
 			time.Sleep(10 * o.Rescan)
 			stop()
 			if err := wait(); err != nil {
@@ -155,7 +155,7 @@ func TestScheduledUpdateBadSignatureRetriesNextCycle(t *testing.T) {
 	rel.SignedByAnotherKey()
 	c, clk, exe, o, l := updating(t, rel)
 	wait, stop := start(t, c, o)
-	eventually(t, "a check", func() bool { return rel.Asked() == 1 })
+	eventually(t, "a check, refused", func() bool { return strings.Contains(l.String(), "failed its signature check") })
 	time.Sleep(10 * o.Rescan)
 	if rel.Asked() != 1 || binaryOf(t, exe) != "teamflow 0.1.0" || rel.Downloaded() {
 		t.Fatalf("asked %d", rel.Asked())
@@ -170,13 +170,15 @@ func TestScheduledUpdateBadSignatureRetriesNextCycle(t *testing.T) {
 		t.Fatal("checked again before the next cycle")
 	}
 	clk.add(time.Hour)
-	eventually(t, "the next cycle's check", func() bool { return rel.Asked() == 2 })
+	eventually(t, "the next cycle's check, refused", func() bool {
+		return strings.Count(l.String(), "failed its signature check") == 2 // its outcome, not only its request
+	})
 	stop()
 	if err := wait(); err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(l.String(), "failed its signature check"); n != 2 {
-		t.Fatalf("logged %d refusals: %s", n, l)
+	if rel.Asked() != 2 || binaryOf(t, exe) != "teamflow 0.1.0" {
+		t.Fatalf("asked %d: %s", rel.Asked(), l)
 	}
 }
 
@@ -187,11 +189,11 @@ func TestScheduledUpdateOfflineOrRateLimitedNoStorm(t *testing.T) {
 		rel.Answer(http.StatusTooManyRequests)
 		c, _, exe, o, l := updating(t, rel)
 		wait, stop := start(t, c, o)
-		eventually(t, "a check", func() bool { return rel.Asked() == 1 })
+		eventually(t, "a check", func() bool { return strings.Contains(l.String(), "rate limit") })
 		time.Sleep(20 * o.Rescan)
 		stop()
 		_ = wait()
-		if rel.Asked() != 1 || binaryOf(t, exe) != "teamflow 0.1.0" || !strings.Contains(l.String(), "rate limit") {
+		if rel.Asked() != 1 || binaryOf(t, exe) != "teamflow 0.1.0" {
 			t.Fatalf("asked %d; %s", rel.Asked(), l)
 		}
 	})
@@ -342,7 +344,7 @@ func TestScheduledUpdateRestartKeepsTheLastCheck(t *testing.T) {
 	rel := selfupdatetest.New(t, "v0.1.0", "")
 	c, clk, _, o, _ := updating(t, rel)
 	wait, stop := start(t, c, o)
-	eventually(t, "a check", func() bool { return rel.Asked() == 1 })
+	eventually(t, "a check", func() bool { return c.St.UpdateCheckedAt() != (time.Time{}) && rel.Asked() == 1 })
 	stop()
 	_ = wait()
 	clk.add(time.Hour)
