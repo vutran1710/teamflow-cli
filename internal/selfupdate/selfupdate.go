@@ -7,6 +7,10 @@
 // (atomic in one folder). Any failure refuses and leaves the old binary as it was.
 //
 // A binary reached through a symlink: the file the link resolves to is replaced, and the link is left alone.
+//
+// Only a newer release is installed: never the same or an older one (no downgrade), never a pre-release or a draft,
+// never a tag that is not a release version (vX.Y.Z). A build that is not a release version itself (dev) takes the
+// latest release. `teamflow self-update`, /teamf upgrade and the background sync's scheduled update all run this.
 package selfupdate
 
 import (
@@ -57,7 +61,49 @@ type Updater struct {
 	GOARCH    string
 	Out       io.Writer // what is said on success
 	Replaced  func()    // when set, called once the new binary is in place (never when nothing changed)
+	// Hold, when set, is held while the new binary is renamed into place (the background sync takes the outbox's
+	// sender locks: never a swap in the middle of a send). An error refuses the update, nothing changed.
+	Hold func(ctx context.Context) (release func(), err error)
 }
+
+// Result is what an update did.
+type Result struct {
+	Current string // the running build's version, as given
+	Latest  string // the newest release's tag ("v0.2.0"; "" when GitHub was not reached)
+	Updated bool   // the binary was replaced by Latest's
+	Exe     string // the file replaced (a link resolved)
+}
+
+// Kind is why an update was refused.
+type Kind int
+
+const (
+	Failed      Kind = iota // any other reason
+	Offline                 // GitHub could not be reached
+	RateLimited             // GitHub's API rate limit for this network
+	NotWritable             // the binary's folder can't be written
+	Unverified              // the signature, the tag it was signed for or the checksum did not check out
+)
+
+// Error is a refused update; nothing was changed.
+type Error struct {
+	Kind Kind
+	Err  error
+}
+
+func (e *Error) Error() string { return e.Err.Error() }
+func (e *Error) Unwrap() error { return e.Err }
+
+// KindOf is why err refused an update (Failed for an error that is not an *Error).
+func KindOf(err error) Kind {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Kind
+	}
+	return Failed
+}
+
+func refuse(k Kind, err error) error { return &Error{Kind: k, Err: err} }
 
 // Default is the updater for the running binary.
 func Default(out io.Writer) *Updater {
@@ -82,8 +128,10 @@ func Run(ctx context.Context, current string) error {
 func AssetName(goos, goarch string) string { return "teamflow_" + goos + "_" + goarch + ".tar.gz" }
 
 type ghRelease struct {
-	Tag    string `json:"tag_name"`
-	Assets []struct {
+	Tag        string `json:"tag_name"`
+	Prerelease bool   `json:"prerelease"`
+	Draft      bool   `json:"draft"`
+	Assets     []struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -91,35 +139,40 @@ type ghRelease struct {
 
 // Update replaces u.Exe with the latest release, or refuses and leaves it as it was.
 func (u *Updater) Update(ctx context.Context, current string) error {
+	_, err := u.Install(ctx, current)
+	return err
+}
+
+// Install replaces u.Exe with the latest release when it is newer than current, or refuses (an *Error) and leaves
+// it as it was.
+func (u *Updater) Install(ctx context.Context, current string) (Result, error) {
+	res := Result{Current: current}
 	key, err := minisign.ParsePublicKey(u.PublicKey)
 	if strings.TrimSpace(u.PublicKey) == "" || err != nil {
-		return fmt.Errorf("this build has no release key, so it cannot check a release's signature; download the new release from %s", ReleasesPage)
+		return res, refuse(Unverified, fmt.Errorf("this build has no release key, so it cannot check a release's signature; download the new release from %s", ReleasesPage))
 	}
 	exe, err := filepath.EvalSymlinks(u.Exe)
 	if err != nil || u.Exe == "" {
-		return errors.New("cannot find the running binary on disk; download the new release from " + ReleasesPage)
+		return res, refuse(Failed, errors.New("cannot find the running binary on disk; download the new release from "+ReleasesPage))
 	}
+	res.Exe = exe
 	dir := filepath.Dir(exe)
 	if err := writable(dir); err != nil {
-		return fmt.Errorf("cannot write to %s (where teamflow is installed): %v; reinstall with install.sh, or run self-update as a user who can write there", dir, err)
+		return res, refuse(NotWritable, fmt.Errorf("cannot write to %s (where teamflow is installed): %v; reinstall with install.sh, or run self-update as a user who can write there", dir, err))
 	}
-
-	client := http.Client{Timeout: 5 * time.Minute}
-	if u.Client != nil {
-		client = *u.Client
-	}
-	client.CheckRedirect = httpsOnly
-	c := *u // the caller's Updater (and its Client) stay as they were
-	c.Client = &client
-	u = &c
-
+	u = u.withClient()
 	rel, err := u.latest(ctx)
 	if err != nil {
-		return err
+		return res, err
+	}
+	res.Latest = rel.Tag
+	if rel.Prerelease || rel.Draft {
+		fmt.Fprintf(u.Out, "the latest release (%s) is a pre-release; teamflow %s stays\n", rel.Tag, current)
+		return res, nil
 	}
 	if !newer(rel.Tag, current) {
 		fmt.Fprintf(u.Out, "teamflow %s is the latest release (%s); nothing to update\n", current, rel.Tag)
-		return nil
+		return res, nil
 	}
 	urls := map[string]string{}
 	for _, a := range rel.Assets {
@@ -127,54 +180,87 @@ func (u *Updater) Update(ctx context.Context, current string) error {
 	}
 	name := AssetName(u.GOOS, u.GOARCH)
 	if urls[name] == "" {
-		return fmt.Errorf("release %s has no build for %s/%s", rel.Tag, u.GOOS, u.GOARCH)
+		return res, refuse(Failed, fmt.Errorf("release %s has no build for %s/%s", rel.Tag, u.GOOS, u.GOARCH))
 	}
 	for _, need := range []string{"checksums.txt", "checksums.txt.minisig"} {
 		if urls[need] == "" {
-			return fmt.Errorf("release %s has no %s; refusing an unsigned release", rel.Tag, need)
+			return res, refuse(Unverified, fmt.Errorf("release %s has no %s; refusing an unsigned release", rel.Tag, need))
 		}
 	}
 
 	sums, err := u.fetch(ctx, urls["checksums.txt"], maxSums)
 	if err != nil {
-		return err
+		return res, err
 	}
 	sig, err := u.fetch(ctx, urls["checksums.txt.minisig"], maxSig)
 	if err != nil {
-		return err
+		return res, err
 	}
 	comment, err := minisign.VerifyComment(key, sums, sig)
 	if err != nil {
-		return fmt.Errorf("release %s's checksums.txt failed its signature check (%v); refusing it", rel.Tag, err)
+		return res, refuse(Unverified, fmt.Errorf("release %s's checksums.txt failed its signature check (%v); refusing it", rel.Tag, err))
 	}
 	if err := CheckSignedTag(comment, rel.Tag); err != nil {
-		return fmt.Errorf("release %s: %v; refusing it", rel.Tag, err)
+		return res, refuse(Unverified, fmt.Errorf("release %s: %v; refusing it", rel.Tag, err))
 	}
 	want, err := checksumFor(sums, name)
 	if err != nil {
-		return err
+		return res, refuse(Unverified, err)
 	}
 
 	archive, err := u.fetch(ctx, urls[name], maxArchive)
 	if err != nil {
-		return err
+		return res, err
 	}
 	got := sha256.Sum256(archive)
 	if hex.EncodeToString(got[:]) != want {
-		return fmt.Errorf("%s does not match its signed checksum (a damaged or changed download); refusing it", name)
+		return res, refuse(Unverified, fmt.Errorf("%s does not match its signed checksum (a damaged or changed download); refusing it", name))
 	}
 	binary, err := extract(archive)
 	if err != nil {
-		return fmt.Errorf("%s: %v", name, err)
+		return res, refuse(Failed, fmt.Errorf("%s: %v", name, err))
 	}
+	if err := u.swap(ctx, exe, binary, rel.Tag); err != nil {
+		return res, err
+	}
+	res.Updated = true
+	fmt.Fprintf(u.Out, "teamflow updated: %s -> %s (%s)\n", current, strings.TrimPrefix(rel.Tag, "v"), exe)
+	if u.Replaced != nil {
+		u.Replaced()
+	}
+	return res, nil
+}
 
+// Latest is the newest release's tag, as GitHub names it (an *Error when it can't be asked).
+func (u *Updater) Latest(ctx context.Context) (string, error) {
+	rel, err := u.withClient().latest(ctx)
+	return rel.Tag, err
+}
+
+// withClient is a copy of u whose client follows https redirects only (the caller's Updater and Client stay as
+// they were).
+func (u *Updater) withClient() *Updater {
+	client := http.Client{Timeout: 5 * time.Minute}
+	if u.Client != nil {
+		client = *u.Client
+	}
+	client.CheckRedirect = httpsOnly
+	c := *u
+	c.Client = &client
+	return &c
+}
+
+// swap writes binary into a temporary file beside exe, checks it runs and names tag, then renames it over exe
+// (atomic in one folder), holding u.Hold meanwhile. Any failure leaves exe as it was and nothing beside it.
+func (u *Updater) swap(ctx context.Context, exe string, binary []byte, tag string) error {
+	dir := filepath.Dir(exe)
 	mode := os.FileMode(0o755)
 	if fi, err := os.Stat(exe); err == nil {
 		mode = fi.Mode().Perm() | 0o100
 	}
 	tmp, err := os.CreateTemp(dir, ".teamflow-update-*")
 	if err != nil {
-		return fmt.Errorf("cannot write to %s: %v", dir, err)
+		return refuse(NotWritable, fmt.Errorf("cannot write to %s: %v", dir, err))
 	}
 	tmpName := tmp.Name()
 	keep := false
@@ -185,29 +271,32 @@ func (u *Updater) Update(ctx context.Context, current string) error {
 	}()
 	if _, err := tmp.Write(binary); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("cannot write the new binary: %v", err)
+		return refuse(Failed, fmt.Errorf("cannot write the new binary: %v", err))
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("cannot write the new binary: %v", err)
+		return refuse(Failed, fmt.Errorf("cannot write the new binary: %v", err))
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("cannot write the new binary: %v", err)
+		return refuse(Failed, fmt.Errorf("cannot write the new binary: %v", err))
 	}
 	if err := os.Chmod(tmpName, mode); err != nil {
-		return fmt.Errorf("cannot write the new binary: %v", err)
+		return refuse(Failed, fmt.Errorf("cannot write the new binary: %v", err))
 	}
-	if err := checkRuns(ctx, tmpName, rel.Tag); err != nil {
-		return err
+	if err := checkRuns(ctx, tmpName, tag); err != nil {
+		return refuse(Failed, err)
+	}
+	if u.Hold != nil {
+		release, err := u.Hold(ctx)
+		if err != nil {
+			return refuse(Failed, fmt.Errorf("the new binary was not put in place: %v", err))
+		}
+		defer release()
 	}
 	if err := os.Rename(tmpName, exe); err != nil {
-		return fmt.Errorf("cannot replace %s: %v", exe, err)
+		return refuse(Failed, fmt.Errorf("cannot replace %s: %v", exe, err))
 	}
 	keep = true
-	fmt.Fprintf(u.Out, "teamflow updated: %s -> %s (%s)\n", current, strings.TrimPrefix(rel.Tag, "v"), exe)
-	if u.Replaced != nil {
-		u.Replaced()
-	}
 	return nil
 }
 
@@ -215,13 +304,13 @@ func (u *Updater) Update(ctx context.Context, current string) error {
 func (u *Updater) latest(ctx context.Context) (ghRelease, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(u.API, "/")+"/repos/"+Repo+"/releases/latest", nil)
 	if err != nil {
-		return ghRelease{}, err
+		return ghRelease{}, refuse(Failed, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "teamflow-self-update")
 	resp, err := u.Client.Do(req)
 	if err != nil {
-		return ghRelease{}, fmt.Errorf("cannot reach GitHub to find the latest release (offline?): %v", unwrapURL(err))
+		return ghRelease{}, refuse(Offline, fmt.Errorf("cannot reach GitHub to find the latest release (offline?): %v", unwrapURL(err)))
 	}
 	defer resp.Body.Close()
 	switch {
@@ -231,15 +320,15 @@ func (u *Updater) latest(ctx context.Context) (ghRelease, error) {
 		if s, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
 			when = "after " + time.Unix(s, 0).Format(time.Kitchen)
 		}
-		return ghRelease{}, fmt.Errorf("GitHub's API rate limit is reached for this network; try again %s, or download the new release from %s", when, ReleasesPage)
+		return ghRelease{}, refuse(RateLimited, fmt.Errorf("GitHub's API rate limit is reached for this network; try again %s, or download the new release from %s", when, ReleasesPage))
 	case resp.StatusCode == http.StatusNotFound:
-		return ghRelease{}, errors.New("no release is published yet")
+		return ghRelease{}, refuse(Failed, errors.New("no release is published yet"))
 	case resp.StatusCode != http.StatusOK:
-		return ghRelease{}, fmt.Errorf("GitHub answered %s when asked for the latest release; try again later", resp.Status)
+		return ghRelease{}, refuse(Failed, fmt.Errorf("GitHub answered %s when asked for the latest release; try again later", resp.Status))
 	}
 	var rel ghRelease
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPI)).Decode(&rel); err != nil || rel.Tag == "" {
-		return ghRelease{}, errors.New("GitHub's answer about the latest release could not be read; try again later")
+		return ghRelease{}, refuse(Failed, errors.New("GitHub's answer about the latest release could not be read; try again later"))
 	}
 	return rel, nil
 }
@@ -248,27 +337,27 @@ func (u *Updater) latest(ctx context.Context) (ghRelease, error) {
 func (u *Updater) fetch(ctx context.Context, link string, limit int64) ([]byte, error) {
 	name := filepath.Base(link)
 	if p, err := url.Parse(link); err != nil || p.Scheme != "https" {
-		return nil, fmt.Errorf("the link for %s is not https; refusing it", name)
+		return nil, refuse(Unverified, fmt.Errorf("the link for %s is not https; refusing it", name))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
 	if err != nil {
-		return nil, err
+		return nil, refuse(Failed, err)
 	}
 	req.Header.Set("User-Agent", "teamflow-self-update")
 	resp, err := u.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("download of %s failed: %v", name, unwrapURL(err))
+		return nil, refuse(Offline, fmt.Errorf("download of %s failed: %v", name, unwrapURL(err)))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download of %s failed: %s", name, resp.Status)
+		return nil, refuse(Failed, fmt.Errorf("download of %s failed: %s", name, resp.Status))
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, fmt.Errorf("download of %s failed: %v", name, err)
+		return nil, refuse(Offline, fmt.Errorf("download of %s failed: %v", name, err))
 	}
 	if int64(len(b)) > limit {
-		return nil, fmt.Errorf("download of %s is larger than %d bytes; refusing it", name, limit)
+		return nil, refuse(Failed, fmt.Errorf("download of %s is larger than %d bytes; refusing it", name, limit))
 	}
 	return b, nil
 }
@@ -373,13 +462,26 @@ func writable(dir string) error {
 	return os.Remove(name)
 }
 
-// newer says whether tag is a newer release than current. A build that is not a release version (dev, a commit)
-// is always updated; the same or a newer version is not.
+// Newer says whether tag is a release newer than current (see newer).
+func Newer(tag, current string) bool { return newer(tag, current) }
+
+// IsRelease says whether v is a release version (v1.2.3 or 1.2.3), not a development build (dev, a commit).
+func IsRelease(v string) bool {
+	_, ok := semver(v)
+	return ok
+}
+
+// newer says whether tag is a newer release than current. A tag that is not a release version (v0.2.0-rc1) never
+// is; a build that is not a release version (dev, a commit) takes any release; the same or an older one is never
+// newer (no downgrade).
 func newer(tag, current string) bool {
 	t, ok1 := semver(tag)
 	c, ok2 := semver(current)
-	if !ok1 || !ok2 {
-		return strings.TrimPrefix(tag, "v") != strings.TrimPrefix(current, "v")
+	switch {
+	case !ok1:
+		return false
+	case !ok2:
+		return true
 	}
 	for i := range t {
 		if t[i] != c[i] {

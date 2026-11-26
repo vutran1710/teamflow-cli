@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -93,6 +94,7 @@ type release struct {
 	lieLength  string            // asset whose connection is cut short of its Content-Length
 	plainURL   bool              // asset URLs given as http://
 	redirectTo string            // asset whose https link redirects to plain http
+	prerelease bool              // the latest release is marked a pre-release
 }
 
 // signed is the trusted comment the release workflow writes (tools/signsums).
@@ -151,7 +153,7 @@ func (r *release) serve(w http.ResponseWriter, req *http.Request) {
 		for name, body := range r.assets {
 			as = append(as, a{Name: name, URL: base + "/dl/" + name, Size: len(body)})
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": r.tag, "assets": as})
+		_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": r.tag, "prerelease": r.prerelease, "assets": as})
 		return
 	}
 	name := strings.TrimPrefix(req.URL.Path, "/dl/")
@@ -532,5 +534,162 @@ func TestSelfUpdateRefusesSignatureForAnotherTag(t *testing.T) {
 				t.Fatal("downloaded the archive")
 			}
 		})
+	}
+}
+
+// Install says what it did: the versions, whether the binary was replaced, and which file.
+func TestInstallResult(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ := rel.updater(t, pub)
+	res, err := u.Install(context.Background(), "0.1.0")
+	real, _ := filepath.EvalSymlinks(exe)
+	if err != nil || res != (Result{Current: "0.1.0", Latest: "v0.2.0", Updated: true, Exe: real}) {
+		t.Fatalf("%+v %v", res, err)
+	}
+	res, err = u.Install(context.Background(), "0.2.0")
+	if err != nil || res.Updated || res.Latest != "v0.2.0" {
+		t.Fatalf("up to date: %+v %v", res, err)
+	}
+	if tag, err := u.Latest(context.Background()); tag != "v0.2.0" || err != nil {
+		t.Fatalf("Latest %q %v", tag, err)
+	}
+}
+
+// Never a downgrade, never a pre-release, never a tag that is not a release version: nothing downloaded or changed.
+func TestInstallSkipsPrereleasesAndDowngrades(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	for name, c := range map[string]struct {
+		tag, current string
+		pre          bool
+	}{
+		"older release":       {"v0.1.0", "0.2.0", false},
+		"same release":        {"v0.2.0", "v0.2.0", false},
+		"marked pre-release":  {"v0.3.0", "0.2.0", true},
+		"a pre-release tag":   {"v0.3.0-rc1", "0.2.0", false},
+		"not a version":       {"nightly", "0.2.0", false},
+		"pre-release for dev": {"v0.3.0-rc1", "dev", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rel := newRelease(t, sk, c.tag, newScript)
+			rel.prerelease = c.pre
+			u, exe, _ := rel.updater(t, pub)
+			res, err := u.Install(context.Background(), c.current)
+			if err != nil || res.Updated {
+				t.Fatalf("%+v %v", res, err)
+			}
+			untouched(t, exe)
+			if rel.fetched(asset()) || rel.fetched("checksums.txt") {
+				t.Fatal("downloaded a release it does not install")
+			}
+		})
+	}
+}
+
+// Each refusal says why, as a Kind: offline, rate limited, not writable, and every check of the release.
+func TestInstallRefusalKinds(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	other, _ := throwawayKey(t)
+	cases := map[string]struct {
+		edit func(r *release, u *Updater)
+		kind Kind
+	}{
+		"offline": {func(_ *release, u *Updater) {
+			l, _ := net.Listen("tcp", "127.0.0.1:0")
+			u.API = "https://" + l.Addr().String()
+			_ = l.Close()
+		}, Offline},
+		"rate limited": {func(r *release, _ *Updater) { r.apiStatus = http.StatusTooManyRequests }, RateLimited},
+		"bad signature": {func(r *release, _ *Updater) {
+			r.assets["checksums.txt.minisig"] = minisign.Sign(other, r.sums, signed(r.tag))
+		}, Unverified},
+		"wrong tag": {func(r *release, _ *Updater) {
+			r.assets["checksums.txt.minisig"] = minisign.Sign(sk, r.sums, signed("v0.1.9"))
+		}, Unverified},
+		"bad checksum":   {func(r *release, _ *Updater) { r.assets[asset()] = tarGz(t, map[string]string{"teamflow": "evil"}) }, Unverified},
+		"unsigned":       {func(r *release, _ *Updater) { delete(r.assets, "checksums.txt.minisig") }, Unverified},
+		"no release key": {func(_ *release, u *Updater) { u.PublicKey = "" }, Unverified},
+		"no release yet": {func(r *release, _ *Updater) { r.apiStatus = http.StatusNotFound }, Failed},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			rel := newRelease(t, sk, "v0.2.0", newScript)
+			u, exe, _ := rel.updater(t, pub)
+			c.edit(rel, u)
+			res, err := u.Install(context.Background(), "0.1.0")
+			if err == nil || KindOf(err) != c.kind || res.Updated {
+				t.Fatalf("kind %v (want %v): %+v %v", KindOf(err), c.kind, res, err)
+			}
+			untouched(t, exe)
+		})
+	}
+	if os.Geteuid() != 0 {
+		rel := newRelease(t, sk, "v0.2.0", newScript)
+		u, exe, _ := rel.updater(t, pub)
+		dir := filepath.Dir(exe)
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		if _, err := u.Install(context.Background(), "0.1.0"); KindOf(err) != NotWritable {
+			t.Fatalf("read-only folder: %v", err)
+		}
+		if tag, err := u.Latest(context.Background()); tag != "v0.2.0" || err != nil { // the version can still be named
+			t.Fatalf("Latest %q %v", tag, err)
+		}
+	}
+	if KindOf(errors.New("plain")) != Failed {
+		t.Fatal("a plain error is not Failed")
+	}
+}
+
+// Hold is held while the new binary is renamed into place, after every check, and released after; a Hold that
+// can't be taken (a send in flight past its wait) refuses: the old binary stays, nothing left beside it.
+func TestInstallHoldsAroundTheSwap(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ := rel.updater(t, pub)
+	var order []string
+	u.Hold = func(context.Context) (func(), error) {
+		b, _ := os.ReadFile(exe)
+		order = append(order, "hold:"+strings.TrimSpace(string(b)))
+		return func() {
+			b, _ := os.ReadFile(exe)
+			order = append(order, "release:"+strings.TrimSpace(string(b)))
+		}, nil
+	}
+	if _, err := u.Install(context.Background(), "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"hold:" + strings.TrimSpace(oldScript), "release:" + strings.TrimSpace(newScript)}
+	if strings.Join(order, "|") != strings.Join(want, "|") {
+		t.Fatalf("order %q", order)
+	}
+
+	rel = newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ = rel.updater(t, pub)
+	u.Hold = func(context.Context) (func(), error) { return nil, errors.New("another teamflow is sending") }
+	u.Replaced = func() { t.Error("Replaced without the hold") }
+	_, err := u.Install(context.Background(), "0.1.0")
+	if KindOf(err) != Failed || !strings.Contains(err.Error(), "another teamflow is sending") {
+		t.Fatalf("%v", err)
+	}
+	untouched(t, exe)
+}
+
+func TestNewerAndIsRelease(t *testing.T) {
+	for _, c := range []struct {
+		tag, current string
+		want         bool
+	}{{"v0.1.1", "0.1.0", true}, {"v0.1.1", "v0.1.1", false}, {"v0.1.0", "0.1.1", false}, {"v0.10.0", "0.9.9", true},
+		{"v1.0.0-rc1", "0.9.0", false}, {"v0.1.1", "dev", true}, {"nightly", "dev", false}} {
+		if got := Newer(c.tag, c.current); got != c.want {
+			t.Errorf("Newer(%s, %s) = %v", c.tag, c.current, got)
+		}
+	}
+	for v, want := range map[string]bool{"0.1.0": true, "v0.1.0": true, "dev": false, "ci-1a2b3c4": false, "0.1": false, "v1.0.0-rc1": false} {
+		if IsRelease(v) != want {
+			t.Errorf("IsRelease(%s) != %v", v, want)
+		}
 	}
 }
