@@ -15,9 +15,12 @@ package live
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -66,13 +69,17 @@ func (a *AutoUpdate) withDefaults() *AutoUpdate {
 	return &c
 }
 
-// Updated ends Run after the scheduled self-update put a new binary in place: the caller restarts the sync on Exe.
+// Updated ends Run when the binary on disk is newer than this sync: the scheduled self-update put a release there
+// (Version), or another install or update did (Version ""). The caller restarts the sync on Exe.
 type Updated struct {
 	Exe     string // the binary to run (as the sync was started)
-	Version string // the release now there (v0.1.2)
+	Version string // the release the scheduled update put there ("": not this sync's doing)
 }
 
 func (u *Updated) Error() string {
+	if u.Version == "" {
+		return "the teamflow on disk changed: the background sync restarts on it"
+	}
 	return "teamflow was updated to " + u.Version + ": the background sync restarts on the new binary"
 }
 
@@ -94,6 +101,32 @@ type updater struct {
 	last   time.Time // the last check (the store's, then each made)
 	jitter time.Duration
 	loaded bool
+	exe    string      // the binary this sync started from (a link resolved) …
+	start  os.FileInfo // … as it was then (nil: it could not be read)
+}
+
+// newUpdater is the schedule of a sync started now from a.Updater.Exe: that binary's identity is recorded, so an
+// update never replaces another binary put there since.
+func newUpdater(a *AutoUpdate) *updater {
+	u := &updater{a: a.withDefaults()}
+	if exe, err := filepath.EvalSymlinks(a.Updater.Exe); err == nil && a.Updater.Exe != "" {
+		if fi, err := os.Stat(exe); err == nil {
+			u.exe, u.start = exe, fi
+		}
+	}
+	return u
+}
+
+// same says whether the binary on disk is still the one this sync started from: the same file, saying the same
+// version.
+func (u *updater) same(string) error {
+	if u.start == nil {
+		return errors.New("the binary this sync started from could not be read")
+	}
+	if now, err := os.Stat(u.exe); err != nil || !os.SameFile(u.start, now) {
+		return errors.New("the binary on disk is not the one this background sync started from")
+	}
+	return selfupdate.ExpectVersion(u.a.Current)(u.exe)
 }
 
 func (u *updater) draw() {
@@ -135,6 +168,9 @@ func (r *runner) selfUpdate(ctx context.Context) *Updated {
 		r.logOnce("auto-update dev", "teamflow sync: this build (%s) is not a release: no scheduled update", u.a.Current)
 		return nil
 	}
+	if err := u.same(""); err != nil { // another binary was put there since this sync started: it is not ours to replace
+		return r.restartOnDisk(err)
+	}
 	// Recorded first, whatever comes of it: nothing is tried again before the next check.
 	if err := r.tx(func(tx *store.Tx) error { return tx.SetUpdateCheckedAt(now) }); err != nil {
 		r.o.Logf("teamflow sync: could not record the update check: %v", err)
@@ -143,7 +179,8 @@ func (r *runner) selfUpdate(ctx context.Context) *Updated {
 	u.last = now
 	u.draw()
 	up := *u.a.Updater
-	up.Out, up.Replaced = io.Discard, nil
+	up.Out, up.Replaced, up.Expect = io.Discard, nil, u.same
+	up.LockFile = filepath.Join(r.dir, "update.lock") // takes turns with self-update and /teamf upgrade
 	up.Hold = func(ctx context.Context) (func(), error) { return r.holdSenders(ctx, u.a.LockWait) }
 	uctx, cancel := context.WithTimeout(ctx, updateTimeout)
 	defer cancel()
@@ -162,6 +199,8 @@ func (r *runner) selfUpdate(ctx context.Context) *Updated {
 		return &Updated{Exe: exe, Version: res.Latest}
 	case err == nil:
 		r.o.Logf("teamflow sync: teamflow %s is up to date (the latest release is %s)", u.a.Current, res.Latest)
+	case selfupdate.KindOf(err) == selfupdate.Changed:
+		return r.restartOnDisk(err)
 	case selfupdate.KindOf(err) == selfupdate.NotWritable:
 		r.o.Logf("teamflow sync: a new release can't be installed here: %s", home.Mask(err.Error()))
 		latest, lerr := up.Latest(uctx)
@@ -177,6 +216,17 @@ func (r *runner) selfUpdate(ctx context.Context) *Updated {
 			u.a.Every.Round(time.Hour))
 	}
 	return nil
+}
+
+// restartOnDisk ends the run so the sync restarts on the binary now on disk (put there by another install or
+// update since this sync started): nothing is replaced, nothing is told.
+func (r *runner) restartOnDisk(why error) *Updated {
+	r.o.Logf("teamflow sync: %s; restarting on it", home.Mask(why.Error()))
+	exe := r.update.a.Updater.Exe
+	if exe == "" {
+		exe = r.update.exe
+	}
+	return &Updated{Exe: exe}
 }
 
 // holdSenders takes the sender lock of every outbox of this sign-in, waiting up to wait for each: no send is in

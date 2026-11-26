@@ -23,6 +23,7 @@ import (
 
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/core"
+	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"github.com/vutran1710/teamflow-cli/internal/selfupdate/selfupdatetest"
 	"github.com/vutran1710/teamflow-cli/internal/sendlock"
 	"github.com/vutran1710/teamflow-cli/internal/store"
@@ -388,4 +389,134 @@ func TestUpdateSchedule(t *testing.T) {
 		a.Jitter != time.Hour || a.LockWait != 30*time.Second {
 		t.Fatalf("defaults %+v", a)
 	}
+}
+
+// The binary on disk is no longer the one this sync started from (a developer's `go build -o …`, a newer install):
+// the scheduled update never replaces it; the sync just restarts onto it, asking GitHub nothing.
+func TestScheduledUpdateNeverReplacesABinaryChangedOnDisk(t *testing.T) {
+	rel := selfupdatetest.New(t, "v0.1.1", "")
+	c, _, exe, o, l := updating(t, rel)
+	wait, _ := start(t, c, o)
+	eventually(t, "running", func() bool { _, ok := Status(c.Dir); return ok })
+	if err := os.WriteFile(exe, []byte(selfupdatetest.Script("dev")), 0o755); err != nil { // the same file, rewritten
+		t.Fatal(err)
+	}
+	// (started before the rewrite: First is a nanosecond, so the check may already be under way; either way:)
+	err := wait()
+	var up *Updated
+	if !errors.As(err, &up) || up.Exe != exe || up.Version != "" {
+		t.Fatalf("Run ended with %v", err)
+	}
+	if got := binaryOf(t, exe); got != "teamflow dev" {
+		t.Fatalf("the binary on disk was replaced: %q", got)
+	}
+	if strings.Contains(l.String(), "updated teamflow") || len(noticesOf(t, c, "s1")) != 0 {
+		t.Fatalf("told of an update: %s", l)
+	}
+}
+
+// Changed on disk before the first check: nothing is asked of GitHub at all.
+func TestScheduledUpdateChecksTheBinaryBeforeAsking(t *testing.T) {
+	rel := selfupdatetest.New(t, "v0.1.1", "")
+	c, _, exe, o, l := updating(t, rel)
+	o.AutoUpdate.First = 300 * time.Millisecond // the clock ticks a microsecond a read: never, unless moved
+	clk := c.Now
+	moved := false
+	var mu sync.Mutex
+	c.Now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		if moved {
+			return clk().Add(time.Hour)
+		}
+		return clk()
+	}
+	wait, _ := start(t, c, o)
+	eventually(t, "running", func() bool { _, ok := Status(c.Dir); return ok })
+	if err := os.WriteFile(exe, []byte(selfupdatetest.Script("dev")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	moved = true
+	mu.Unlock()
+	var up *Updated
+	if err := wait(); !errors.As(err, &up) || up.Version != "" || rel.Asked() != 0 {
+		t.Fatalf("Run ended with %v; GitHub asked %d times", err, rel.Asked())
+	}
+	if !strings.Contains(l.String(), "restarting on it") {
+		t.Fatalf("log: %s", l)
+	}
+}
+
+// Rewritten while the update waits for a send to finish: the swap refuses (the file is not what it was), the binary
+// stays, and the sync restarts onto it.
+func TestScheduledUpdateRefusesABinaryChangedMeanwhile(t *testing.T) {
+	rel := selfupdatetest.New(t, "v0.1.1", "")
+	c, _, exe, o, _ := updating(t, rel, P1)
+	o.AutoUpdate.LockWait = 5 * time.Second
+	release, err := sendlock.Acquire(context.Background(), c.Dir, store.OutboxOf(binding(c), P1).Ref(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait, _ := start(t, c, o)
+	eventually(t, "downloaded", rel.Downloaded)
+	time.Sleep(300 * time.Millisecond) // checked, waiting for the sender lock
+	if err := os.WriteFile(exe, []byte(selfupdatetest.Script("dev")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	var up *Updated
+	if err := wait(); !errors.As(err, &up) || up.Version != "" {
+		t.Fatalf("Run ended with %v", err)
+	}
+	if got := binaryOf(t, exe); got != "teamflow dev" {
+		t.Fatalf("replaced: %q", got)
+	}
+}
+
+// A manual update (self-update, /teamf upgrade) and the scheduled one at once, the scheduled one seeing an older
+// "latest" (a lagging answer): they take turns, and the binary never goes back to the older release, whichever
+// goes first.
+func TestManualAndScheduledUpdatesNeverDowngrade(t *testing.T) {
+	t.Run("manual first", func(t *testing.T) {
+		newer, older := selfupdatetest.New(t, "v0.1.2", ""), selfupdatetest.New(t, "v0.1.1", "")
+		c, _, exe, o, _ := updating(t, older)
+		manual := newer.Updater(exe, nil)
+		manual.LockFile, manual.Expect = filepath.Join(c.Dir, "update.lock"), selfupdate.ExpectVersion("0.1.0")
+		inHold, let := make(chan struct{}), make(chan struct{})
+		manual.Hold = func(context.Context) (func(), error) { close(inHold); <-let; return func() {}, nil }
+		done := make(chan error, 1)
+		go func() { _, err := manual.Install(context.Background(), "0.1.0"); done <- err }()
+		<-inHold // the manual update is about to put v0.1.2 in place, holding the update lock
+		wait, _ := start(t, c, o)
+		time.Sleep(300 * time.Millisecond) // the scheduled check waits its turn meanwhile
+		close(let)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		var up *Updated
+		if err := wait(); !errors.As(err, &up) || up.Version != "" {
+			t.Fatalf("Run ended with %v", err)
+		}
+		if got := binaryOf(t, exe); got != "teamflow 0.1.2" {
+			t.Fatalf("downgraded: %q", got)
+		}
+	})
+	t.Run("scheduled first", func(t *testing.T) {
+		newer, older := selfupdatetest.New(t, "v0.1.2", ""), selfupdatetest.New(t, "v0.1.1", "")
+		c, _, exe, o, _ := updating(t, older)
+		wait, _ := start(t, c, o)
+		var up *Updated
+		if err := wait(); !errors.As(err, &up) || up.Version != "v0.1.1" {
+			t.Fatalf("Run ended with %v", err)
+		}
+		manual := newer.Updater(exe, nil)
+		manual.LockFile, manual.Expect = filepath.Join(c.Dir, "update.lock"), selfupdate.ExpectVersion("0.1.0")
+		if _, err := manual.Install(context.Background(), "0.1.0"); selfupdate.KindOf(err) != selfupdate.Changed {
+			t.Fatalf("a manual update started from 0.1.0 went on: %v", err)
+		}
+		if got := binaryOf(t, exe); got != "teamflow 0.1.1" {
+			t.Fatalf("%q", got)
+		}
+	})
 }

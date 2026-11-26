@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vutran1710/teamflow-cli/internal/minisign"
 )
@@ -692,4 +693,124 @@ func TestNewerAndIsRelease(t *testing.T) {
 			t.Errorf("IsRelease(%s) != %v", v, want)
 		}
 	}
+}
+
+// Updates of one binary take turns (a lock file): a second waits for the first, and refuses past its wait, nothing
+// changed.
+func TestInstallTakesTurns(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ := rel.updater(t, pub)
+	u.LockFile = filepath.Join(t.TempDir(), "update.lock")
+	held := make(chan struct{})
+	release := make(chan struct{})
+	u.Hold = func(context.Context) (func(), error) { close(held); <-release; return func() {}, nil }
+	done := make(chan error, 1)
+	go func() { _, err := u.Install(context.Background(), "0.1.0"); done <- err }()
+	<-held
+	second, exe2, _ := rel.updater(t, pub)
+	second.LockFile, second.LockWait = u.LockFile, 100*time.Millisecond
+	_, err := second.Install(context.Background(), "0.1.0")
+	if err == nil || !strings.Contains(err.Error(), "another teamflow update is running") {
+		t.Fatalf("the second update did not wait its turn: %v", err)
+	}
+	untouched(t, exe2)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != newScript {
+		t.Fatal("the first update did not finish")
+	}
+	second.LockWait = 5 * time.Second // its turn now
+	if _, err := second.Install(context.Background(), "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The binary is put in place only if the file on disk is still the one the update started from (and what Expect
+// says): one replaced meanwhile (another install) stays, nothing changed.
+func TestInstallNeverReplacesABinaryChangedMeanwhile(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ := rel.updater(t, pub)
+	other := "#!/bin/sh\necho \"teamflow dev\"\n"
+	u.Hold = func(context.Context) (func(), error) {
+		tmp := exe + ".other"
+		if err := os.WriteFile(tmp, []byte(other), 0o755); err != nil {
+			return nil, err
+		}
+		return func() {}, os.Rename(tmp, exe) // another install renamed a binary into place meanwhile
+	}
+	_, err := u.Install(context.Background(), "0.1.0")
+	if KindOf(err) != Changed {
+		t.Fatalf("%v", err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != other {
+		t.Fatalf("the binary is %q", b)
+	}
+	leftovers(t, filepath.Dir(exe), "teamflow")
+
+	// Expect refuses: before anything is downloaded, and again just before the rename.
+	rel = newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ = rel.updater(t, pub)
+	u.Expect = func(string) error { return errors.New("not the binary this sync started from") }
+	if _, err := u.Install(context.Background(), "0.1.0"); KindOf(err) != Changed || rel.count() != 0 {
+		t.Fatalf("%v; %d requests", err, rel.count())
+	}
+	untouched(t, exe)
+	calls := 0
+	u.Expect = func(string) error {
+		calls++
+		if calls > 1 {
+			return errors.New("changed while downloading")
+		}
+		return nil
+	}
+	if _, err := u.Install(context.Background(), "0.1.0"); KindOf(err) != Changed || calls != 2 {
+		t.Fatalf("%v; Expect called %d times", err, calls)
+	}
+	untouched(t, exe)
+}
+
+// ExpectVersion: the binary on disk must still say it is this version.
+func TestExpectVersion(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "teamflow")
+	if err := os.WriteFile(exe, []byte(oldScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExpectVersion("0.1.0")(exe); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"0.2.0", "dev"} {
+		if err := ExpectVersion(v)(exe); err == nil || !strings.Contains(err.Error(), "teamflow 0.1.0") {
+			t.Fatalf("%s: %v", v, err)
+		}
+	}
+	if err := ExpectVersion("0.1.0")(filepath.Join(dir, "gone")); err == nil {
+		t.Fatal("a missing binary passed")
+	}
+}
+
+// Temporary files an interrupted update left beside the binary are swept when older than an hour.
+func TestInstallSweepsOldTempFiles(t *testing.T) {
+	sk, pub := throwawayKey(t)
+	rel := newRelease(t, sk, "v0.2.0", newScript)
+	u, exe, _ := rel.updater(t, pub)
+	dir := filepath.Dir(exe)
+	old, fresh := filepath.Join(dir, ".teamflow-update-111"), filepath.Join(dir, ".teamflow-update-222")
+	for _, p := range []string{old, fresh} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ago := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(old, ago, ago); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Install(context.Background(), "0.2.0"); err != nil { // nothing to update: swept all the same
+		t.Fatal(err)
+	}
+	leftovers(t, dir, ".teamflow-update-222", "teamflow")
 }

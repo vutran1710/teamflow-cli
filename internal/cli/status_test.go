@@ -24,6 +24,7 @@ import (
 
 	"github.com/vutran1710/teamflow-cli/internal/adapters"
 	"github.com/vutran1710/teamflow-cli/internal/adapters/claudecode"
+	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"github.com/vutran1710/teamflow-cli/internal/selfupdate/selfupdatetest"
@@ -495,4 +496,32 @@ func TestConfigAutoUpdate(t *testing.T) {
 	wantCode(t, r, 2)
 	t.Setenv(config.AutoUpdateEnv, "0")
 	contains(t, "stdout", m.run("", "config", "auto-update", "on").out, "auto-update: off (TEAMFLOW_AUTO_UPDATE=0 in this shell)")
+}
+
+// The real update (not a stand-in): it replaces the binary only while it still says it is this build; another
+// install meanwhile is left as it is.
+func TestUpgradeOnlyReplacesThisBuild(t *testing.T) {
+	m := newMachine(t, true)
+	rel := selfupdatetest.New(t, "v0.1.1", "")
+	exe := selfupdatetest.Installed(t, t.TempDir(), "0.1.0")
+	oldF, oldV, oldS := updaterFor, api.Version, stopSync
+	updaterFor = func(out io.Writer) *selfupdate.Updater { return rel.Updater(exe, out) }
+	api.Version = "0.1.0"
+	stopSync = func(string) (bool, error) { return true, nil }
+	t.Cleanup(func() { updaterFor, api.Version, stopSync = oldF, oldV, oldS })
+	if err := os.WriteFile(exe, []byte(selfupdatetest.Script("0.1.5")), 0o755); err != nil { // installed meanwhile
+		t.Fatal(err)
+	}
+	r := m.run("", "team", "--relay", "upgrade")
+	contains(t, "stdout", r.out, "Could not update teamflow: the teamflow on disk is no longer this one", "Nothing was changed.")
+	binaryIs(t, exe, "0.1.5")
+	if rel.Asked() != 0 {
+		t.Fatal("asked GitHub for a binary that is not this one")
+	}
+	if err := os.WriteFile(exe, []byte(selfupdatetest.Script("0.1.0")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r = m.run("", "team", "--relay", "upgrade")
+	contains(t, "stdout", r.out, "Updated teamflow v0.1.0 -> v0.1.1.")
+	binaryIs(t, exe, "0.1.1")
 }

@@ -34,6 +34,9 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
+	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/minisign"
 )
 
@@ -64,7 +67,20 @@ type Updater struct {
 	// Hold, when set, is held while the new binary is renamed into place (the background sync takes the outbox's
 	// sender locks: never a swap in the middle of a send). An error refuses the update, nothing changed.
 	Hold func(ctx context.Context) (release func(), err error)
+	// Expect, when set, says what the binary on disk must still be: checked before anything is downloaded and
+	// again, under Hold, just before the new binary is renamed into place. An error refuses the update (Changed).
+	Expect func(exe string) error
+	// LockFile, when set, is held (flock) for the whole update, so two updates of the binary (self-update, /teamf
+	// upgrade, the background sync's) take turns; LockWait is how long one waits for another (2 min).
+	LockFile string
+	LockWait time.Duration
 }
+
+// lockWait is how long an update waits for another one by default.
+const lockWait = 2 * time.Minute
+
+// staleTemp: a temporary file of an interrupted update older than this is swept.
+const staleTemp = time.Hour
 
 // Result is what an update did.
 type Result struct {
@@ -83,6 +99,7 @@ const (
 	RateLimited             // GitHub's API rate limit for this network
 	NotWritable             // the binary's folder can't be written
 	Unverified              // the signature, the tag it was signed for or the checksum did not check out
+	Changed                 // the binary on disk is not the one the update started from (another install ran)
 )
 
 // Error is a refused update; nothing was changed.
@@ -105,10 +122,11 @@ func KindOf(err error) Kind {
 
 func refuse(k Kind, err error) error { return &Error{Kind: k, Err: err} }
 
-// Default is the updater for the running binary.
+// Default is the updater for the running binary; its updates take turns with the Teamflow home's other ones.
 func Default(out io.Writer) *Updater {
 	exe, _ := os.Executable()
 	return &Updater{
+		LockFile:  filepath.Join(home.Dir(), "update.lock"),
 		API:       "https://api.github.com",
 		Client:    &http.Client{Timeout: 5 * time.Minute},
 		PublicKey: PublicKey,
@@ -159,6 +177,21 @@ func (u *Updater) Install(ctx context.Context, current string) (Result, error) {
 	dir := filepath.Dir(exe)
 	if err := writable(dir); err != nil {
 		return res, refuse(NotWritable, fmt.Errorf("cannot write to %s (where teamflow is installed): %v; reinstall with install.sh, or run self-update as a user who can write there", dir, err))
+	}
+	sweep(dir)
+	unlock, err := u.takeTurn(ctx)
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
+	start, err := os.Stat(exe) // the binary this update replaces: still it at the rename, or nothing changes
+	if err != nil {
+		return res, refuse(Failed, fmt.Errorf("cannot read %s: %v", exe, err))
+	}
+	if u.Expect != nil {
+		if err := u.Expect(exe); err != nil {
+			return res, refuse(Changed, err)
+		}
 	}
 	u = u.withClient()
 	rel, err := u.latest(ctx)
@@ -220,7 +253,7 @@ func (u *Updater) Install(ctx context.Context, current string) (Result, error) {
 	if err != nil {
 		return res, refuse(Failed, fmt.Errorf("%s: %v", name, err))
 	}
-	if err := u.swap(ctx, exe, binary, rel.Tag); err != nil {
+	if err := u.swap(ctx, exe, start, binary, rel.Tag); err != nil {
 		return res, err
 	}
 	res.Updated = true
@@ -229,6 +262,67 @@ func (u *Updater) Install(ctx context.Context, current string) (Result, error) {
 		u.Replaced()
 	}
 	return res, nil
+}
+
+// takeTurn holds u.LockFile (flock), waiting up to u.LockWait for another update to finish; nothing to hold when
+// there is no LockFile.
+func (u *Updater) takeTurn(ctx context.Context) (func(), error) {
+	if u.LockFile == "" {
+		return func() {}, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(u.LockFile), 0o700); err != nil {
+		return nil, refuse(Failed, fmt.Errorf("update lock: %v", err))
+	}
+	f, err := os.OpenFile(u.LockFile, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, refuse(Failed, fmt.Errorf("update lock: %v", err))
+	}
+	wait := u.LockWait
+	if wait <= 0 {
+		wait = lockWait
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN); _ = f.Close() }, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EINTR) {
+			_ = f.Close()
+			return nil, refuse(Failed, fmt.Errorf("update lock: %v", err))
+		}
+		if !time.Now().Before(deadline) || ctx.Err() != nil {
+			_ = f.Close()
+			return nil, refuse(Failed, errors.New("another teamflow update is running; try again in a minute"))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// sweep removes temporary files of interrupted updates (older than staleTemp) from dir.
+func sweep(dir string) {
+	old, _ := filepath.Glob(filepath.Join(dir, ".teamflow-update-*"))
+	for _, p := range old {
+		if fi, err := os.Lstat(p); err == nil && fi.Mode().IsRegular() && time.Since(fi.ModTime()) > staleTemp {
+			_ = os.Remove(p)
+		}
+	}
+}
+
+// ExpectVersion is an Expect: the binary on disk must still say it is version (its --version), so an update never
+// replaces a binary another install put there meanwhile.
+func ExpectVersion(version string) func(exe string) error {
+	return func(exe string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, exe, "--version").Output()
+		got := strings.TrimSpace(string(out))
+		if err != nil || got != "teamflow "+strings.TrimPrefix(version, "v") {
+			return fmt.Errorf("the teamflow on disk is no longer this one (it says %q, not teamflow %s): another "+
+				"install or update ran; it stays as it is", got, strings.TrimPrefix(version, "v"))
+		}
+		return nil
+	}
 }
 
 // Latest is the newest release's tag, as GitHub names it (an *Error when it can't be asked).
@@ -251,8 +345,9 @@ func (u *Updater) withClient() *Updater {
 }
 
 // swap writes binary into a temporary file beside exe, checks it runs and names tag, then renames it over exe
-// (atomic in one folder), holding u.Hold meanwhile. Any failure leaves exe as it was and nothing beside it.
-func (u *Updater) swap(ctx context.Context, exe string, binary []byte, tag string) error {
+// (atomic in one folder), holding u.Hold meanwhile, if exe is still start (and what u.Expect says). Any failure
+// leaves exe as it was and nothing beside it.
+func (u *Updater) swap(ctx context.Context, exe string, start os.FileInfo, binary []byte, tag string) error {
 	dir := filepath.Dir(exe)
 	mode := os.FileMode(0o755)
 	if fi, err := os.Stat(exe); err == nil {
@@ -292,6 +387,14 @@ func (u *Updater) swap(ctx context.Context, exe string, binary []byte, tag strin
 			return refuse(Failed, fmt.Errorf("the new binary was not put in place: %v", err))
 		}
 		defer release()
+	}
+	if now, err := os.Stat(exe); err != nil || !os.SameFile(start, now) {
+		return refuse(Changed, fmt.Errorf("%s was replaced while this update ran (another install?); it stays as it is", exe))
+	}
+	if u.Expect != nil {
+		if err := u.Expect(exe); err != nil {
+			return refuse(Changed, err)
+		}
 	}
 	if err := os.Rename(tmpName, exe); err != nil {
 		return refuse(Failed, fmt.Errorf("cannot replace %s: %v", exe, err))

@@ -240,7 +240,7 @@ func Run(ctx context.Context, c *core.Core, o Options) error {
 	r := &runner{o: o, dir: c.Dir, st: c.St, now: now, started: now(), workers: map[string]*worker{},
 		stopped: map[string]string{}, flushAt: map[string]time.Time{}, flushStep: map[string]int{}, once: map[string]bool{}}
 	if o.AutoUpdate != nil && o.AutoUpdate.Updater != nil {
-		r.update = &updater{a: o.AutoUpdate.withDefaults()}
+		r.update = newUpdater(o.AutoUpdate)
 	}
 	defer r.stopAll()
 	o.Logf("teamflow sync: started (pid %d)", os.Getpid())

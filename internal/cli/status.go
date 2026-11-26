@@ -128,10 +128,16 @@ func (r *inv) teamStatusJSON() (any, error) {
 
 // ------------------------------------------------------------------ self-update, /teamf upgrade
 
-// update is the self-update of the running binary, saying what it does on out (replaced in tests).
+// update is the self-update of the running binary, saying what it does on out (replaced in tests). It takes turns
+// with the background sync's (the update lock), and replaces the binary only while it is still this build.
 var update = func(ctx context.Context, out io.Writer) (selfupdate.Result, error) {
-	return selfupdate.Default(out).Install(ctx, api.Version)
+	u := updaterFor(out)
+	u.Expect = selfupdate.ExpectVersion(api.Version)
+	return u.Install(ctx, api.Version)
 }
+
+// updaterFor is the running binary's self-update (replaced in tests: a fake release).
+var updaterFor = selfupdate.Default
 
 // upgraded is what an update did, with the background sync (the old version) stopped after a new binary went in.
 type upgraded struct {
