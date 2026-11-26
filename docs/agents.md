@@ -44,7 +44,7 @@ not theirs.
 ## Copilot CLI, Cursor CLI and Antigravity CLI
 
 **Cursor CLI and Antigravity CLI are experimental:** not yet verified on a real install. `teamflow install -a all`
-and the list of agents found on the machine leave them out; `-a cursor` or `-a antigravity` sets one up, with a
+leaves them out, and install's list of agents never chooses them for you; `-a cursor` or `-a antigravity` sets one up, with a
 warning saying so. Claude Code and Copilot CLI are set up by `-a all` when found.
 
 These agents use the `teamflow` commands; no MCP server is registered for them. Each install writes only Teamflow's

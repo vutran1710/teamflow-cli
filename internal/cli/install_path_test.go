@@ -43,7 +43,7 @@ func TestInstallOnPath(t *testing.T) {
 	if out["on_path"] != true {
 		t.Fatalf("on_path %v", out["on_path"])
 	}
-	lacks(t, "stderr", r.err, "not on your PATH")
+	lacks(t, "stderr", r.err, "One more thing")
 	// Through a link in another folder on the PATH: the same file.
 	links := filepath.Join(t.TempDir(), "links")
 	must(t, os.MkdirAll(links, 0o755))
@@ -73,10 +73,10 @@ func TestInstallNotOnPath(t *testing.T) {
 	if out["on_path"] != false || out["installed"] == nil {
 		t.Fatalf("answer %v", out)
 	}
-	contains(t, "stderr", r.err, "WARNING: teamflow is not on your PATH",
+	contains(t, "stderr", r.err, "One more thing: your shell can't find teamflow yet (it is at "+bin+")",
 		`zsh:  echo 'export PATH="`+dir+`:$PATH"' >> ~/.zshrc`,
 		`bash: echo 'export PATH="`+dir+`:$PATH"' >> ~/.bashrc`)
-	if !strings.Contains(r.err, "claude-code") { // what was set up is still said
+	if !strings.Contains(r.err, "✓ Claude Code is ready") { // what was set up is still said
 		t.Fatalf("stderr %s", r.err)
 	}
 
@@ -90,15 +90,15 @@ func TestInstallNotOnPath(t *testing.T) {
 	if out["on_path"] != false {
 		t.Fatalf("shadowed: on_path %v", out["on_path"])
 	}
-	contains(t, "stderr", r.err, "WARNING: the teamflow on your PATH is "+filepath.Join(other, "teamflow")+", not this one ("+bin+")",
+	contains(t, "stderr", r.err, "One more thing: your shell finds another teamflow first ("+filepath.Join(other, "teamflow")+"), not this one ("+bin+")",
 		`export PATH="`+dir+`:$PATH"`)
 
 	// Plain output: the same warning, exit 0, the human lines on stdout.
 	t.Setenv("PATH", t.TempDir())
 	r = m.run("", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL())
 	wantCode(t, r, 0)
-	contains(t, "stdout", r.out, "claude-code:\n", "Done.")
-	contains(t, "stderr", r.err, "WARNING: teamflow is not on your PATH")
+	contains(t, "stdout", r.out, "✓ Claude Code is ready", "Happy building!")
+	contains(t, "stderr", r.err, "your shell can't find teamflow yet")
 }
 
 // Under the home folder the instruction names $HOME, never the person's own path.

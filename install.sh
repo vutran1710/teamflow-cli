@@ -7,13 +7,15 @@
 # archive for this machine, checksums.txt and checksums.txt.minisig into a temporary folder; checks the signature
 # of checksums.txt and that it was signed for this tag when minisign is installed (otherwise it says only the
 # checksum was checked, and how to check the signature by hand); checks the archive's SHA-256 against
-# checksums.txt; and only then copies the binary into ~/.local/bin (or $TEAMFLOW_BIN_DIR). It never runs anything
-# it downloaded.
+# checksums.txt; and only then copies the binary into ~/.local/bin (or $TEAMFLOW_BIN_DIR). Nothing it downloaded
+# runs before that. Then, when a person is at a terminal, it asks "Set up teamflow now?" and runs `teamflow install`
+# on the terminal (it asks for the email and the agents); otherwise it says the next step.
 #
 #   TEAMFLOW_BIN_DIR       where the binary goes (default ~/.local/bin)
 #   TEAMFLOW_VERSION       a release tag such as v0.1.0 (default: the latest release)
 #   TEAMFLOW_RELEASES_URL  the Releases page (default https://github.com/vutran1710/teamflow-cli/releases; for
 #                          mirrors and tests: https, or http on localhost)
+#   TEAMFLOW_NO_SETUP=1    never offer to run `teamflow install` (nor in CI, nor without a terminal)
 #
 # The whole script is one function called on the last line, so a download cut short runs nothing.
 
@@ -120,19 +122,47 @@ main() {
 
 	new=""
 	echo "Installed teamflow $tag to $bindir/teamflow"
+
+	# Verified and in place: at a terminal, offer to set it up now (`teamflow install` asks for the rest).
+	if can_ask; then
+		printf 'Set up teamflow now? [Y/n] ' >/dev/tty
+		answer=""
+		read -r answer </dev/tty || answer=n
+		case "$answer" in
+		"" | [Yy] | [Yy][Ee][Ss])
+			echo
+			# Ctrl-C belongs to the setup (it stops it cleanly); this script then carries on.
+			trap ':' INT
+			if "$bindir/teamflow" install </dev/tty >/dev/tty 2>/dev/tty; then
+				return 0
+			fi
+			trap 'exit 130' INT TERM
+			echo
+			echo "Setup didn't finish; nothing is lost. Run it again whenever you're ready:"
+			;;
+		esac
+	fi
 	found="$(command -v teamflow 2>/dev/null || true)"
 	case ":$PATH:" in
 	*":$bindir:"*)
 		if [ -n "$found" ] && [ "$found" != "$bindir/teamflow" ]; then
-			path_warning "the teamflow on your PATH is $found, not this one ($bindir/teamflow)"
+			path_warning "your shell finds another teamflow first ($found), not this one ($bindir/teamflow)"
 		fi
 		;;
-	*) path_warning "teamflow is not on your PATH ($bindir is not in it)" ;;
+	*) path_warning "your shell can't find teamflow yet ($bindir is not on your PATH)" ;;
 	esac
 	echo
-	echo "Next: teamflow install -a <agent> -e <email> [-s <server>]"
-	echo "  (agents: claude-code, copilot; experimental, not yet verified on a real install: cursor, antigravity;"
-	echo "  the server defaults to https://teamflow.10l.ink)"
+	echo "Next: teamflow install   (it asks for your email and which agents to set up)"
+	echo "  For scripts: teamflow install -e <email> -a <agent> [-s <server>] --password-stdin"
+	echo "  (agents: claude-code, copilot; experimental, not yet verified on a real install: cursor, antigravity)"
+}
+
+# can_ask says whether a person can be asked: a terminal to ask on (/dev/tty, which works under `curl | sh`), not
+# in CI, and not turned off with TEAMFLOW_NO_SETUP=1.
+can_ask() {
+	[ "${TEAMFLOW_NO_SETUP:-}" != 1 ] || return 1
+	[ -z "${CI:-}" ] || return 1
+	(: </dev/tty >/dev/tty) 2>/dev/null
 }
 
 # path_warning says loudly that `teamflow` run by name is not the binary just installed, and how to fix it for zsh
@@ -143,12 +173,12 @@ path_warning() {
 	"$HOME"/*) shown="\$HOME/${bindir#"$HOME"/}" ;;
 	esac
 	echo
-	echo "WARNING: $1."
-	echo "Add its folder to your PATH, then open a new terminal:"
+	echo "One more thing: $1."
+	echo "To fix it, add its folder to your PATH, then open a new terminal:"
 	echo "  zsh:  echo 'export PATH=\"$shown:\$PATH\"' >> ~/.zshrc"
 	echo "  bash: echo 'export PATH=\"$shown:\$PATH\"' >> ~/.bashrc"
-	echo "Your agents' hooks call teamflow by its full path and work as they are; you, the /teamf command and the"
-	echo "agents' own \`teamflow ...\` commands run it by name and need it on the PATH."
+	echo "Your agents' hooks call teamflow by its full path; you, the /teamf command and the agents' own"
+	echo "\`teamflow ...\` commands run it by name, so they need it on the PATH."
 }
 
 fail() {

@@ -983,10 +983,10 @@ func TestInstallSignsInThenSetsUpEachAgent(t *testing.T) {
 	m := newMachine(t, false)
 	m.srv.on("auth.login", "auth.login")
 	r := m.run("pw\n", "install", "-a", "claude-code", "--agent", "cursor", "-e", "lan@acme.test", "-s", m.srv.URL(),
-		"--password-stdin")
+		"--password-stdin", "--verbose")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "signed in as lan <lan@acme.test>", "claude-code:\n  wrote ~/.claude-code/settings",
-		"cursor:\n  wrote ~/.cursor/settings", "Done.")
+		"cursor:\n  wrote ~/.cursor/settings", "Happy building!")
 	// Named, an experimental agent is set up, with a warning.
 	contains(t, "stderr", r.err, "cursor: experimental: not yet verified on a real install")
 	lacks(t, "stderr", r.err, "claude-code: experimental")
@@ -1014,19 +1014,16 @@ func TestInstallSignsInThenSetsUpEachAgent(t *testing.T) {
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "-a")
 
-	// A terminal: the detected agents are offered (never an experimental one), and the answer picks.
+	// A terminal: the agents are offered (install_prompt_test.go has the rest).
 	cc.installed, cu.installed = false, false
 	terminal(t, true, "")
 	r = m.run("1\n", "install", "-e", "lan@acme.test")
 	wantCode(t, r, 0)
-	contains(t, "stderr", r.err, "1) claude-code")
-	lacks(t, "stderr", r.err, "2) cursor")
+	contains(t, "stderr", r.err, "1) Claude Code (found on this machine)", "3) Cursor CLI (experimental)")
 	if !cc.installed || cu.installed {
-		t.Fatal("the person chose claude-code; cursor is never offered")
+		t.Fatal("the person chose claude-code")
 	}
-	r = m.run("9\n", "install", "-e", "lan@acme.test")
-	wantCode(t, r, 1)
-	contains(t, "stderr", r.err, "not an agent number: 9")
+	terminal(t, false, "")
 
 	// uninstall: one, then all that are installed.
 	cc.installed, cu.installed = true, true
@@ -1161,7 +1158,7 @@ func TestHookCommand(t *testing.T) {
 func TestInstallClaudeCode(t *testing.T) {
 	m := newMachine(t, true)
 	m.srv.on("account.me", lanMe)
-	r := m.run("", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL())
+	r := m.run("", "install", "-a", "claude-code", "-e", "lan@acme.test", "-s", m.srv.URL(), "-v")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "claude-code:\n", "hooks SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd",
 		"an allow rule for teamflow commands", "/teamf command at ~/.claude/commands/teamf.md")
@@ -1230,7 +1227,7 @@ func TestInstallAllAgents(t *testing.T) {
 	before := treeOf(t, user)
 
 	// -a all leaves out the experimental agents, even found.
-	r := m.run("", "install", "-a", "all", "-e", "lan@acme.test", "-s", m.srv.URL())
+	r := m.run("", "install", "-a", "all", "-e", "lan@acme.test", "-s", m.srv.URL(), "--verbose")
 	wantCode(t, r, 0)
 	contains(t, "stdout", r.out, "claude-code:\n", "copilot:\n")
 	lacks(t, "stdout", r.out, "cursor:\n", "antigravity:\n")
@@ -1238,7 +1235,7 @@ func TestInstallAllAgents(t *testing.T) {
 	r = m.run("", "uninstall")
 	wantCode(t, r, 0)
 	// Named with all, they are set up too.
-	r = m.run("", "install", "-a", "all", "-a", "cursor", "-a", "antigravity", "-e", "lan@acme.test", "-s", m.srv.URL())
+	r = m.run("", "install", "-a", "all", "-a", "cursor", "-a", "antigravity", "-e", "lan@acme.test", "-s", m.srv.URL(), "--verbose")
 	wantCode(t, r, 0)
 	contains(t, "stderr", r.err, "cursor: experimental: not yet verified on a real install",
 		"antigravity: experimental: not yet verified on a real install")
@@ -1405,7 +1402,6 @@ func TestInstallOnlyExperimentalFound(t *testing.T) {
 	t.Cleanup(resetAdapters)
 	m := newMachine(t, true)
 	m.srv.on("account.me", lanMe)
-	terminal(t, true, "")
 	r := m.run("", "install", "-e", "lan@acme.test")
 	wantCode(t, r, 1)
 	contains(t, "stderr", r.err, "only experimental agents were found on this machine (cursor: experimental: not yet verified on a real install); to set one up anyway, name it: -a cursor")

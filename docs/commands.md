@@ -3,7 +3,7 @@
 ```text
 teamflow login -e EMAIL [-s SERVER] [--password-stdin]   sign in (the password is asked for without echo)
 teamflow logout | status | whoami | inbox | projects
-teamflow install -a AGENT… -e EMAIL [-s SERVER]          sign in and set Teamflow up in your agents
+teamflow install [-e EMAIL] [-a AGENT…] [-s SERVER]      sign in and set Teamflow up in your agents (asks what's missing)
 teamflow uninstall [-a AGENT…] [--purge]
 teamflow stop                                            stop sharing the current agent session
 teamflow approve SG_ID [NOTE] | reject SG_ID NOTE        your verdict on an approval request

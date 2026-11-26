@@ -123,6 +123,7 @@ var defaults = map[string]string{
 	"sync.poll":   `{"result": {"events": [], "cursors": {}, "reset": []}}`,
 	"member.list": "member.list",
 	"auth.logout": "auth.logout",
+	"account.me":  "account.me",
 }
 
 func (f *fakeServer) answer(method string) json.RawMessage {
@@ -236,10 +237,13 @@ func newMachine(t *testing.T, signedIn bool) *machine {
 // terminal makes stdin a terminal (or not) for one test; password is what the no-echo prompt reads.
 func terminal(t *testing.T, yes bool, password string) {
 	t.Helper()
-	oldT, oldP := isTerminal, readPassword
+	oldT, oldE, oldP, oldR, oldI := isTerminal, errTerminal, readPassword, rawMode, catchInterrupt
 	isTerminal = func() bool { return yes }
+	errTerminal = func() bool { return yes }
 	readPassword = func() (string, error) { return password, nil }
-	t.Cleanup(func() { isTerminal, readPassword = oldT, oldP })
+	rawMode = func() (func(), error) { return nil, errors.New("no raw mode in tests") }
+	catchInterrupt = func(io.Writer) func() { return func() {} }
+	t.Cleanup(func() { isTerminal, errTerminal, readPassword, rawMode, catchInterrupt = oldT, oldE, oldP, oldR, oldI })
 }
 
 type result struct {

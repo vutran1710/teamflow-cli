@@ -21,7 +21,8 @@ The release key's public half is compiled into `teamflow` (`internal/selfupdate/
 - **`install.sh`** finds the latest release's tag from the Releases page's `/latest` redirect (no API) and
   downloads that tag's files. It always checks the checksum. When `minisign` is installed it checks the signature
   and that it was made for that tag; otherwise it says that only the checksum was checked and prints the command
-  below. It never runs what it downloaded.
+  below. Nothing it downloaded runs before both checks pass; then, at a terminal, it offers to run
+  `teamflow install`.
 
 A checksum alone shows the download is intact, not who made it: the checksum file comes from the same place as
 the archive. The signature shows the checksum file was made with the release key; its tag shows for which release

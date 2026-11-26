@@ -57,6 +57,18 @@ const ExperimentalNote = "experimental: not yet verified on a real install"
 // IsExperimental says whether name is an experimental agent.
 func IsExperimental(name string) bool { return slices.Contains(Experimental, name) }
 
+// titles are the agents' names as people know them.
+var titles = map[string]string{"claude-code": "Claude Code", "cursor": "Cursor CLI", "antigravity": "Antigravity CLI",
+	"copilot": "Copilot CLI"}
+
+// Title is an agent's name as people know it ("Claude Code" for claude-code); an unknown name is given back as is.
+func Title(name string) string {
+	if t, ok := titles[name]; ok {
+		return t
+	}
+	return name
+}
+
 var (
 	mu       sync.Mutex
 	registry = map[string]Adapter{}

@@ -4,9 +4,9 @@ The command line for [Teamflow](https://teamflow.10l.ink): your coding agent rec
 works, and the important calls reach the approver at once. Read and approve them in the
 [web app](https://teamflow.10l.ink/ui/) or right here.
 
-![Install teamflow, set up Claude Code, list your projects](docs/demo.gif)
+![Install teamflow, answer two questions, then ask Claude Code for your projects](docs/demo.gif)
 
-## Install
+## Install and set up
 
 macOS and Linux (amd64 and arm64):
 
@@ -14,21 +14,13 @@ macOS and Linux (amd64 and arm64):
 curl -fsSL https://raw.githubusercontent.com/vutran1710/teamflow-cli/main/install.sh | sh
 ```
 
-The installer checks the release's checksum, and its signature when `minisign` is installed
-([verify the download](docs/VERIFY.md)), and puts `teamflow` in `~/.local/bin`, which must be on your PATH
-(it tells you the line to add if not).
-More options, and building from source: [docs/install.md](docs/install.md).
+It checks the release's checksum, and its signature when `minisign` is installed ([verify](docs/VERIFY.md)), puts
+`teamflow` in `~/.local/bin`, then asks for your email and which agents to set up (Claude Code, Copilot CLI; Cursor
+CLI and Antigravity CLI are experimental) and signs you in. Your own agent settings stay as they are.
 
-## Set up your agent
-
-```sh
-teamflow install -a claude-code -e you@example.com    # or -a copilot; cursor and antigravity are experimental
-teamflow uninstall                                    # takes out exactly what install added
-```
-
-Install signs you in, adds Teamflow's hooks, instructions, permission rules and the `/teamf` command to the
-agent's config (your own settings stay as they are), and starts the background sync. Then, in a session, run
-`/teamf project <name>` to choose the project the agent works on.
+Later, or for another agent: `teamflow install`. To take it out: `teamflow uninstall`.
+More options, scripted installs and building from source: [docs/install.md](docs/install.md).
+In a session, `/teamf project <name>` chooses the project the agent works on.
 
 ## Important commands
 
@@ -56,8 +48,8 @@ Every command takes `--json`; `teamflow <command> --help` gives the details. The
 ## Docs
 
 - [docs/agents.md](docs/agents.md): what install writes for Claude Code, Copilot, Cursor and Antigravity, and its limits.
-- [docs/how-it-works.md](docs/how-it-works.md): how signals are sent (with diagrams), the background sync, what it sends and where.
-- [docs/development.md](docs/development.md): repository layout and developer notes.
+- [docs/how-it-works.md](docs/how-it-works.md): what happens when your agent records something, what is sent and where.
+- [docs/development.md](docs/development.md): build, test and release.
 - [docs/VERIFY.md](docs/VERIFY.md): verifying a release.
 
 ## License

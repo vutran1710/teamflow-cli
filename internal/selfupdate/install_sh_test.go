@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/vutran1710/teamflow-cli/internal/minisign"
@@ -36,9 +37,15 @@ type shRelease struct {
 
 func newShRelease(t *testing.T, sk minisign.SecretKey, osName, arch string) *shRelease {
 	t.Helper()
+	return newShReleaseOf(t, sk, osName, arch, markScript)
+}
+
+// newShReleaseOf is a release whose teamflow is script.
+func newShReleaseOf(t *testing.T, sk minisign.SecretKey, osName, arch, script string) *shRelease {
+	t.Helper()
 	r := &shRelease{tag: "v0.2.0", files: map[string][]byte{}}
 	name := AssetName(osName, arch)
-	r.files[name] = tarGz(t, map[string]string{"teamflow": markScript, "LICENSE": "MIT\n"})
+	r.files[name] = tarGz(t, map[string]string{"teamflow": script, "LICENSE": "MIT\n"})
 	h := sha256.Sum256(r.files[name])
 	sums := []byte(hex.EncodeToString(h[:]) + "  " + name + "\n" + strings.Repeat("0", 64) + "  teamflow_other.tar.gz\n")
 	r.files["checksums.txt"] = sums
@@ -132,6 +139,7 @@ func (s *shRun) run(extra ...string) {
 	s.t.Helper()
 	cmd := exec.Command(filepath.Join(s.tools, "sh"), s.script)
 	cmd.Env = append([]string{"HOME=" + s.home, "PATH=" + s.tools, "MARK=" + s.mark, "TEAMFLOW_RELEASES_URL=" + s.release.srv.URL}, extra...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // no terminal: never asked to set up
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err := cmd.Run()
@@ -190,9 +198,10 @@ func TestInstallShNoMinisignNote(t *testing.T) {
 	for _, want := range []string{
 		"only the checksum was checked; to verify the signature:",
 		"minisign -Vm checksums.txt -x checksums.txt.minisig -P " + pub,
-		"teamflow install -a <agent> -e <email> [-s <server>]",
+		"Next: teamflow install   (it asks for your email and which agents to set up)",
+		"For scripts: teamflow install -e <email> -a <agent> [-s <server>] --password-stdin",
 		// the temp HOME's bin is not on the test's PATH: said loudly, with the line for zsh and bash
-		"WARNING: teamflow is not on your PATH",
+		"One more thing: your shell can't find teamflow yet",
 		`zsh:  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`,
 		`bash: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`,
 	} {
@@ -215,7 +224,8 @@ func TestInstallShMinisign(t *testing.T) {
 	if b, _ := os.ReadFile(args); strings.TrimSpace(string(b)) != "-Vm checksums.txt -x checksums.txt.minisig -P "+pub+" -Q" {
 		t.Fatalf("minisign args %q", b)
 	}
-	if strings.Contains(s.out, "only the checksum") || !strings.Contains(s.out, "signature verified") {
+	if strings.Contains(s.out, "only the checksum") || !strings.Contains(s.out, "signature verified") ||
+		strings.Contains(s.out, "Set up teamflow now") {
 		t.Fatalf("output:\n%s", s.out)
 	}
 
@@ -527,7 +537,7 @@ func TestInstallShPathWarning(t *testing.T) {
 	bin := filepath.Join(s.home, ".local", "bin")
 	s.run("PATH=" + s.tools + ":" + bin)
 	s.wantOK()
-	if !s.installed(bin) || strings.Contains(s.out, "WARNING") {
+	if !s.installed(bin) || strings.Contains(s.out, "One more thing") {
 		t.Fatalf("on the PATH\n%s", s.out)
 	}
 	old := filepath.Join(t.TempDir(), "old")
@@ -539,7 +549,7 @@ func TestInstallShPathWarning(t *testing.T) {
 	}
 	s.run("PATH=" + s.tools + ":" + old + ":" + bin)
 	s.wantOK()
-	if !s.installed(bin) || !strings.Contains(s.out, "WARNING: the teamflow on your PATH is "+filepath.Join(old, "teamflow")+", not this one") {
+	if !s.installed(bin) || !strings.Contains(s.out, "One more thing: your shell finds another teamflow first ("+filepath.Join(old, "teamflow")+"), not this one") {
 		t.Fatalf("shadowed\n%s", s.out)
 	}
 	dir := filepath.Join(t.TempDir(), "elsewhere")
