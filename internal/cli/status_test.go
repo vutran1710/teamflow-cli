@@ -175,14 +175,20 @@ func TestProjectStatusSadPaths(t *testing.T) {
 		wantCode(t, r, 1)
 		contains(t, "stderr", r.err, "NOT_A_MEMBER")
 	})
-	t.Run("signed out, with a replica", func(t *testing.T) {
+	t.Run("signed out, with a replica: offline", func(t *testing.T) {
 		m := dashMachine(t)
+		if err := m.store().SetSyncedAt(P, time.Date(2026, 1, 24, 2, 12, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
 		if err := config.Save(m.dir, config.Config{Server: m.srv.URL()}); err != nil {
 			t.Fatal(err)
 		}
 		r := m.run("", "project", "status", "--project", P)
 		wantCode(t, r, 0)
-		contains(t, "stdout", r.out, "Pricing\n", "Milestones")
+		if !strings.HasPrefix(r.out, "(offline: as of 2026-01-24 09:12)\nPricing\n") {
+			t.Fatalf("%s", r)
+		}
+		contains(t, "stdout", r.out, "Milestones")
 		if n := len(m.srv.methods()); n != 0 {
 			t.Fatalf("signed out, it called %v", m.srv.methods())
 		}
@@ -289,6 +295,36 @@ func TestTeamStatusWithoutAProject(t *testing.T) {
 	}
 	if r = m.run("", "team", "--relay", "status"); !strings.HasSuffix(r.out, pickProject+"\nauto-update: off\n") {
 		t.Fatalf("told twice: %s", r)
+	}
+}
+
+// /teamf status offline, from the local copy: the status lines, then the block from its "(offline: …)" line; signed
+// out, the same (the replica is all there is).
+func TestTeamStatusOffline(t *testing.T) {
+	for name, cut := range map[string]func(m *machine){
+		"the server unreachable": func(m *machine) { m.offline() },
+		"signed out": func(m *machine) {
+			if err := config.Save(m.dir, config.Config{Server: m.srv.URL()}); err != nil {
+				m.t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := dashMachine(t)
+			m.inSession("s1", P, nil)
+			if err := m.store().SetSyncedAt(P, time.Date(2026, 1, 24, 2, 12, 0, 0, time.UTC)); err != nil {
+				t.Fatal(err)
+			}
+			cut(m)
+			r := m.run("", "team", "--relay", "status")
+			wantCode(t, r, 0)
+			status, block, ok := strings.Cut(r.out, "\n\n(offline: as of 2026-01-24 09:12)\nPricing")
+			if !ok {
+				t.Fatalf("no offline block after the status lines:\n%s", r.out)
+			}
+			contains(t, "status lines", status, "config: ")
+			contains(t, "the block", block, "Milestones", "Needs you (1)")
+		})
 	}
 }
 

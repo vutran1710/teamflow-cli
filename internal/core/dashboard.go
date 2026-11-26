@@ -12,17 +12,14 @@ import (
 )
 
 // Dashboard is the project at a glance (`teamflow project status`, /teamf status), drawn from the replica after a
-// sync within a hook's budget; offline, from the replica as of its last sync. sess is the agent session this runs
+// sync within a hook's budget; offline (or signed out), from the replica as of its last sync. sess is the agent session this runs
 // under (nil outside one): its member is "you" and its topics are named when it works on this project; otherwise
 // "you" is the member this machine's key for the project acts as. The release the background sync last updated
 // teamflow to is taken: it is told once.
 func (c *Core) Dashboard(ctx context.Context, pid string, sess *store.Session, now time.Time) (dashboard.Board, error) {
 	ctx, cancel := context.WithTimeout(ctx, hookDeadline)
 	defer cancel()
-	online := true
-	if c.SignedIn() {
-		online = c.Sync(ctx, HookTimeout, pid)
-	}
+	online := c.SignedIn() && c.Sync(ctx, HookTimeout, pid) // signed out: the replica is all there is
 	if err := c.Replica(ctx, pid); err != nil {
 		return dashboard.Board{}, err
 	}

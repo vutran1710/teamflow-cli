@@ -5,5 +5,6 @@ Arguments: project [<project> [topic …]] | stop | status | approvals [--all] |
 
 Run `{TEAMFLOW} team --relay {ARGUMENTS}` with the person's arguments exactly as they typed them, and nothing else
 for this command. Tell the person what it prints in one or two short lines. For status, then show the project block
-it prints (from the project's name to its last line) exactly as printed, in a code block. If it lists approval
-requests or projects to choose from, ask about them as it says.
+it prints exactly as printed, in a code block: from its "(offline: …)" line when there is one, else from the
+project's name, to its last line. If it lists approval requests or projects to choose from, ask about them as it
+says.
