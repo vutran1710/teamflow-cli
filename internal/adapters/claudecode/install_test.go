@@ -172,6 +172,19 @@ func TestInstallFresh(t *testing.T) {
 			if len(allow) != 2*len(adapters.WorkCommands) {
 				t.Fatalf("allow rules %v", allow)
 			}
+			// Updating teamflow (/teamf upgrade or update) is the person's call: Claude Code asks, though team is
+			// allowed (its ask rules win over allow rules, the /teamf command's own allowed-tools too).
+			ask := s["permissions"].(map[string]any)["ask"].([]any)
+			for _, head := range []string{"teamflow", adapters.ShellQuote(e.bin)} {
+				for _, cmd := range []string{"team --relay upgrade", "team --relay update", "team upgrade", "team update"} {
+					if !containsAny(ask, "Bash("+head+" "+cmd+":*)") {
+						t.Fatalf("ask lacks %s %s: %v", head, cmd, ask)
+					}
+				}
+			}
+			if len(ask) != len(AskRules(e.bin)) || len(ask) != 8 {
+				t.Fatalf("ask rules %v", ask)
+			}
 			if _, err := os.Stat(e.claudeJSON()); err == nil {
 				t.Fatal("install wrote a claude json: no MCP server is registered any more")
 			}
@@ -249,6 +262,9 @@ func TestInstallKeepsThePersonsOwn(t *testing.T) {
     "allow": [
       "Bash(git status)"
     ],
+    "ask": [
+      "Bash(git push:*)"
+    ],
     "deny": [
       "Read(~/.teamflow/**)",
       "Read(./.env)"
@@ -295,6 +311,9 @@ func TestInstallKeepsThePersonsOwn(t *testing.T) {
 	}
 	if allow := s["permissions"].(map[string]any)["allow"].([]any); allow[0] != "Bash(git status)" || !containsAny(allow, "Bash(teamflow topic:*)") {
 		t.Fatalf("the person's allow rule first, Teamflow's after: %v", allow)
+	}
+	if ask := s["permissions"].(map[string]any)["ask"].([]any); ask[0] != "Bash(git push:*)" || !containsAny(ask, "Bash(teamflow team --relay upgrade:*)") {
+		t.Fatalf("the person's ask rule first, Teamflow's after: %v", ask)
 	}
 	if read(t, e.claudeJSON()) != claudeJSON {
 		t.Fatal("install touched a claude json with no Teamflow MCP server in it")

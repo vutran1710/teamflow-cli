@@ -1177,7 +1177,7 @@ func TestInstallClaudeCode(t *testing.T) {
 	contains(t, "stdout", r.out, "claude-code: installed\n")
 	r = m.run("", "uninstall", "-a", "claude-code")
 	wantCode(t, r, 0)
-	contains(t, "stdout", r.out, "removed Teamflow's hooks, allow and deny rules")
+	contains(t, "stdout", r.out, "removed Teamflow's hooks, allow, ask and deny rules")
 	// A malformed settings.json refuses the install: exit 1 with the reason; the file is left as it was.
 	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte("{oops"), 0o644); err != nil {
 		t.Fatal(err)

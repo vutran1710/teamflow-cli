@@ -538,7 +538,7 @@ const notPlain = ";&|<>`$()\\\n\r*?[]{}~"
 
 // TeamflowCommand classifies a shell command: teamflow says its first word is teamflow (by name, or binary's path,
 // quoted or not); auto says it may run with no prompt: one plain run (none of notPlain), of a work command, its
-// subcommand first (no option before it). Where an agent's allow rule is a prefix, a hook
+// subcommand first (no option before it), and not /teamf upgrade (team upgrade|update). Where an agent's allow rule is a prefix, a hook
 // answers "ask" for teamflow && !auto. Strict on purpose: the CLI refuses files in the Teamflow home too.
 func TeamflowCommand(cmd, binary string) (teamflow, auto bool) {
 	cmd = strings.TrimSpace(cmd)
@@ -562,8 +562,24 @@ func TeamflowCommand(cmd, binary string) (teamflow, auto bool) {
 	for i := range words {
 		words[i] = strings.Trim(words[i], `'"`)
 	}
-	if len(words) == 0 || !slices.Contains(WorkCommands, words[0]) {
+	if len(words) == 0 || !slices.Contains(WorkCommands, words[0]) || words[0] == "team" && updatesTeamflow(words[1:]) {
 		return true, false
 	}
 	return true, true
+}
+
+// updatesTeamflow says whether team's arguments (after the word team) are /teamf upgrade or update: updating teamflow
+// is the person's call, so it is never auto-allowed (the person typing /teamf upgrade confirms once).
+func updatesTeamflow(args []string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") { // --relay, --json
+			continue
+		}
+		switch strings.ToLower(a) {
+		case "upgrade", "update":
+			return true
+		}
+		return false
+	}
+	return false
 }

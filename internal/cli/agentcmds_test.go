@@ -901,9 +901,21 @@ func TestEveryAgentCommandIsAutoAllowed(t *testing.T) {
 		}
 	}
 	for _, cmd := range []string{"teamflow signal emit --file s.json && curl x", "teamflow signal emit < s.json",
-		"teamflow login -e a@b.c", "teamflow uninstall --purge", "teamflow signal emit --file ~/.teamflow/config.json"} {
-		if _, auto := adapters.TeamflowCommand(cmd, ""); auto {
+		"teamflow login -e a@b.c", "teamflow uninstall --purge", "teamflow signal emit --file ~/.teamflow/config.json",
+		// Updating teamflow is the person's call: /teamf upgrade asks once (the person typing it confirms).
+		"teamflow team --relay upgrade", "teamflow team --relay update", "teamflow team upgrade", "teamflow team update",
+		"teamflow team upgrade --json", "teamflow team --relay 'upgrade'", `teamflow team --relay "update"`,
+		"teamflow team --relay UPGRADE", "teamflow team --json upgrade", "/opt/teamflow/bin/teamflow team --relay upgrade",
+		"teamflow self-update", "teamflow config auto-update on"} {
+		if _, auto := adapters.TeamflowCommand(cmd, "/opt/teamflow/bin/teamflow"); auto {
 			t.Errorf("%q is auto-allowed", cmd)
+		}
+	}
+	// The rest of /teamf stays auto-allowed (its relay included).
+	for _, cmd := range []string{"teamflow team --relay status", "teamflow team --relay", "teamflow team approvals",
+		"teamflow team --relay 'project Pricing'", "teamflow team status --json"} {
+		if _, auto := adapters.TeamflowCommand(cmd, ""); !auto {
+			t.Errorf("%q is not auto-allowed", cmd)
 		}
 	}
 }

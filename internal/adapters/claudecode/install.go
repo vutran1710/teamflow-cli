@@ -115,8 +115,9 @@ func (*Adapter) Installed() bool {
 
 // manifest is what install created or added beyond Teamflow's own marked entries.
 type manifest struct {
-	Created []string // containers it made: hooks, hooks.<event>, permissions, permissions.allow, permissions.deny
+	Created []string // containers it made: hooks, hooks.<event>, permissions, permissions.allow|ask|deny
 	Allow   []string // allow rules it added
+	Ask     []string // ask rules it added
 	Deny    []string // deny rules it added
 	found   bool
 }
@@ -129,6 +130,7 @@ func loadManifest() (manifest, error) {
 	b, _ := os.ReadFile(manifestPath())
 	m := manifest{found: len(bytes.TrimSpace(b)) > 0}
 	m.Created, m.Allow, m.Deny = strings_(get(doc, "created")), strings_(get(doc, "allow")), strings_(get(doc, "deny"))
+	m.Ask = strings_(get(doc, "ask"))
 	return m, nil
 }
 
@@ -136,7 +138,7 @@ func (m manifest) save() error {
 	slices.Sort(m.Created)
 	m.Created = slices.Compact(m.Created)
 	return adapters.SaveJSON(manifestPath(), ojson.Obj{{Key: "created", Value: anyList(m.Created)},
-		{Key: "allow", Value: anyList(m.Allow)}, {Key: "deny", Value: anyList(m.Deny)}}, 0o644)
+		{Key: "allow", Value: anyList(m.Allow)}, {Key: "ask", Value: anyList(m.Ask)}, {Key: "deny", Value: anyList(m.Deny)}}, 0o644)
 }
 
 func (m manifest) created(path string) bool { return slices.Contains(m.Created, path) }
@@ -323,6 +325,9 @@ func installSettings(s ojson.Obj, binary string, m *manifest) (ojson.Obj, error)
 	if perms, m.Allow, err = addRules(perms, "allow", AllowRules(binary), m.Allow, m); err != nil {
 		return nil, err
 	}
+	if perms, m.Ask, err = addRules(perms, "ask", AskRules(binary), m.Ask, m); err != nil {
+		return nil, err
+	}
 	return s.Set("permissions", perms), nil
 }
 
@@ -380,6 +385,23 @@ func AllowRules(binary string) []string {
 	var rules []string
 	for _, h := range heads {
 		for _, c := range adapters.WorkCommands {
+			rules = append(rules, "Bash("+h+" "+c+":*)")
+		}
+	}
+	return rules
+}
+
+// AskRules make Claude Code ask before teamflow is updated through /teamf (team [--relay] upgrade|update), though
+// team is allowed: updating teamflow is the person's call (adapters.TeamflowCommand never auto-allows it either).
+// An ask rule wins over an allow rule, the /teamf command's allowed-tools too: the person confirms once.
+func AskRules(binary string) []string {
+	heads := []string{"teamflow"}
+	if binary != "" && filepath.Base(binary) != binary {
+		heads = append(heads, shellQuote(binary))
+	}
+	var rules []string
+	for _, h := range heads {
+		for _, c := range []string{"team --relay upgrade", "team --relay update", "team upgrade", "team update"} {
 			rules = append(rules, "Bash("+h+" "+c+":*)")
 		}
 	}
@@ -445,7 +467,7 @@ func removeOldTeam() (string, error) {
 
 // ------------------------------------------------------------------ uninstall
 
-// Uninstall takes out Teamflow's hooks, allow and deny rules, an old MCP server, instruction block and /teamf (and an old /team of
+// Uninstall takes out Teamflow's hooks, allow, ask and deny rules, an old MCP server, instruction block and /teamf (and an old /team of
 // Teamflow's); the person's own entries stay as they were.
 func (a *Adapter) Uninstall() ([]string, error) {
 	unlock, err := lock()
@@ -481,12 +503,13 @@ func (a *Adapter) Uninstall() ([]string, error) {
 	}
 	s, denyChanged := stripRules(s, "deny", m.Deny, m)
 	s, allowChanged := stripRules(s, "allow", m.Allow, m)
-	denyChanged = denyChanged || allowChanged
+	s, askChanged := stripRules(s, "ask", m.Ask, m)
+	denyChanged = denyChanged || allowChanged || askChanged
 	if changed || denyChanged {
 		if err := adapters.SaveJSON(settingsPath(), s, 0o644); err != nil {
 			return done, err
 		}
-		done = append(done, "removed Teamflow's hooks, allow and deny rules from "+home.Display(settingsPath()))
+		done = append(done, "removed Teamflow's hooks, allow, ask and deny rules from "+home.Display(settingsPath()))
 	}
 	if hasOldMCP() { // left by an install from before agents used the CLI
 		line, err := removeOldMCP(m)
