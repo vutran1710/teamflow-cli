@@ -13,11 +13,12 @@ The release key's public half is compiled into `teamflow` (`internal/selfupdate/
 
 ## Who checks what
 
-- **`teamflow self-update`** always checks the signature (with the compiled-in key, using Go's standard library)
-  and that it was made for the release's tag, then the archive's checksum, before it touches the installed
-  binary. It then checks the new binary runs and names the release's version, and renames it over the old one in
-  the same folder. Downloads and their redirects must be https. On any failure it refuses and the old binary stays
-  as it was.
+- **`teamflow self-update`** (and `/teamf upgrade`, and the background sync's scheduled update, which run the same
+  code) always checks the signature (with the compiled-in key, using Go's standard library) and that it was made
+  for the release's tag, then the archive's checksum, before it touches the installed binary. It then checks the
+  new binary runs and names the release's version, and renames it over the old one in the same folder. Downloads
+  and their redirects must be https. On any failure it refuses and the old binary stays as it was. The background
+  sync swaps the binary only while no send is in flight (it holds every outbox's sender lock), then restarts on it.
 - **`install.sh`** finds the latest release's tag from the Releases page's `/latest` redirect (no API) and
   downloads that tag's files. It always checks the checksum. When `minisign` is installed it checks the signature
   and that it was made for that tag; otherwise it says that only the checksum was checked and prints the command
@@ -49,8 +50,9 @@ library can check, so self-update needs nothing else.
   unknown OS or architecture before it downloads anything.
 - **GitHub's API rate limit or no network:** `self-update` refuses with the reason and the Releases link.
   `install.sh` does not use the API.
-- **Up to date, or a newer build than the latest release:** nothing is downloaded. A build that is not a release
-  version (`dev`, a commit build) is updated to the latest release.
+- **Up to date, or a newer build than the latest release:** nothing is downloaded. A pre-release, or a tag that
+  is not a release version, is never installed. A build that is not a release version (`dev`, a commit build) is
+  updated to the latest release by `self-update`, never by the background sync.
 
 ## The release gate and the key (once, by the maintainer)
 

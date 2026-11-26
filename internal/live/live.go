@@ -76,6 +76,7 @@ type Options struct {
 	Rescan          time.Duration   // sign-in, keys, outbox and sessions are read again this often (2 s)
 	Logf            func(format string, a ...any)
 	Applied         func(project string, seq int64) // hears each event applied from the socket (tests)
+	AutoUpdate      *AutoUpdate                     // the scheduled self-update (update.go); nil: none
 }
 
 // DefaultPingEvery and DefaultSilence: a socket that stops answering is found dead within their sum, which is
@@ -222,7 +223,8 @@ func Stop(dir string, wait time.Duration) (bool, error) {
 // ------------------------------------------------------------------ the run
 
 // Run is the background sync on c's Teamflow home, until ctx ends, the machine is signed out, or IdleExit passes
-// with no active agent session (all nil). ErrRunning when another copy runs. c's config and store are read, never
+// with no active agent session (all nil), or the scheduled self-update put a new binary in place (*Updated: the
+// caller restarts the sync on it). ErrRunning when another copy runs. c's config and store are read, never
 // changed: the sync reads the sign-in from disk again every Rescan.
 func Run(ctx context.Context, c *core.Core, o Options) error {
 	o = o.withDefaults()
@@ -237,6 +239,9 @@ func Run(ctx context.Context, c *core.Core, o Options) error {
 	}
 	r := &runner{o: o, dir: c.Dir, st: c.St, now: now, started: now(), workers: map[string]*worker{},
 		stopped: map[string]string{}, flushAt: map[string]time.Time{}, flushStep: map[string]int{}, once: map[string]bool{}}
+	if o.AutoUpdate != nil && o.AutoUpdate.Updater != nil {
+		r.update = &updater{a: o.AutoUpdate.withDefaults()}
+	}
 	defer r.stopAll()
 	o.Logf("teamflow sync: started (pid %d)", os.Getpid())
 	tick := time.NewTicker(o.Rescan)
@@ -245,6 +250,9 @@ func Run(ctx context.Context, c *core.Core, o Options) error {
 		if why := r.round(ctx); why != "" {
 			o.Logf("teamflow sync: stopping: %s", why)
 			return nil
+		}
+		if up := r.selfUpdate(ctx); up != nil {
+			return up // a new binary is in place: the caller restarts the sync on it
 		}
 		select {
 		case <-ctx.Done():
@@ -272,6 +280,8 @@ type runner struct {
 
 	flushAt   map[string]time.Time
 	flushStep map[string]int
+
+	update *updater // the scheduled self-update (nil: none)
 }
 
 type worker struct {

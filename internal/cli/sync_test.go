@@ -4,16 +4,20 @@ package cli
 // detached with its output in sync.log (0600), nothing secret in its arguments, never started signed out.
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/live"
+	"github.com/vutran1710/teamflow-cli/internal/selfupdate/selfupdatetest"
 )
 
 // spawned records what a start would have launched instead of launching it.
@@ -146,4 +150,51 @@ func TestSyncCommand(t *testing.T) {
 			t.Fatalf("sync.log %v %v", fi, err)
 		}
 	})
+}
+
+// scheduledUpdate makes `teamflow sync` check at once against rel for a stand-in teamflow 0.1.0, and records the
+// restart instead of making it (fail: the restart fails).
+func scheduledUpdate(t *testing.T, rel *selfupdatetest.Release, fail error) (exe string, restarted *string) {
+	t.Helper()
+	t.Setenv(config.AutoUpdateEnv, "")
+	exe = selfupdatetest.Installed(t, t.TempDir(), "0.1.0")
+	var got string
+	oldO, oldR := syncOptions, restartSync
+	syncOptions = func() live.Options {
+		return live.Options{Rescan: 20 * time.Millisecond, Logf: func(string, ...any) {},
+			AutoUpdate: &live.AutoUpdate{Updater: rel.Updater(exe, nil), Current: "0.1.0", First: time.Nanosecond}}
+	}
+	restartSync = func(e string) error { got = e; return fail }
+	t.Cleanup(func() { syncOptions, restartSync = oldO, oldR })
+	return exe, &got
+}
+
+// After its scheduled update the background sync goes on as the new binary, in this process's place (the
+// restart runs the binary now on disk: the new release); /teamf status will tell it once. Sad path: the restart
+// fails (said, exit 1: the next agent hook starts the sync again).
+func TestSyncRestartsOnTheNewBinary(t *testing.T) {
+	m := newMachine(t, true)
+	m.inSession("s1", "", nil)
+	exe, restarted := scheduledUpdate(t, selfupdatetest.New(t, "v0.1.1", ""), nil)
+	r := m.run("", "sync")
+	wantCode(t, r, 0)
+	if *restarted != exe {
+		t.Fatalf("restarted %q, want %q (%s)", *restarted, exe, r)
+	}
+	if out, err := exec.Command(*restarted, "--version").Output(); err != nil || string(out) != "teamflow 0.1.1\n" {
+		t.Fatalf("the restart runs %q %v", out, err)
+	}
+	if v, _ := m.store().TakeUpdatedTo(); v != "v0.1.1" {
+		t.Fatalf("updated to %q", v)
+	}
+	if _, running := live.Status(m.dir); running {
+		t.Fatal("the lock is still held")
+	}
+
+	m = newMachine(t, true)
+	m.inSession("s1", "", nil)
+	scheduledUpdate(t, selfupdatetest.New(t, "v0.1.1", ""), errors.New("exec format error"))
+	r = m.run("", "sync")
+	wantCode(t, r, 1)
+	contains(t, "stderr", r.err, "the background sync could not restart on the new binary: exec format error; the next agent hook starts it")
 }

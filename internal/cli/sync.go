@@ -7,6 +7,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -14,10 +15,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/config"
 	"github.com/vutran1710/teamflow-cli/internal/core"
 	"github.com/vutran1710/teamflow-cli/internal/home"
 	"github.com/vutran1710/teamflow-cli/internal/live"
+	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"github.com/vutran1710/teamflow-cli/internal/store"
 )
 
@@ -98,14 +101,36 @@ func runSync(r *inv, a *parsed) int {
 	}
 	ctx, stop := signal.NotifyContext(r.ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer stop()
-	if err := live.Run(ctx, c, live.Options{}); err != nil {
-		if errors.Is(err, live.ErrRunning) {
-			r.println("the background sync is already running")
-			return 0
+	err = live.Run(ctx, c, syncOptions())
+	var up *live.Updated
+	switch {
+	case errors.As(err, &up): // a new binary is in place: this sync goes on as it, in this process's place
+		stop()
+		c.Close()
+		r.client = nil
+		if err := restartSync(up.Exe); err != nil {
+			return r.fail("the background sync could not restart on the new binary: " + err.Error() +
+				"; the next agent hook starts it")
 		}
+		return 0
+	case errors.Is(err, live.ErrRunning):
+		r.println("the background sync is already running")
+		return 0
+	case err != nil:
 		return r.failErr(err)
 	}
 	return 0
+}
+
+// syncOptions are the background sync's: the protocol's timing, and the scheduled self-update of this binary
+// (replaced in tests).
+var syncOptions = func() live.Options {
+	return live.Options{AutoUpdate: &live.AutoUpdate{Updater: selfupdate.Default(io.Discard), Current: api.Version}}
+}
+
+// restartSync runs exe's background sync in this process's place (replaced in tests): its log and session stay.
+var restartSync = func(exe string) error {
+	return syscall.Exec(exe, []string{exe, "sync"}, os.Environ())
 }
 
 func syncStatus(r *inv, dir string) int {

@@ -23,9 +23,13 @@ older install, the retired Python one) comes first, `install.sh` and `teamflow i
 so, with the line to add for zsh (`~/.zshrc`) and bash (`~/.bashrc`); `teamflow install --json` says
 `"on_path": false`.
 
-`teamflow self-update` replaces the binary with the newest release, always checking the signature (with the key
-compiled into the binary) and the checksum first; on any failure the old binary stays. See
-[VERIFY.md](VERIFY.md).
+`teamflow self-update` (or `/teamf upgrade` in an agent session) replaces the binary with the newest release,
+always checking the signature (with the key compiled into the binary) and the checksum first; on any failure the
+old binary stays. The background sync does the same on its own: about 10 minutes after it starts, then about once
+a day, it installs a newer release with the same checks (never a pre-release, never an older one), then restarts on
+it and tells your sessions. Where it can't write the binary's folder it says once per release that a new one is
+available. To turn that off: `teamflow config auto-update off` (or `TEAMFLOW_AUTO_UPDATE=0`); `/teamf status` then
+says `auto-update: off`. See [VERIFY.md](VERIFY.md).
 
 To build from source (Go 1.26 or later):
 
