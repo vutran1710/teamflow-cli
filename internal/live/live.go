@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -86,8 +87,10 @@ const (
 	DefaultSilence   = protocol.LivePongSeconds * time.Second
 )
 
-// lockRetry: a start finding the lock held tries again for this long (a --status or --stop probe holds it briefly).
-const lockRetry = 50 * time.Millisecond
+// lockRetry: a start finding the lock held by status probes (shared) tries again for this long, every 2–8 ms
+// (jittered, so it never keeps step with a probe polled at a fixed rate). A lock held exclusively is a running
+// copy: the start gives up at once.
+const lockRetry = 2 * time.Second
 
 // writeTimeout bounds one ping's write.
 const writeTimeout = 5 * time.Second
@@ -154,11 +157,20 @@ func lock(dir string) (func(), error) {
 			_ = f.Close()
 			return nil, fmt.Errorf("sync lock: %w", err)
 		}
+		// Held, but by whom? Shared is only probes (Status, --stop): wait them out. Not even shared: a running copy.
+		if serr := unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB); serr != nil {
+			if errors.Is(serr, unix.EWOULDBLOCK) {
+				_ = f.Close()
+				return nil, ErrRunning
+			}
+		} else {
+			_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		}
 		if !time.Now().Before(deadline) {
 			_ = f.Close()
 			return nil, ErrRunning
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(time.Duration(2+rand.IntN(7)) * time.Millisecond)
 	}
 	_ = f.Truncate(0)
 	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)

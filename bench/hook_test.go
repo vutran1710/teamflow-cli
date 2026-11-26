@@ -286,7 +286,8 @@ func TestPromptHookP95StartingTheSync(t *testing.T) {
 	report(t, "prompt hook, starting the background sync", ds)
 }
 
-// started waits until the background sync holds its lock.
+// started waits until the background sync holds its lock, looking every 25 ms (each look is a status probe, which
+// holds the lock shared for a moment: the starting copy waits such probes out).
 func started(dir string, wait time.Duration) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
@@ -294,7 +295,7 @@ func started(dir string, wait time.Duration) bool {
 		if _, ok := live.Status(dir); ok {
 			return true
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 	return false
 }

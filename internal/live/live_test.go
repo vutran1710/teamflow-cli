@@ -1198,6 +1198,29 @@ func TestStartingBesideAStatusProbe(t *testing.T) {
 	}
 }
 
+// A status check holding the shared lock for 200 ms (a slow --status, or a probe polled again and again) never makes
+// a starting copy give up: it waits out shared holders (up to lockRetry), and only a running copy (the lock held
+// exclusively) makes it say ErrRunning, at once.
+func TestStartingBesideASlowStatusCheck(t *testing.T) {
+	f := newFake(t)
+	c := machine(t, f)
+	fh, err := os.OpenFile(filepath.Join(c.Dir, LockFile), os.O_RDWR|os.O_CREATE, 0o600)
+	must(t, err)
+	defer fh.Close()
+	fd := int(fh.Fd())
+	must(t, unix.Flock(fd, unix.LOCK_SH|unix.LOCK_NB))
+	unlocked := make(chan struct{})
+	go func() { time.Sleep(200 * time.Millisecond); _ = unix.Flock(fd, unix.LOCK_UN); close(unlocked) }()
+	defer func() { <-unlocked }()
+	wait, _ := start(t, c, fast(nil, nil))
+	eventually(t, "running", func() bool { pid, ok := Status(c.Dir); return ok && pid == os.Getpid() })
+	select {
+	case err := <-waitCh(wait):
+		t.Fatalf("the starting copy gave up: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
 // The auth key expiring while the sync runs: sockets on project keys go on; a project whose items wait without a
 // key asks for one once (refused), not on every round; nothing is lost, nothing crashes.
 func TestExpiredAuthKeyWhileRunning(t *testing.T) {

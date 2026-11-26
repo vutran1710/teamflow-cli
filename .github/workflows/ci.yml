@@ -41,6 +41,9 @@ jobs:
         run: shellcheck install.sh
       - name: Tests
         run: go test -race -count=1 ./...
+      - name: Tests without -race (timing as a release build runs it)
+        if: runner.os == 'Linux'
+        run: go test -count=1 ./...
       - name: Hook p95 bench (alone, under 30 ms over 200 runs; gated on Linux, reported on macOS)
         env:
           TEAMFLOW_BENCH: "1"
