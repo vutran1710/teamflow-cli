@@ -18,7 +18,8 @@ It checks the release's checksum, and its signature when `minisign` is installed
 `teamflow` in `~/.local/bin`, then asks for your email and which agents to set up (Claude Code, Copilot CLI; Cursor
 CLI and Antigravity CLI are experimental) and signs you in. Your own agent settings stay as they are.
 
-Later, or for another agent: `teamflow install`. To take it out: `teamflow uninstall`.
+Later, or to add another agent: `teamflow install -a <agent>` (`claude-code`, `copilot`; `cursor` and `antigravity`
+are experimental). To take it out: `teamflow uninstall`.
 More options, scripted installs and building from source: [docs/install.md](docs/install.md).
 In a session, `/teamf project <name>` chooses the project the agent works on, and `/teamf status` shows it at a glance.
 
