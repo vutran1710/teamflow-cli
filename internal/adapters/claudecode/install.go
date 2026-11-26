@@ -391,8 +391,9 @@ func AllowRules(binary string) []string {
 	return rules
 }
 
-// AskRules make Claude Code ask before teamflow is updated through /teamf (team [--relay] upgrade|update), though
-// team is allowed: updating teamflow is the person's call (adapters.TeamflowCommand never auto-allows it either).
+// AskRules make Claude Code ask before teamflow is updated through /teamf (team [--relay] upgrade|update, plain or
+// quoted as a prefix rule can say), though team is allowed: updating teamflow is the person's call
+// (adapters.TeamflowCommand never auto-allows it either).
 // An ask rule wins over an allow rule, the /teamf command's allowed-tools too: the person confirms once.
 func AskRules(binary string) []string {
 	heads := []string{"teamflow"}
@@ -401,8 +402,12 @@ func AskRules(binary string) []string {
 	}
 	var rules []string
 	for _, h := range heads {
-		for _, c := range []string{"team --relay upgrade", "team --relay update", "team upgrade", "team update"} {
-			rules = append(rules, "Bash("+h+" "+c+":*)")
+		for _, team := range []string{"team --relay ", "team "} {
+			for _, sub := range []string{"upgrade", "update"} {
+				for _, form := range []string{sub, "'" + sub + "'", `"` + sub + `"`, "' " + sub + "'", `" ` + sub + `"`} {
+					rules = append(rules, "Bash("+h+" "+team+form+":*)")
+				}
+			}
 		}
 	}
 	return rules

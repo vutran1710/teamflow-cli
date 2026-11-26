@@ -182,8 +182,14 @@ func TestInstallFresh(t *testing.T) {
 					}
 				}
 			}
-			if len(ask) != len(AskRules(e.bin)) || len(ask) != 8 {
-				t.Fatalf("ask rules %v", ask)
+			for _, quoted := range []string{"Bash(teamflow team --relay 'upgrade':*)", `Bash(teamflow team --relay " update":*)`,
+				"Bash(teamflow team 'update':*)"} {
+				if !containsAny(ask, quoted) {
+					t.Fatalf("ask lacks %s: %v", quoted, ask)
+				}
+			}
+			if len(ask) != len(AskRules(e.bin)) || len(ask) != 40 {
+				t.Fatalf("ask rules %d: %v", len(ask), ask)
 			}
 			if _, err := os.Stat(e.claudeJSON()); err == nil {
 				t.Fatal("install wrote a claude json: no MCP server is registered any more")

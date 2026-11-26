@@ -608,3 +608,31 @@ func TestNoAgentTextSaysToUpgrade(t *testing.T) {
 		t.Errorf("the available notice: %q", got)
 	}
 }
+
+// The classifier and the relay agree: every spelling sh turns into a run of /teamf upgrade (quotes joined to the
+// word, a lone argument the relay splits again) is one an agent's hook asks about, never auto-allowed.
+func TestEveryUpgradeSpellingAsks(t *testing.T) {
+	for _, c := range []struct {
+		cmd  string
+		argv []string // what sh gives teamflow after "teamflow"
+	}{
+		{`teamflow team --relay ' upgrade'`, []string{"team", "--relay", " upgrade"}},
+		{`teamflow team --relay " update"`, []string{"team", "--relay", " update"}},
+		{`teamflow team u'pgrade'`, []string{"team", "upgrade"}},
+		{`teamflow team --relay up""grade`, []string{"team", "--relay", "upgrade"}},
+		{`teamflow team --relay 'upgrade'`, []string{"team", "--relay", "upgrade"}},
+		{`teamflow team update`, []string{"team", "update"}},
+	} {
+		t.Run(c.cmd, func(t *testing.T) {
+			m := newMachine(t, true)
+			exe, _ := realUpdate(t, selfupdatetest.New(t, "v0.1.1", ""))
+			m.run("", c.argv...)
+			if b, _ := os.ReadFile(exe); string(b) != selfupdatetest.Script("0.1.1") {
+				t.Fatalf("the relay did not run it as an upgrade: %q", b)
+			}
+			if _, auto := adapters.TeamflowCommand(c.cmd, "/opt/teamflow/bin/teamflow"); auto {
+				t.Fatalf("%s upgrades teamflow and is auto-allowed", c.cmd)
+			}
+		})
+	}
+}

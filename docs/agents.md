@@ -17,9 +17,9 @@ instructions. Each command reads the sign-in and keys from disk and finds the ag
 - `settings.json`: hooks for SessionStart, UserPromptSubmit, PreToolUse, Stop and SessionEnd,
   `permissions.allow` rules `Bash(teamflow <command>:*)` for each work command (the same by the binary's path), and
   `permissions.deny` rules for the Teamflow home (backed up once as `settings.json.teamflow-backup`), and
-  `permissions.ask` rules for `teamflow team [--relay] upgrade|update`: updating teamflow through `/teamf upgrade`
-  asks once (an ask rule wins over the allow rules). Setup commands (login, logout, install, uninstall, self-update,
-  sync, outbox, config) keep Claude Code's prompt;
+  `permissions.ask` rules for `teamflow team [--relay] upgrade|update` (plain or quoted): updating teamflow through
+  `/teamf upgrade` asks once (an ask rule wins over the allow rules). Setup commands (login, logout, install,
+  uninstall, self-update, sync, outbox, config) keep Claude Code's prompt;
 - `CLAUDE.md`: the instruction text, word for word, between `<!-- teamflow:begin … -->` and `<!-- teamflow:end -->`;
 - `commands/teamf.md`: the `/teamf` command;
 - `.teamflow-install.json`: what install added, so `teamflow uninstall` takes out exactly that.
@@ -75,6 +75,10 @@ shaped file before writing anything, and never fails your agent's step.
   binary's path, one rule per work command, so setup commands keep the prompt;
   `permissions.deny`: `read_file(<home>)`, `write_file(<home>)` and `command(regex:…)` rules for commands naming
   the home).
+
+Updating teamflow asks: Claude Code through its ask rules, Copilot and Cursor through their hooks; an install made
+before v0.1.1 gets the ask rules by running `teamflow install` again. Antigravity (experimental) has no ask rule
+yet, so an agent there may run `/teamf upgrade` without asking (only signed releases are ever installed).
 
 The same limits as Claude Code's deny rules apply: they stop what names the folder, not a command that reaches it
 another way. The CLI itself never reads a file in the Teamflow home for a command (`--plan-file`,

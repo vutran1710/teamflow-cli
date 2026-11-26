@@ -558,10 +558,7 @@ func TeamflowCommand(cmd, binary string) (teamflow, auto bool) {
 	if strings.ContainsAny(cmd, notPlain) {
 		return true, false
 	}
-	words := strings.Fields(rest)
-	for i := range words {
-		words[i] = strings.Trim(words[i], `'"`)
-	}
+	words := shellWords(rest) // the words teamflow gets, as sh gives them
 	if len(words) == 0 || !slices.Contains(WorkCommands, words[0]) || words[0] == "team" && updatesTeamflow(words[1:]) {
 		return true, false
 	}
@@ -569,17 +566,59 @@ func TeamflowCommand(cmd, binary string) (teamflow, auto bool) {
 }
 
 // updatesTeamflow says whether team's arguments (after the word team) are /teamf upgrade or update: updating teamflow
-// is the person's call, so it is never auto-allowed (the person typing /teamf upgrade confirms once).
+// is the person's call, so it is never auto-allowed (the person typing /teamf upgrade confirms once). A lone
+// argument after --relay with a space or a quote in it is split again, as the relay splits it.
 func updatesTeamflow(args []string) bool {
+	if len(args) > 0 && args[0] == "--relay" {
+		args = args[1:]
+	}
+	if len(args) == 1 && strings.ContainsAny(args[0], " \t\"'") {
+		args = shellWords(args[0])
+	}
 	for _, a := range args {
 		if strings.HasPrefix(a, "-") { // --relay, --json
 			continue
 		}
-		switch strings.ToLower(a) {
+		f := strings.Fields(a)
+		if len(f) == 0 {
+			continue
+		}
+		switch strings.ToLower(f[0]) {
 		case "upgrade", "update":
 			return true
 		}
 		return false
 	}
 	return false
+}
+
+// shellWords splits s as sh splits a plain command (none of notPlain: no backslash or expansion): words at
+// spaces and tabs, quotes joined to their word and taken away (`u'pgrade'` is upgrade, `' upgrade'` one word).
+func shellWords(s string) []string {
+	var out []string
+	var cur strings.Builder
+	in, quote := false, rune(0)
+	for _, c := range s {
+		switch {
+		case quote != 0 && c == quote:
+			quote = 0
+		case quote != 0:
+			cur.WriteRune(c)
+		case c == '\'' || c == '"':
+			quote, in = c, true
+		case c == ' ' || c == '\t':
+			if in {
+				out = append(out, cur.String())
+				cur.Reset()
+				in = false
+			}
+		default:
+			cur.WriteRune(c)
+			in = true
+		}
+	}
+	if in {
+		out = append(out, cur.String())
+	}
+	return out
 }

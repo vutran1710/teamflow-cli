@@ -906,6 +906,9 @@ func TestEveryAgentCommandIsAutoAllowed(t *testing.T) {
 		"teamflow team --relay upgrade", "teamflow team --relay update", "teamflow team upgrade", "teamflow team update",
 		"teamflow team upgrade --json", "teamflow team --relay 'upgrade'", `teamflow team --relay "update"`,
 		"teamflow team --relay UPGRADE", "teamflow team --json upgrade", "/opt/teamflow/bin/teamflow team --relay upgrade",
+		// sh joins quotes into the word, and the relay splits a lone argument again: these are upgrade too.
+		"teamflow team --relay ' upgrade'", `teamflow team --relay " update"`, "teamflow team u'pgrade'",
+		`teamflow team --relay up""grade`, "teamflow team --relay 'upgrade now'", `teamflow 'team' upgrade`,
 		"teamflow self-update", "teamflow config auto-update on"} {
 		if _, auto := adapters.TeamflowCommand(cmd, "/opt/teamflow/bin/teamflow"); auto {
 			t.Errorf("%q is auto-allowed", cmd)
