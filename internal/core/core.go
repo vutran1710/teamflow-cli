@@ -377,16 +377,7 @@ func (c *Core) Share(ctx context.Context, sid, project string, topics []string) 
 		return "", err
 	}
 	c.Sync(ctx, DefaultTimeout, project)
-	scope := "all topics"
-	if topics != nil {
-		var names []string
-		for _, t := range view.Topics {
-			if contains(topics, t.ID) {
-				names = append(names, t.Name)
-			}
-		}
-		scope = "topics " + strings.Join(names, ", ")
-	}
+	scope := topicScope(view.Topics, func(id string) bool { return topics == nil || contains(topics, id) }, topics == nil)
 	return fmt.Sprintf("This session now works on %q (%s) as %s.", view.Project.Name, scope, me.Name), nil
 }
 
@@ -449,14 +440,20 @@ func (c *Core) Join(ctx context.Context, sid, project string, topics []string) (
 	}
 	var ids []string
 	if len(topics) > 0 {
-		var pick []protocol.Topic
+		var pick, builtIn []protocol.Topic
 		for _, t := range view.Topics {
-			if !t.System {
+			switch {
+			case t.System:
+				builtIn = append(builtIn, t)
+			default:
 				pick = append(pick, t)
 			}
 		}
 		ids = []string{}
 		for _, want := range topics {
+			if named(builtIn, want) {
+				continue // the built-in Plan topic is always followed
+			}
 			hit := ""
 			for _, t := range pick {
 				if want == t.ID || want == t.Name || strings.EqualFold(want, t.Name) {
@@ -468,6 +465,9 @@ func (c *Core) Join(ctx context.Context, sid, project string, topics []string) (
 				var names []string
 				for _, t := range pick {
 					names = append(names, t.Name)
+				}
+				for _, t := range builtIn {
+					names = append(names, t.Name+" (built-in, always followed)")
 				}
 				return "", fmt.Errorf("no topic %s in %s; topics: %s", pyRepr(want), view.Project.Name, strings.Join(names, ", "))
 			}
@@ -492,16 +492,7 @@ func (c *Core) ProjectMenu(ctx context.Context, sid string) (string, error) {
 			if v.Project.ID != sess.Project {
 				continue
 			}
-			scope := "all topics"
-			if sess.Topics != nil {
-				var names []string
-				for _, t := range v.Topics {
-					if !t.System && sess.Follows(t.ID, nil) {
-						names = append(names, t.Name)
-					}
-				}
-				scope = "topics " + strings.Join(names, ", ")
-			}
+			scope := topicScope(v.Topics, func(id string) bool { return sess.Follows(id, nil) }, sess.Topics == nil)
 			lines = append(lines, fmt.Sprintf("This session works on %q (%s).", v.Project.Name, scope))
 		}
 	}
@@ -510,16 +501,11 @@ func (c *Core) ProjectMenu(ctx context.Context, sid string) (string, error) {
 	}
 	lines = append(lines, "Teamflow projects you are in:")
 	for _, v := range mine.Projects {
-		var names []string
-		for _, t := range v.Topics {
-			if !t.System {
-				names = append(names, t.Name)
-			}
-		}
-		lines = append(lines, fmt.Sprintf("- %s/%s: topics %s", org[v.Project.ID], v.Project.Name, strings.Join(names, ", ")))
+		lines = append(lines, fmt.Sprintf("- %s/%s: %s", org[v.Project.ID], v.Project.Name,
+			topicScope(v.Topics, func(string) bool { return true }, false)))
 	}
 	lines = append(lines, "Ask the person, in your own words, which project this session works on, then which of its "+
-		"topics (several allowed; all by default). Then run `teamflow team project <project> [<topic> …]` with their choice (names as shown).")
+		"topics (several allowed; all by default; the built-in Plan topic is always followed). Then run `teamflow team project <project> [<topic> …]` with their choice (names as shown).")
 	return strings.Join(lines, "\n"), nil
 }
 
@@ -537,4 +523,37 @@ func pyRepr(s string) string {
 		return `"` + s + `"`
 	}
 	return "'" + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), "'", `\'`) + "'"
+}
+
+// topicScope names the topics a session follows: the person's own topics, then each built-in topic (Plan), which
+// every session follows and every list shows, so it never seems to appear in one place and vanish in another.
+func topicScope(topics []protocol.Topic, follows func(id string) bool, all bool) string {
+	var own, builtIn []string
+	for _, t := range topics {
+		switch {
+		case t.System:
+			builtIn = append(builtIn, t.Name+" (built-in, always followed)")
+		case follows(t.ID):
+			own = append(own, t.Name)
+		}
+	}
+	names := append(own, builtIn...)
+	switch {
+	case all:
+		return "all topics: " + strings.Join(names, ", ")
+	case len(names) == 0:
+		return "no topics"
+	default:
+		return "topics " + strings.Join(names, ", ")
+	}
+}
+
+// named reports whether want names one of the topics (by id or name, any case).
+func named(topics []protocol.Topic, want string) bool {
+	for _, t := range topics {
+		if want == t.ID || strings.EqualFold(want, t.Name) {
+			return true
+		}
+	}
+	return false
 }

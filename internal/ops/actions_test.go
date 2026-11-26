@@ -123,7 +123,7 @@ func TestSessionJoin(t *testing.T) {
 	m.srv.on("project.get", pricing(t))
 	m.srv.on("member.me", memberMe(t))
 	wantText(t, m.call("session_join", map[string]any{"project": "pricing", "topics": []any{"rounding"}}),
-		`This session now works on "Pricing" (topics Rounding)`)
+		`This session now works on "Pricing" (topics Rounding, Plan (built-in, always followed))`)
 	m.withStore(func(st *store.Store) error {
 		s, _, err := st.Session("s2")
 		if s.Project != P || !reflect.DeepEqual(s.Topics, []string{T1}) {

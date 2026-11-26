@@ -372,13 +372,40 @@ func TestTeamProjectMenu(t *testing.T) {
 	m.inSession("s1", "", nil)
 	r := m.run("", "team", "--relay", "project")
 	wantCode(t, r, 0)
-	contains(t, "stdout", r.out, "Teamflow projects you are in:", "- Acme/Pricing: topics Rounding, Currency",
-		"teamflow team project <project>")
-	lacks(t, "stdout", r.out, "/teamf", "Claude", "Plan")
+	// The built-in Plan topic is listed with the rest, marked: every session follows it.
+	contains(t, "stdout", r.out, "Teamflow projects you are in:",
+		"- Acme/Pricing: topics Rounding, Currency, Plan (built-in, always followed)",
+		"teamflow team project <project>", "the built-in Plan topic is always followed")
+	lacks(t, "stdout", r.out, "/teamf", "Claude")
 
 	m.srv.on("account.projects", `{"result": {"projects": [], "orgs": {}, "summaries": {}}}`)
 	r = m.run("", "team", "--relay", "project")
 	contains(t, "stdout", r.out, "Teamflow: you are not in any project yet; a project's initiator invites you.")
+}
+
+func TestTeamProjectNamesPlanToo(t *testing.T) {
+	m := newMachine(t, true)
+	m.srv.on("account.projects", "account.projects")
+	m.srv.on("key.fetch", "key.fetch")
+	m.srv.on("project.get", pricingGet)
+	m.srv.on("member.me", huyMember)
+	m.inSession("s1", "", nil)
+	// Naming the built-in topic is not an error: it is always followed, so only Rounding is stored.
+	r := m.run("", "team", "--relay", "project pricing rounding plan")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, `(topics Rounding, Plan (built-in, always followed))`)
+	if s, _, _ := m.store().Session("s1"); !slices.Equal(s.Topics, []string{T1}) {
+		t.Fatalf("session topics %v", s.Topics)
+	}
+	// All topics says so, Plan included.
+	r = m.run("", "team", "--relay", "project pricing")
+	wantCode(t, r, 0)
+	contains(t, "stdout", r.out, `(all topics: Rounding, Currency, Plan (built-in, always followed))`)
+	// An unknown topic lists Plan among the choices, marked.
+	// (the relay answers refusals as text for /teamf to show, exit 0)
+	r = m.run("", "team", "--relay", "project pricing nope")
+	contains(t, "stdout", r.out, "Teamflow refused: not joined: no topic 'nope' in Pricing",
+		"topics: Rounding, Currency, Plan (built-in, always followed)")
 }
 
 func TestTeamProjectJoins(t *testing.T) {
@@ -390,7 +417,7 @@ func TestTeamProjectJoins(t *testing.T) {
 	m.inSession("s1", "", nil)
 	r := m.run("", "team", "--relay", "project pricing rounding")
 	wantCode(t, r, 0)
-	contains(t, "stdout", r.out, `This session now works on "Pricing" (topics Rounding) as huy.`)
+	contains(t, "stdout", r.out, `This session now works on "Pricing" (topics Rounding, Plan (built-in, always followed)) as huy.`)
 	s, _, _ := m.store().Session("s1")
 	if s.Project != P || !slices.Equal(s.Topics, []string{T1}) || s.Member != M1 {
 		t.Fatalf("session %+v", s)
@@ -410,7 +437,7 @@ func TestTeamProjectJoins(t *testing.T) {
 	}
 
 	r = m.run("", "team", "--relay", "project", "Pricing")
-	contains(t, "stdout", r.out, `This session now works on "Pricing" (all topics) as huy.`)
+	contains(t, "stdout", r.out, `This session now works on "Pricing" (all topics: Rounding, Currency, Plan (built-in, always followed)) as huy.`)
 }
 
 func TestTeamProjectSadPaths(t *testing.T) {
