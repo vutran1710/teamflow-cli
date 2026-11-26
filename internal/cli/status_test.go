@@ -26,6 +26,9 @@ import (
 	"github.com/vutran1710/teamflow-cli/internal/adapters/claudecode"
 	"github.com/vutran1710/teamflow-cli/internal/api"
 	"github.com/vutran1710/teamflow-cli/internal/config"
+	"github.com/vutran1710/teamflow-cli/internal/dashboard"
+	"github.com/vutran1710/teamflow-cli/internal/live"
+	"github.com/vutran1710/teamflow-cli/internal/protocol"
 	"github.com/vutran1710/teamflow-cli/internal/selfupdate"
 	"github.com/vutran1710/teamflow-cli/internal/selfupdate/selfupdatetest"
 )
@@ -195,9 +198,12 @@ func TestProjectStatusSadPaths(t *testing.T) {
 	})
 }
 
-// The release the background sync updated teamflow to is told once; auto-update off is said while off.
+// The release the background sync updated teamflow to is told once, by /teamf status only (the person's view):
+// project status and --json never show it, nor use it up. Auto-update off is said while off.
 func TestProjectStatusFooter(t *testing.T) {
 	m := dashMachine(t)
+	m.srv.on("account.me", lanMe)
+	m.inSession("s1", P, nil)
 	if err := m.store().SetUpdatedTo("v0.1.2"); err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +211,15 @@ func TestProjectStatusFooter(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := m.run("", "project", "status", "--project", P)
-	contains(t, "stdout", r.out, "\nauto-update: off\nteamflow was updated to v0.1.2.\n")
-	r = m.run("", "project", "status", "--project", P)
 	contains(t, "stdout", r.out, "\nauto-update: off\n")
+	lacks(t, "stdout", r.out, "was updated")
+	for _, args := range [][]string{{"project", "status", "--json"}, {"team", "status", "--json"}, {"team", "status"}} {
+		r = m.run("", args...)
+		lacks(t, "stdout", r.out, "was updated to v0.1.2")
+	}
+	r = m.run("", "team", "--relay", "status")
+	contains(t, "stdout", r.out, "\nauto-update: off\nteamflow was updated to v0.1.2.\n")
+	r = m.run("", "team", "--relay", "status")
 	lacks(t, "stdout", r.out, "was updated")
 	t.Setenv(config.AutoUpdateEnv, "")
 	if err := config.SetAutoUpdate(m.dir, true); err != nil {
@@ -530,8 +542,15 @@ func TestConfigAutoUpdate(t *testing.T) {
 	contains(t, "stderr", r.err, "say on or off, not maybe")
 	r = m.run("", "config", "auto-update", "on", "off")
 	wantCode(t, r, 2)
+	// The config switch is the state reported: TEAMFLOW_AUTO_UPDATE reaches only a background sync started with it
+	// in its environment, so it is a note, never the answer.
 	t.Setenv(config.AutoUpdateEnv, "0")
-	contains(t, "stdout", m.run("", "config", "auto-update", "on").out, "auto-update: off (TEAMFLOW_AUTO_UPDATE=0 in this shell)")
+	r = m.run("", "config", "auto-update", "on")
+	contains(t, "stdout", r.out, "auto-update: on (", "\nnote: TEAMFLOW_AUTO_UPDATE=0 in this shell reaches only a background "+
+		"sync started with it in its environment; `teamflow config auto-update off` is the switch that always holds\n")
+	r = m.run("", "config", "auto-update", "off")
+	contains(t, "stdout", r.out, "auto-update: off;")
+	lacks(t, "stdout", r.out, "note:")
 }
 
 // The real update (not a stand-in): it replaces the binary only while it still says it is this build; another
@@ -560,4 +579,32 @@ func TestUpgradeOnlyReplacesThisBuild(t *testing.T) {
 	r = m.run("", "team", "--relay", "upgrade")
 	contains(t, "stdout", r.out, "Updated teamflow v0.1.0 -> v0.1.1.")
 	binaryIs(t, exe, "0.1.1")
+}
+
+// No text an agent reads tells anyone to run an upgrade: the scheduled update's notices (to the person: what
+// happened, or what they can do), the instruction text, every command's description and help, and the dashboard.
+// Updating teamflow is the person's call (/teamf upgrade, typed by them). The server's UPGRADE_REQUIRED refusal is
+// apart: it is the answer to a command the server no longer serves, and must say how the person updates.
+func TestNoAgentTextSaysToUpgrade(t *testing.T) {
+	texts := map[string]string{
+		"the updated notice":   live.UpdatedText("v9.9.9"),
+		"the available notice": live.AvailableText("v9.9.9"),
+		"the instruction text": protocol.AgentInstructions,
+		"the dashboard":        dashboard.Build(dashboard.Input{Project: "P", UpdatedTo: "v9.9.9"}, time.Now()).Text(),
+	}
+	for _, c := range protocol.AgentCommands {
+		texts["commands.json "+c.Name] = c.Usage + " " + c.Description + " " + c.Help
+	}
+	for name, text := range texts {
+		low := strings.ToLower(text)
+		for _, bad := range []string{"/teamf upgrade", "/teamf update", "self-update", "team upgrade", "team update",
+			"teamflow upgrade", "run the upgrade", "upgrade teamflow"} {
+			if strings.Contains(low, bad) {
+				t.Errorf("%s says %q: %s", name, bad, text)
+			}
+		}
+	}
+	if got := live.AvailableText("v0.1.2"); got != "a new teamflow v0.1.2 is available; the install folder isn't writable: reinstall with install.sh" {
+		t.Errorf("the available notice: %q", got)
+	}
 }

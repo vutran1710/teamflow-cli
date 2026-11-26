@@ -707,7 +707,13 @@ func TestInstallTakesTurns(t *testing.T) {
 	u.Hold = func(context.Context) (func(), error) { close(held); <-release; return func() {}, nil }
 	done := make(chan error, 1)
 	go func() { _, err := u.Install(context.Background(), "0.1.0"); done <- err }()
-	<-held
+	select {
+	case <-held:
+	case err := <-done:
+		t.Fatalf("the first update ended before its swap: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first update never reached its swap")
+	}
 	second, exe2, _ := rel.updater(t, pub)
 	second.LockFile, second.LockWait = u.LockFile, 100*time.Millisecond
 	_, err := second.Install(context.Background(), "0.1.0")
@@ -716,8 +722,13 @@ func TestInstallTakesTurns(t *testing.T) {
 	}
 	untouched(t, exe2)
 	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first update never finished")
 	}
 	if b, _ := os.ReadFile(exe); string(b) != newScript {
 		t.Fatal("the first update did not finish")

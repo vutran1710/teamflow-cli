@@ -11,7 +11,9 @@ At a terminal, once the binary is verified and in place, the installer asks "Set
 your password. `TEAMFLOW_NO_SETUP=1` (or CI, or no terminal) skips the question; run `teamflow install` later, or
 with flags in a script: `teamflow install -e <email> -a <agent> [-s <server>] --password-stdin`.
 
-`install.sh` puts `teamflow` in `~/.local/bin` (or `$TEAMFLOW_BIN_DIR`; `TEAMFLOW_VERSION=v0.1.0` pins a release).
+`install.sh` puts `teamflow` in `~/.local/bin` (or `$TEAMFLOW_BIN_DIR`; `TEAMFLOW_VERSION=v0.1.0` installs that
+release, but the background sync updates it to the latest at its next check, minutes after it starts: run
+`teamflow config auto-update off` to keep it).
 It checks the archive's SHA-256 against the release's `checksums.txt`, and that file's minisign (ed25519) signature
 when `minisign` is installed; otherwise it says only the checksum was checked and how to check the signature by
 hand. You can also download a release from this repo's Releases page directly. There is no Homebrew formula.
@@ -28,8 +30,9 @@ always checking the signature (with the key compiled into the binary) and the ch
 old binary stays. The background sync does the same on its own: about 10 minutes after it starts, then about once
 a day, it installs a newer release with the same checks (never a pre-release, never an older one), then restarts on
 it and tells your sessions. Where it can't write the binary's folder it says once per release that a new one is
-available. To turn that off: `teamflow config auto-update off` (or `TEAMFLOW_AUTO_UPDATE=0`); `/teamf status` then
-says `auto-update: off`. See [VERIFY.md](VERIFY.md).
+available. To turn that off: `teamflow config auto-update off`; `/teamf status` then says `auto-update: off`.
+(`TEAMFLOW_AUTO_UPDATE=0` reaches only a background sync started with it in its environment, so the config switch is
+the one that always holds.) See [VERIFY.md](VERIFY.md).
 
 To build from source (Go 1.26 or later):
 

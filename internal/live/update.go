@@ -9,7 +9,7 @@ package live
 //
 // Every check is recorded whatever comes of it, so nothing is retried before the next one: offline, GitHub's rate
 // limit, a release that fails a check. A binary folder that can't be written leaves one notice per release ("a new
-// teamflow vX.Y.Z is available: run /teamf upgrade"). It is off with `teamflow config auto-update off` or
+// teamflow vX.Y.Z is available; the install folder isn't writable: reinstall with install.sh"). It is off with `teamflow config auto-update off` or
 // TEAMFLOW_AUTO_UPDATE=0, and for a build that is not a release (dev). What it does goes to the sync log, with
 // home paths masked; nothing secret is in it.
 
@@ -92,7 +92,7 @@ const (
 // UpdatedText and AvailableText are what each session hears.
 func UpdatedText(version string) string { return "teamflow was updated to " + version + "." }
 func AvailableText(version string) string {
-	return "a new teamflow " + version + " is available: run /teamf upgrade"
+	return "a new teamflow " + version + " is available; the install folder isn't writable: reinstall with install.sh"
 }
 
 // updater is the schedule's state in one run.

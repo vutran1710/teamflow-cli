@@ -244,7 +244,7 @@ func TestScheduledUpdateOptOut(t *testing.T) {
 	}
 }
 
-// A binary folder that can't be written: one notice per release ("run /teamf upgrade"), never a retry storm; a
+// A binary folder that can't be written: one notice per release (to the person: reinstall), never a retry storm; a
 // newer release later gets its own notice.
 func TestScheduledUpdateNotWritableOneNoticePerVersion(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -258,7 +258,7 @@ func TestScheduledUpdateNotWritableOneNoticePerVersion(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 	wait, stop := start(t, c, o)
-	want := "a new teamflow v0.1.1 is available: run /teamf upgrade"
+	want := "a new teamflow v0.1.1 is available; the install folder isn't writable: reinstall with install.sh"
 	eventually(t, "the notice", func() bool { return len(noticesOf(t, c, "s1")) == 1 })
 	clk.add(25 * time.Hour) // the next cycle: checked again, no second notice
 	eventually(t, "the next check", func() bool { return strings.Count(l.String(), "can't be installed here") == 2 })
@@ -283,7 +283,7 @@ func TestScheduledUpdateNotWritableOneNoticePerVersion(t *testing.T) {
 	eventually(t, "the second release's notice", func() bool { return len(noticesOf(t, c, "s1")) == 2 })
 	stop()
 	_ = wait()
-	if got := noticesOf(t, c, "s1"); got[1] != "a new teamflow v0.1.2 is available: run /teamf upgrade" {
+	if got := noticesOf(t, c, "s1"); got[1] != "a new teamflow v0.1.2 is available; the install folder isn't writable: reinstall with install.sh" {
 		t.Fatalf("%q", got)
 	}
 	if binaryOf(t, exe) != "teamflow 0.1.0" {
@@ -487,12 +487,23 @@ func TestManualAndScheduledUpdatesNeverDowngrade(t *testing.T) {
 		manual.Hold = func(context.Context) (func(), error) { close(inHold); <-let; return func() {}, nil }
 		done := make(chan error, 1)
 		go func() { _, err := manual.Install(context.Background(), "0.1.0"); done <- err }()
-		<-inHold // the manual update is about to put v0.1.2 in place, holding the update lock
+		select { // the manual update is about to put v0.1.2 in place, holding the update lock
+		case <-inHold:
+		case err := <-done:
+			t.Fatalf("the manual update ended before its swap: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("the manual update never reached its swap")
+		}
 		wait, _ := start(t, c, o)
 		time.Sleep(300 * time.Millisecond) // the scheduled check waits its turn meanwhile
 		close(let)
-		if err := <-done; err != nil {
-			t.Fatal(err)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the manual update never finished")
 		}
 		var up *Updated
 		if err := wait(); !errors.As(err, &up) || up.Version != "" {

@@ -85,9 +85,20 @@ func (r *inv) teamStatus() int {
 		r.updateNotes(c)
 		return 0
 	}
+	b.UpdatedTo = r.updatedTo(c)
 	r.println("")
 	fmt.Fprint(r.out, b.Text()) // its footer says them
 	return 0
+}
+
+// updatedTo is the release the background sync updated teamflow to, taken by /teamf status (the person's own
+// view: told once); "" for any other run (an agent's team status), which leaves it for /teamf status.
+func (r *inv) updatedTo(c *core.Core) string {
+	if !r.relay {
+		return ""
+	}
+	v, _ := c.St.TakeUpdatedTo()
+	return v
 }
 
 // updateNotes end /teamf status when no project is drawn: auto-update off, and the release the background sync
@@ -96,7 +107,7 @@ func (r *inv) updateNotes(c *core.Core) {
 	if on, _ := config.AutoUpdate(c.Cfg); !on {
 		r.println("auto-update: off")
 	}
-	if v, _ := c.St.TakeUpdatedTo(); v != "" {
+	if v := r.updatedTo(c); v != "" {
 		r.println("teamflow was updated to " + v + ".")
 	}
 }
@@ -112,12 +123,7 @@ func (r *inv) teamStatusJSON() (any, error) {
 	sess, ok := r.session()
 	if !ok || sess.Project == "" {
 		on, _ := config.AutoUpdate(c.Cfg)
-		v, _ := c.St.TakeUpdatedTo()
-		var to any
-		if v != "" {
-			to = v
-		}
-		return o.Set("project", nil).Set("message", pickProject).Set("auto_update", on).Set("updated_to", to), nil
+		return o.Set("project", nil).Set("message", pickProject).Set("auto_update", on), nil
 	}
 	b, err := c.Dashboard(r.ctx, sess.Project, &sess, clock())
 	if err != nil {
@@ -243,14 +249,17 @@ func runConfigAutoUpdate(r *inv, a *parsed) int {
 			return r.failErr(err)
 		}
 	}
-	on, why := config.AutoUpdate(c.Cfg)
-	switch {
-	case on:
-		r.println("auto-update: on (the background sync installs new signed releases on its own, about once a day)")
-	case why != "" && strings.HasPrefix(why, config.AutoUpdateEnv):
-		r.println("auto-update: off (" + why + " in this shell); /teamf upgrade or `teamflow self-update` updates by hand")
-	default:
+	// The config switch is the state: TEAMFLOW_AUTO_UPDATE reaches only a background sync started with it in its
+	// environment (a hook's, an install's), so it is said as a note.
+	on := c.Cfg == nil || c.Cfg.AutoUpdate == nil || *c.Cfg.AutoUpdate
+	if !on {
 		r.println("auto-update: off; /teamf upgrade or `teamflow self-update` updates by hand")
+		return 0
+	}
+	r.println("auto-update: on (the background sync installs new signed releases on its own, about once a day)")
+	if envOn, why := config.AutoUpdate(nil); !envOn {
+		r.println("note: " + why + " in this shell reaches only a background sync started with it in its environment; " +
+			"`teamflow config auto-update off` is the switch that always holds")
 	}
 	return 0
 }
