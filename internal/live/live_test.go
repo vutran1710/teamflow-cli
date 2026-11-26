@@ -595,7 +595,9 @@ func TestFallsBackToPoll(t *testing.T) {
 	f.set(func() { f.refuseWS = true })
 	c := machine(t, f, P1)
 	start(t, c, fast(nil, nil))
-	eventually(t, "a poll", func() bool { return f.count("sync.poll") > 0 })
+	// The poll itself, under the fake's lock: its call is counted before the poll is recorded, so reading polls[0]
+	// on the count alone could panic holding the lock, and the fake server's handlers (and its Close) wait forever.
+	eventually(t, "a poll", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.polls) > 0 })
 	f.mu.Lock()
 	tries, first := f.urlsAtFirstPoll, f.polls[0]
 	f.mu.Unlock()
