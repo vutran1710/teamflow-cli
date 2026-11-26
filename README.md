@@ -4,7 +4,7 @@ The command line for [Teamflow](https://teamflow.10l.ink): your coding agent rec
 works, and the important calls reach the approver at once. Read and approve them in the
 [web app](https://teamflow.10l.ink/ui/) or right here.
 
-![Install teamflow, answer two questions, then ask Claude Code for your projects](docs/demo.gif)
+![Install teamflow with one line and answer its questions, then choose a project in Claude Code and see where it stands](docs/demo.gif)
 
 ## Install and set up
 

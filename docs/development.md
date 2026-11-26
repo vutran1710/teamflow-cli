@@ -31,5 +31,6 @@ release tags. How to check a release: [VERIFY.md](VERIFY.md).
 
 ## The README's clip
 
-`docs/demo.gif` is recorded with [VHS](https://github.com/charmbracelet/vhs) from `docs/demo.tape`, against a local
-Teamflow server made by `docs/demo-setup.sh` (the steps are at the top of the tape).
+`docs/demo.gif` is recorded with [VHS](https://github.com/charmbracelet/vhs) from `docs/demo.tape`, against the real
+Teamflow and the latest release, as a demo account, in a throwaway home made by `docs/demo-setup.sh` (the steps are at
+the top of the tape).
