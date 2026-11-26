@@ -19,7 +19,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
@@ -112,7 +111,7 @@ func golden(t *testing.T, name, got string) {
 func fits(t *testing.T, text string) {
 	t.Helper()
 	for i, l := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
-		if n := utf8.RuneCountInString(l); n > Width {
+		if n := width(l); n > Width {
 			t.Errorf("line %d is %d wide (more than %d): %q", i+1, n, Width, l)
 		}
 	}
@@ -498,5 +497,86 @@ func TestFit(t *testing.T) {
 		if got := fit(c.in, c.n); got != c.want {
 			t.Errorf("fit(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
 		}
+	}
+}
+
+// Display width, not characters: East Asian wide characters and emoji take two columns, combining marks none; the
+// columns stay aligned and every line fits 64 columns on a terminal. A bidirectional override or a zero-width
+// character in a name is a space.
+func TestDisplayWidth(t *testing.T) {
+	in := example()
+	d := in.Deliverables
+	d.Milestones[2].Name = "发布 iHertz 正式版本给所有用户"                              // wide
+	d.Milestones[2].Actions[2].Name = "Viết ghi chú phát hành 🚀🚀 cho bản mới" // combining-free Vietnamese, emoji
+	d.Milestones[2].Actions[3].Name = "Ảnh chụp\u202e màn hình\u200b"         // an RTL override, a zero-width space
+	d.Milestones[3].Name = "Onboard first users"
+	in.Names[huy] = "Huy\u202e Nguyễn"
+	b := Build(in, now)
+	golden(t, "wide.txt", b.Text())
+	text := b.Text()
+	if strings.ContainsAny(text, "\u202e\u200b") {
+		t.Fatalf("an override or a zero-width character got through:\n%q", text)
+	}
+	col := -1 // the due column starts at the same display column in every milestone row
+	for _, l := range strings.Split(text, "\n") {
+		if strings.HasPrefix(l, "  [") {
+			at := width(l[:strings.Index(l, "202")])
+			if col >= 0 && at != col {
+				t.Fatalf("the due column moved (%d, then %d):\n%s", col, at, text)
+			}
+			col = at
+		}
+	}
+	for _, c := range []struct {
+		s    string
+		want int
+	}{{"abc", 3}, {"发布", 4}, {"🚀", 2}, {"Nguyễn", 6}, {"Nguye\u0302\u0303n", 6}, {"✓", 1}, {"日本語abc", 9}} {
+		if got := width(c.s); got != c.want {
+			t.Errorf("width(%q) = %d, want %d", c.s, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+	}{{"发布版本说明", 7, "发布..."}, {"发布版本说明", 12, "发布版本说明"}, {"ab发布", 4, "a..."}, {"🚀🚀🚀", 5, "🚀..."}} {
+		if got := fit(c.in, c.n); got != c.want || width(got) > c.n {
+			t.Errorf("fit(%q, %d) = %q (width %d), want %q", c.in, c.n, got, width(got), c.want)
+		}
+	}
+}
+
+// An owner (or a publisher) the replica has no name for shows as "member", never a raw id.
+func TestOwnerWithNoName(t *testing.T) {
+	in := example()
+	delete(in.Names, huy)
+	delete(in.Names, lan)
+	text := Build(in, now).Text()
+	if strings.Contains(text, "mb_") || !strings.Contains(text, "  - Store screenshots     member  2026-11-30\n") ||
+		!strings.Contains(text, "updated 2026-11-26 15:28 by member\n") {
+		t.Fatalf("%s", text)
+	}
+}
+
+// Dates are the person's local dates: at 06:00 in UTC+7 it is still the day before in UTC, and "today" is the
+// local day.
+func TestLocalDateEarlyMorning(t *testing.T) {
+	early := time.Date(2026, 11, 27, 6, 0, 0, 0, ict) // 2026-11-26 23:00 UTC
+	in := example()
+	in.Deliverables.Milestones = []protocol.Milestone{{ID: "ms_1", Name: "M", Due: "2026-11-28", Actions: []protocol.Action{
+		action("01", "Due today", "2026-11-27", vu), action("02", "Due yesterday", "2026-11-26", vu),
+		action("03", "Due tomorrow", "2026-11-28", vu)}}}
+	in.Statuses = nil
+	b := Build(in, early)
+	text := b.Text()
+	for _, want := range []string{"  - Due yesterday                 due 2026-11-26  (LATE)  !\n",
+		"  - Due today                     due 2026-11-27  (today)  !\n",
+		"  - Due tomorrow                  due 2026-11-28  (tomorrow)  !\n", "due tomorrow\n"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("no %q in\n%s", want, text)
+		}
+	}
+	if b.Today != "2026-11-27" {
+		t.Fatalf("today %s", b.Today)
 	}
 }

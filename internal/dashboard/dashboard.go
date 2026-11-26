@@ -16,7 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"unicode"
 
 	"github.com/vutran1710/teamflow-cli/internal/ojson"
 	"github.com/vutran1710/teamflow-cli/internal/protocol"
@@ -248,11 +248,12 @@ func daysTo(due string, today time.Time) *int {
 	return &n
 }
 
+// nameOf is a member's name; "member" when the replica has none (never a raw id).
 func nameOf(names map[string]string, id string) string {
-	if n, ok := names[id]; ok && n != "" {
-		return clean(n)
+	if n := clean(names[id]); n != "" {
+		return n
 	}
-	return id
+	return "member"
 }
 
 func ownerOf(owner *string, you string, names map[string]string) string {
@@ -265,31 +266,95 @@ func ownerOf(owner *string, you string, names map[string]string) string {
 	return nameOf(names, *owner)
 }
 
-// clean makes a teammate's text one line of plain text: control characters become spaces.
+// Clean makes text from a teammate or the server one line of plain text for a terminal: control characters,
+// bidirectional overrides and isolates (which reorder what follows), and zero-width characters become spaces.
+func Clean(s string) string { return clean(s) }
+
 func clean(s string) string {
 	return strings.TrimSpace(strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || r >= 0x80 && r < 0xa0 {
+		switch {
+		case r < 0x20 || r == 0x7f || r >= 0x80 && r < 0xa0: // C0 and C1 controls
 			return ' '
+		case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x200e, r == 0x200f, r == 0x061c:
+			return ' ' // bidirectional embeddings, overrides, isolates and marks
+		case r >= 0x200b && r <= 0x200d, r == 0x2060, r == 0xfeff, r == 0x180e:
+			return ' ' // zero-width spaces and joiners
 		}
 		return r
 	}, s))
 }
 
-// fit cuts s to n characters, ending it with "..." when cut.
-func fit(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
+// width is how many terminal columns s takes: East Asian wide and fullwidth characters and emoji take two,
+// combining marks, variation selectors and other zero-width characters none, the rest one.
+func width(s string) int {
+	n := 0
+	for _, r := range s {
+		n += runeWidth(r)
 	}
-	r := []rune(s)
-	if n <= 3 {
-		return string(r[:max(n, 0)])
-	}
-	return string(r[:n-3]) + "..."
+	return n
 }
 
-// pad fills s with spaces to n characters.
+func runeWidth(r rune) int {
+	switch {
+	case unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf):
+		return 0
+	case wide(r):
+		return 2
+	}
+	return 1
+}
+
+// wide: the East Asian wide and fullwidth blocks, and the emoji shown two columns wide.
+func wide(r rune) bool {
+	for _, w := range wideRanges {
+		if r >= w[0] && r <= w[1] {
+			return true
+		}
+	}
+	return false
+}
+
+var wideRanges = [][2]rune{
+	{0x1100, 0x115f}, {0x231a, 0x231b}, {0x2329, 0x232a}, {0x23e9, 0x23ec}, {0x23f0, 0x23f0}, {0x23f3, 0x23f3},
+	{0x25fd, 0x25fe}, {0x2614, 0x2615}, {0x2648, 0x2653}, {0x267f, 0x267f}, {0x2693, 0x2693}, {0x26a1, 0x26a1},
+	{0x26aa, 0x26ab}, {0x26bd, 0x26be}, {0x26c4, 0x26c5}, {0x26ce, 0x26ce}, {0x26d4, 0x26d4}, {0x26ea, 0x26ea},
+	{0x26f2, 0x26f3}, {0x26f5, 0x26f5}, {0x26fa, 0x26fa}, {0x26fd, 0x26fd}, {0x2705, 0x2705}, {0x270a, 0x270b},
+	{0x2728, 0x2728}, {0x274c, 0x274c}, {0x274e, 0x274e}, {0x2753, 0x2755}, {0x2757, 0x2757}, {0x2795, 0x2797},
+	{0x27b0, 0x27b0}, {0x27bf, 0x27bf}, {0x2b1b, 0x2b1c}, {0x2b50, 0x2b50}, {0x2b55, 0x2b55}, {0x2e80, 0x303e},
+	{0x3041, 0x33ff}, {0x3400, 0x4dbf}, {0x4e00, 0x9fff}, {0xa000, 0xa4cf}, {0xa960, 0xa97f}, {0xac00, 0xd7a3},
+	{0xf900, 0xfaff}, {0xfe10, 0xfe19}, {0xfe30, 0xfe6f}, {0xff00, 0xff60}, {0xffe0, 0xffe6}, {0x16fe0, 0x16fe4},
+	{0x17000, 0x18cff}, {0x1b000, 0x1b2ff}, {0x1f004, 0x1f004}, {0x1f0cf, 0x1f0cf}, {0x1f18e, 0x1f18e},
+	{0x1f191, 0x1f19a}, {0x1f200, 0x1f251}, {0x1f300, 0x1f64f}, {0x1f680, 0x1f6ff}, {0x1f7e0, 0x1f7eb},
+	{0x1f90c, 0x1f9ff}, {0x1fa70, 0x1faff}, {0x20000, 0x3fffd},
+}
+
+// fit cuts s to n columns, ending it with "..." when cut.
+func fit(s string, n int) string {
+	if width(s) <= n {
+		return s
+	}
+	room := n - 3
+	if n <= 3 {
+		room = max(n, 0)
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		if w+runeWidth(r) > room {
+			break
+		}
+		b.WriteRune(r)
+		w += runeWidth(r)
+	}
+	if n <= 3 {
+		return b.String()
+	}
+	return b.String() + "..."
+}
+
+// pad fills s with spaces to n columns.
 func pad(s string, n int) string {
-	if k := utf8.RuneCountInString(s); k < n {
+	if k := width(s); k < n {
 		return s + strings.Repeat(" ", n-k)
 	}
 	return s
@@ -306,10 +371,10 @@ const (
 // fitted is a line of text in lines that fit Width: as it is when it fits; otherwise broken after its "head:" with
 // the rest on indented lines (wrapped at spaces), or wrapped at spaces when it has no head that fits.
 func fitted(text string) []string {
-	if utf8.RuneCountInString(text) <= Width {
+	if width(text) <= Width {
 		return []string{text}
 	}
-	if head, rest, ok := strings.Cut(text, ": "); ok && utf8.RuneCountInString(head) < Width {
+	if head, rest, ok := strings.Cut(text, ": "); ok && width(head) < Width {
 		return append([]string{head + ":"}, wrap(rest, "  ", "  ")...)
 	}
 	return wrap(text, "", "  ")
@@ -324,7 +389,7 @@ func wrap(text, first, indent string) []string {
 		switch {
 		case empty:
 			cur, empty = cur+word, false
-		case utf8.RuneCountInString(cur)+1+utf8.RuneCountInString(word) <= Width:
+		case width(cur)+1+width(word) <= Width:
 			cur += " " + word
 		default:
 			lines = append(lines, cur)
@@ -411,9 +476,9 @@ func (b Board) header() string {
 		return fit(left, Width)
 	}
 	right := "you: " + fit(b.You, 24)
-	room := Width - utf8.RuneCountInString(right) - 2
+	room := Width - width(right) - 2
 	left = fit(left, room)
-	return pad(left, Width-utf8.RuneCountInString(right)) + right
+	return pad(left, Width-width(right)) + right
 }
 
 func (b Board) versions() string {
@@ -433,7 +498,7 @@ func (b Board) versions() string {
 	}
 	text := strings.Join(parts, " | ")
 	// Who published gives way first: cut to the room left, or left out when there is too little.
-	if room := min(Width-utf8.RuneCountInString(text)-len(" by "), 20); b.HasDeliverables && b.UpdatedAt != "" &&
+	if room := min(Width-width(text)-len(" by "), 20); b.HasDeliverables && b.UpdatedAt != "" &&
 		b.UpdatedBy != "" && room >= 4 {
 		text += " by " + fit(b.UpdatedBy, room)
 	}
@@ -467,7 +532,7 @@ func (b Board) tables(line func(string)) {
 				states[i] = "due " + rel
 			}
 		}
-		widest = max(widest, utf8.RuneCountInString(states[i]))
+		widest = max(widest, width(states[i]))
 	}
 	// The name column gives way to the widest state (every row alike, so the columns stay aligned), down to
 	// minName; a state still too wide is cut.
@@ -500,7 +565,7 @@ func (b Board) tables(line func(string)) {
 			if it.Urgent {
 				tail += "  !"
 			}
-			col := max(min(30, Width-4-utf8.RuneCountInString(tail)), minName) // the name gives way to the date
+			col := max(min(30, Width-4-width(tail)), minName) // the name gives way to the date
 			line(fit("  - "+pad(fit(it.Name, col-2), col)+tail, Width))
 		}
 	}
